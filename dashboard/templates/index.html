@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ApplyJob | Dashboard</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+    <div class="glass-bg"></div>
+    
+    <main class="dashboard-container">
+        <header class="header">
+            <div class="logo">
+                <span class="logo-icon">🚀</span>
+                <h1>ApplyJob <span>Bot</span></h1>
+            </div>
+            <div class="status-badge">
+                <span class="dot pulse"></span> Direct Connection Active
+            </div>
+        </header>
+
+        <section class="stats-grid">
+            <div class="stat-card glass">
+                <div class="stat-header">
+                    <span class="icon">✅</span>
+                    <h3>Total Procesado</h3>
+                </div>
+                <p class="stat-value">{{ stats.total }}</p>
+            </div>
+            
+            <div class="stat-card glass highlight">
+                <div class="stat-header">
+                    <span class="icon">✨</span>
+                    <h3>Postulaciones</h3>
+                </div>
+                <p id="applied-count" class="stat-value">0</p>
+            </div>
+
+            <div class="stat-card glass danger">
+                <div class="stat-header">
+                    <span class="icon">⚠️</span>
+                    <h3>Errores</h3>
+                </div>
+                <p id="error-count" class="stat-value">0</p>
+            </div>
+        </section>
+
+        <section class="config-section glass">
+            <h2>⚙️ Configuración del Perfil e Inteligencia</h2>
+            <form id="configForm" class="config-form">
+                <div class="form-grid">
+                    <div class="form-group">
+                        <label>Nombre Completo</label>
+                        <input type="text" name="full_name" value="{{ profile.full_name }}" placeholder="Juan Pérez">
+                    </div>
+                    <div class="form-group">
+                        <label>Email</label>
+                        <input type="email" name="email" value="{{ profile.email }}" placeholder="juan@ejemplo.com">
+                    </div>
+                    <div class="form-group">
+                        <label>Teléfono</label>
+                        <input type="text" name="phone" value="{{ profile.phone }}" placeholder="+123456789">
+                    </div>
+                    <div class="form-group full-width cv-drop-zone-container">
+                        <label>Tu Currículum Vitae (PDF)</label>
+                        <div class="drop-zone glass" id="dropZone" onclick="document.getElementById('cvFile').click()">
+                            <div class="drop-zone-content">
+                                <div class="upload-icon">☁️</div>
+                                <p class="drop-text">Selecciona tu CV o arrástralo aquí</p>
+                                <p class="drop-subtext">PDF (Máx. 5MB)</p>
+                                <button type="button" class="btn-browse">Explorar archivos</button>
+                            </div>
+                            <input type="file" id="cvFile" accept=".pdf" onchange="handleFileSelect()" style="display: none;">
+                        </div>
+                        <div id="uploadProgress" class="upload-status-bar">
+                            <span id="fileNameDisplay">{{ profile.cv_path.split('\\')[-1] if profile.cv_path else "No hay archivo seleccionado" }}</span>
+                            <span id="cvStatus" class="status-pill">{{ "✅ Cargado" if profile.cv_path else "⏳ Pendiente" }}</span>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label>Tu Perfil LinkedIn (URL)</label>
+                        <input type="text" name="linkedin_perfil" value="{{ profile.linkedin or '' }}" placeholder="https://linkedin.com/in/tu-perfil">
+                    </div>
+                    <div class="form-group">
+                        <label>Puesto que buscas</label>
+                        <input type="text" name="keywords" value="{{ search.keywords or 'Python Developer' }}" placeholder="Ej: Python Developer">
+                    </div>
+                    <div class="form-group">
+                        <label>Ubicación</label>
+                        <input type="text" name="location" value="{{ search.location or 'Remote' }}" placeholder="Ej: Remote o Madrid">
+                    </div>
+                </div>
+                <button type="submit" class="btn-save">Guardar e Inteligencia</button>
+            </form>
+        </section>
+
+        <div class="content-row">
+            <section class="recent-activity glass">
+                <h2>Actividad Reciente</h2>
+                <div class="table-wrapper">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Portal</th>
+                                <th>Oferta</th>
+                                <th>Estado</th>
+                                <th>Fecha</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for item in recent %}
+                            <tr>
+                                <td><span class="portal-tag {{ item.portal }}">{{ item.portal }}</span></td>
+                                <td class="job-title" title="{{ item.url }}">{{ item.title or "Sin título" }}</td>
+                                <td><span class="status-pill {{ item.status }}">{{ item.status }}</span></td>
+                                <td class="timestamp">{{ item.applied_at.split('T')[1][:5] if 'T' in item.applied_at else item.applied_at }}</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+
+            <section class="analytics glass">
+                <h2>Distribución</h2>
+                <div class="chart-container">
+                    <canvas id="distributionChart"></canvas>
+                </div>
+            </section>
+        </div>
+    </main>
+
+    <script>
+        // Manejar selección de archivo y subir automáticamente
+        async function handleFileSelect() {
+            const fileInput = document.getElementById('cvFile');
+            const nameDisplay = document.getElementById('fileNameDisplay');
+            const statusPill = document.getElementById('cvStatus');
+            
+            if (fileInput.files.length > 0) {
+                const file = fileInput.files[0];
+                nameDisplay.innerText = file.name;
+                statusPill.innerText = '⏳ Subiendo...';
+                
+                await uploadCV(file);
+            }
+        }
+
+        async function uploadCV(file) {
+            const statusPill = document.getElementById('cvStatus');
+            const formData = new FormData();
+            formData.append('file', file);
+
+            try {
+                const response = await fetch('/api/upload-cv', {
+                    method: 'POST',
+                    body: formData
+                });
+                const result = await response.json();
+                if (result.status === 'success') {
+                    statusPill.innerText = '✅ Cargado';
+                    statusPill.style.background = 'rgba(16, 185, 129, 0.2)';
+                } else {
+                    statusPill.innerText = '❌ Error';
+                }
+            } catch (err) {
+                statusPill.innerText = '❌ Error';
+            }
+        }
+
+        // Datos del gráfico inyectados desde el servidor
+        const chartData = {{ chart_json | safe }};
+        
+        // Actualizar contadores dinámicamente
+        document.getElementById('applied-count').innerText = chartData.data_values[0];
+        document.getElementById('error-count').innerText = chartData.data_values[1];
+
+        // Manejo del formulario de configuración
+        document.getElementById('configForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const formData = new FormData(e.target);
+            const data = {
+                profile: {
+                    full_name: formData.get('full_name'),
+                    email: formData.get('email'),
+                    phone: formData.get('phone'),
+                    cv_path: formData.get('cv_path'),
+                    linkedin: formData.get('linkedin_perfil')
+                },
+                search: {
+                    keywords: formData.get('keywords'),
+                    location: formData.get('location')
+                }
+            };
+
+            try {
+                const response = await fetch('/api/config', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(data)
+                });
+                if (response.ok) {
+                    alert('Configuración guardada correctamente ✨');
+                    window.location.reload();
+                }
+            } catch (error) {
+                alert('Error al guardar la configuración ❌');
+            }
+        });
+
+        const ctx = document.getElementById('distributionChart').getContext('2d');
+        new Chart(ctx, {
+            type: 'doughnut',
+            data: {
+                labels: chartData.labels,
+                datasets: [{
+                    data: chartData.data_values,
+                    backgroundColor: [
+                        'rgba(16, 185, 129, 0.7)',
+                        'rgba(239, 68, 68, 0.7)',
+                        'rgba(107, 114, 128, 0.7)'
+                    ],
+                    borderColor: 'rgba(255, 255, 255, 0.1)',
+                    borderWidth: 2
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: {
+                        position: 'bottom',
+                        labels: { color: '#fff', font: { family: 'Outfit' } }
+                    }
+                }
+            }
+        });
+    </script>
+</body>
+</html>
