@@ -75,7 +75,7 @@ SITE_CONFIG = {
         "requires_login":           False,
     },
     "getonyboard": {
-        "url_busqueda": f"https://www.getonbrd.com/jobs/search?q={kw}&remote=true",
+        "url_busqueda": f"https://www.getonbrd.com/empleos-{kw.lower().replace('+', '-')}",
         "selector_oferta":          "a.gb-results-list__item",
         "selector_boton_aplicar":   "a.btn-primary[href*='apply'], button.apply-btn",
         "selector_siguiente_pagina": None,

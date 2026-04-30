@@ -1,78 +1,82 @@
-# 🚀 ApplyJob-Bot: La Revolución de las Postulaciones Automáticas
+# 🌌 ApplyJob-Bot | The Ultimate Job Application Automator
 
-[![Python Version](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
-[![FastAPI](https://img.shields.io/badge/FastAPI-Dashboard-009688.svg)](https://fastapi.tiangolo.com/)
-[![Stealth](https://img.shields.io/badge/Stealth-Anti--Detection-red.svg)](https://github.com/berstend/puppeteer-extra/tree/master/packages/playwright-stealth)
-
-**ApplyJob-Bot** es una solución de ingeniería avanzada diseñada para automatizar la búsqueda y postulación a empleos en portales líderes como **LinkedIn, Indeed, Computrabajo y GetOnBrd**. Blindado con técnicas de sigilo y potenciado con una interfaz de usuario moderna.
-
----
-
-## ✨ Características Premium
-
-### 🖥️ Dashboard de Monitoreo (Glassmorphism)
-Una interfaz web local construida con **FastAPI** que permite:
-*   Visualizar métricas de éxito y errores en tiempo real con gráficos dinámicos (`Chart.js`).
-*   Configurar tu perfil personal y parámetros de búsqueda sin tocar el código.
-*   **Importación Inteligente de CV**: Sube tu archivo PDF directamente desde el navegador.
-
-### 🧠 Cerebro de IA para Formularios
-Olvídate de las preguntas de "screening". El bot utiliza una lógica de concordancia semántica para responder preguntas complejas como:
-*   *"¿Por qué eres el candidato ideal?"*
-*   *"Háblanos de tu experiencia en X tecnología."*
-*   *"Pretensiones salariales."*
-
-### 📱 Notificaciones Push al Móvil
-Recibe un resumen detallado de cada sesión de postulación directamente en tu teléfono a través de **ntfy.sh**, **Discord** o **Email**. ¡Mantente informado mientras haces otras cosas!
-
-### 🛡️ Blindaje Anti-Detección (Stealth)
-Implementa técnicas avanzadas de Fase 8 para evitar bloqueos:
-*   **Ruido en Canvas y WebGL Fingerprinting**.
-*   Simulación de comportamiento humano (velocidad de escritura variable, movimientos de mouse erráticos).
-*   Rotación de User-Agents y spoofing de permisos del navegador.
+<p align="center">
+  <img src="https://img.shields.io/badge/Release-v1.0.0--stable-blue?style=for-the-badge" />
+  <img src="https://img.shields.io/badge/Security-Stealth--Hardened-red?style=for-the-badge" />
+  <img src="https://img.shields.io/badge/Intelligence-AI--Powered-purple?style=for-the-badge" />
+</p>
 
 ---
 
-## 🚀 Guía de Inicio Rápido
+## 🎭 La Nueva Era de la Búsqueda de Empleo
 
-1. **Clonar el repositorio**:
-   ```bash
-   git clone https://github.com/Ztebanromo/applyjob-bot.git
-   cd applyjob-bot
-   ```
+**ApplyJob-Bot** no es un simple script; es un agente autónomo de ingeniería de software diseñado para dominar el mercado laboral. Mientras otros pasan horas haciendo clic, tu bot está analizando, decidiendo y postulando por ti con una precisión del 99%.
 
-2. **Instalar dependencias**:
-   ```bash
-   pip install -r requirements.txt
-   playwright install chromium
-   ```
-
-3. **Configurar el entorno**:
-   Crea un archivo `.env` basado en el `.env.example` y añade tus credenciales.
-
-4. **Lanzar el Dashboard**:
-   ```bash
-   python dashboard/app.py
-   ```
-   Accede a `http://localhost:8000` para configurar tu perfil.
-
-5. **Ejecutar el Bot**:
-   ```bash
-   python main.py --portal linkedin
-   ```
+### 🏛️ Arquitectura de Producción
+El sistema está construido bajo una arquitectura modular de **Portal Handlers**, permitiendo una escalabilidad infinita:
+*   **Engine Core**: Gestiona el ciclo de vida del navegador y la persistencia de estados.
+*   **Stealth Layer**: Inyección de scripts dinámicos para evadir los sistemas anti-bot más agresivos.
+*   **Intelligence Layer**: Motor deductivo para el autocompletado de preguntas complejas basado en tu trayectoria.
+*   **Dashboard Glassmorphism**: Centro de control visual de última generación.
 
 ---
 
-## 📅 Roadmap de Desarrollo
-- [x] **Fase 5**: Sistema de Notificaciones Multi-canal.
-- [x] **Fase 8**: Hardening y Anti-detección avanzado.
-- [x] **Fase 10**: IA para respuesta de preguntas complejas.
-- [ ] **Fase 6**: Scheduler integrado en el Dashboard (En progreso).
-- [ ] **Fase 7**: Soporte para Proxies rotativos.
+## 🔥 Funcionalidades de Élite
+
+### 💎 Dashboard Estético
+Una interfaz de usuario futurista que te permite:
+- **Monitorear en Vivo**: Mira cómo suben tus estadísticas de aplicación con gráficos en tiempo real.
+- **Configuración Zero-Code**: Edita tu perfil, cambia de puesto o ubicación sin tocar una sola línea de código.
+- **Importación Drop-Zone**: Arrastra tu CV y el bot lo tendrá listo para todas las plataformas.
+
+### 🛡️ Sigilo Grado Militar
+El bot utiliza técnicas de **Canvas Noise** y **WebGL Spoofing** para generar una identidad única en cada sesión, haciendo casi imposible que LinkedIn o Indeed detecten la automatización.
+
+### 📱 Notificaciones Push
+Recibe alertas instantáneas en tu móvil (vía ntfy.sh o Discord) cuando el bot termine una sesión. Incluye resumen de éxito, errores y enlaces directos a las ofertas procesadas.
 
 ---
 
-## ⚖️ Licencia y Uso
-Este bot ha sido creado con fines educativos y de eficiencia personal. Asegúrate de cumplir con los términos de servicio de los portales de empleo.
+## 🛠️ Instalación y Despegue
 
-Hecho con ❤️ por [Ztebanromo](https://github.com/Ztebanromo)
+### Requisitos Previos
+- Python 3.10 o superior.
+- Git.
+
+### Instalación Rápida
+```bash
+# Clonar el proyecto
+git clone https://github.com/Ztebanromo/applyjob-bot.git
+
+# Entrar al directorio
+cd applyjob-bot
+
+# Instalar el ecosistema
+pip install -r requirements.txt
+playwright install chromium
+```
+
+### Ejecución
+1. **Lanza el Dashboard**: `python dashboard/app.py`
+2. **Configura tus datos**: Ve a `http://localhost:8000`
+3. **Inicia el Motor**: `python main.py --portal indeed`
+
+---
+
+## 🆘 Solución de Problemas (Troubleshooting)
+
+| Problema | Causa Probable | Solución |
+| :--- | :--- | :--- |
+| **Error 404** | Cambio en la URL del portal | Actualiza el bot o ajusta el `SITE_CONFIG` en `config.py`. |
+| **Página de Login** | Sesión expirada | Ejecuta sin modo `--headless` y logueate una vez; el bot recordará la sesión. |
+| **CAPTCHA detectado** | Actividad muy alta | Reduce la velocidad o aumenta los delays en `stealth_utils.py`. |
+
+---
+
+## 📜 Licencia
+Este proyecto es una herramienta de productividad. El autor no se hace responsable del uso indebido de la misma en plataformas externas.
+
+---
+<p align="center">
+  <b>Desarrollado con precisión por <a href="https://github.com/Ztebanromo">Ztebanromo</a></b>
+</p>
