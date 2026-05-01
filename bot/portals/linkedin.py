@@ -68,7 +68,8 @@ class LinkedInPortal(BasePortal):
                           or card.get_attribute("data-occludable-job-id"))
                 if job_id and job_id not in job_ids:
                     job_ids.append(job_id)
-            except Exception:
+            except Exception as exc:
+                log.debug("Error leyendo job_id de card: %s", exc)
                 continue
         return job_ids
 
@@ -108,15 +109,16 @@ class LinkedInPortal(BasePortal):
             if feedback:
                 text = (feedback.text_content() or "").lower()
                 return "applied" in text or "postulaste" in text
-        except Exception:
-            pass
+        except Exception as exc:
+            log.debug("_is_already_applied error: %s", exc)
         return False
 
     def _has_easy_apply(self, page: Page) -> bool:
         try:
             btn = page.query_selector(SEL["easy_apply_btn"])
             return btn is not None and btn.is_visible()
-        except Exception:
+        except Exception as exc:
+            log.debug("_has_easy_apply error: %s", exc)
             return False
 
     def _detect_step_count(self, page: Page) -> tuple[int, int]:
@@ -127,8 +129,8 @@ class LinkedInPortal(BasePortal):
                 m = re.search(r"(\d+)\s+(?:of|de)\s+(\d+)", text, re.IGNORECASE)
                 if m:
                     return int(m.group(1)), int(m.group(2))
-        except Exception:
-            pass
+        except Exception as exc:
+            log.debug("_detect_step_count error: %s", exc)
         return 1, 1
 
     def _fill_modal_step(self, page: Page) -> None:
@@ -178,8 +180,8 @@ class LinkedInPortal(BasePortal):
                     sel_el.select_option(chosen)
                     micro_delay()
 
-        except Exception:
-            pass
+        except Exception as exc:
+            log.debug("_handle_dropdowns error: %s", exc)
 
     def _advance_modal(self, page: Page) -> bool:
         """
@@ -208,8 +210,8 @@ class LinkedInPortal(BasePortal):
             if discard and discard.is_visible():
                 discard.click()
                 human_delay(1.0, 2.0)
-        except Exception:
-            pass
+        except Exception as exc:
+            log.debug("_close_modal_safely error: %s", exc)
 
     def apply_to_offer(self, page: Page, job_id: str) -> tuple[str, str]:
         """
