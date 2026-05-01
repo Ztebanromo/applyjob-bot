@@ -10,10 +10,18 @@ Uso:
     python main.py --stats
 """
 import argparse
+import logging
 import sys
 
 from bot.config import SITE_CONFIG
 from bot.engine import run_bot
+
+# Configuración de logging centralizada aquí, no en los módulos internos
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    datefmt="%H:%M:%S",
+)
 
 
 def list_portals() -> None:

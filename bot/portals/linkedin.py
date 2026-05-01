@@ -14,11 +14,12 @@ Casos especiales manejados:
   - CAPTCHA / "Verify you're human" → pausa y screenshot
   - "Already applied" banner → skip
 """
+import re  # BUG FIX: import a nivel de módulo, no dentro de función
 import logging
 from playwright.sync_api import Page, TimeoutError as PlaywrightTimeout
 
 from .base import BasePortal
-from ..stealth_utils import human_delay, human_click, human_scroll, take_error_screenshot, micro_delay
+from ..stealth_utils import human_delay, human_click, take_error_screenshot, micro_delay
 from ..form_filler import fill_form
 
 log = logging.getLogger("applyjob.linkedin")
@@ -28,11 +29,10 @@ SEL = {
     "job_card":          "li.jobs-search-results__list-item",
     "job_card_link":     "a.job-card-list__title",
     "easy_apply_btn":    "button.jobs-apply-button--top-card, button[aria-label*='Easy Apply']",
-    "external_apply":    "button.jobs-apply-button--top-card:not([aria-label*='Easy Apply'])",
     "already_applied":   "span.artdeco-inline-feedback__message",
     "modal":             "div.jobs-easy-apply-modal",
     "modal_title":       "h3.jobs-easy-apply-modal__title",
-    "step_indicator":    "span.t-14.t-black--light",        # "Step X of Y"
+    "step_indicator":    "span.t-14.t-black--light",
     "next_btn":          "button[aria-label='Continue to next step']",
     "review_btn":        "button[aria-label='Review your application']",
     "submit_btn":        "button[aria-label='Submit application']",
@@ -40,42 +40,60 @@ SEL = {
     "job_title_panel":   "h1.job-details-jobs-unified-top-card__job-title",
     "captcha_check":     "div.challenge-dialog, iframe[title*='security']",
     "discard_btn":       "button[data-control-name='discard_application_confirm_btn']",
-    "dismiss_discard":   "button[aria-label='Dismiss']",
 }
 
 MAX_MODAL_STEPS = 6
+
+# Valores que indican respuesta afirmativa en dropdowns de screening
+YES_VALUES = {"yes", "si", "sí", "true", "1", "authorized", "yes, i am authorized",
+              "i am authorized", "sí, estoy autorizado"}
+
+# Valores a evitar seleccionar en dropdowns (respuestas negativas)
+NO_VALUES = {"no", "false", "0", "not authorized", "no estoy autorizado",
+             "select an option", "selecciona una opción", ""}
 
 
 class LinkedInPortal(BasePortal):
 
     def get_offer_urls(self, page: Page) -> list[str]:
         """
-        LinkedIn no usa href por oferta — los jobs se cargan en panel.
-        Retorna los índices de las cards para procesarlas en orden.
-        Usamos una lista de 'data-job-id' como identificador único.
+        LinkedIn carga jobs en panel lateral — no navega a URLs individuales.
+        Retorna lista de job_ids (data-job-id) de las cards visibles.
         """
         cards = page.query_selector_all(SEL["job_card"])
         job_ids = []
         for card in cards:
             try:
-                job_id = card.get_attribute("data-job-id") or card.get_attribute("data-occludable-job-id")
+                job_id = (card.get_attribute("data-job-id")
+                          or card.get_attribute("data-occludable-job-id"))
                 if job_id and job_id not in job_ids:
                     job_ids.append(job_id)
             except Exception:
                 continue
         return job_ids
 
+    def get_job_url(self, page: Page, job_id: str) -> str:
+        """URL canónica de LinkedIn para deduplicación en SQLite."""
+        return f"https://www.linkedin.com/jobs/view/{job_id}/"
+
     def _click_job_card(self, page: Page, job_id: str) -> str:
-        """Hace click en la card del job y retorna el título del panel."""
-        card_sel = f"li[data-job-id='{job_id}'], li[data-occludable-job-id='{job_id}']"
+        """
+        Hace click en la card y retorna el título del panel derecho.
+        Retorna '' si la card no se encuentra o no carga.
+        """
+        card_sel = (f"li[data-job-id='{job_id}'], "
+                    f"li[data-occludable-job-id='{job_id}']")
         try:
             card = page.wait_for_selector(card_sel, timeout=5_000)
             card.scroll_into_view_if_needed()
             micro_delay()
             card.click()
             human_delay(2.0, 3.5)
-            # Esperar a que el panel derecho cargue
-            page.wait_for_selector(SEL["easy_apply_btn"], timeout=8_000)
+            # Esperar panel derecho — cualquiera de los dos botones
+            page.wait_for_selector(
+                f"{SEL['easy_apply_btn']}, button.jobs-apply-button--top-card",
+                timeout=8_000,
+            )
             try:
                 title = page.text_content(SEL["job_title_panel"], timeout=3_000) or ""
                 return title.strip()[:80]
@@ -88,8 +106,8 @@ class LinkedInPortal(BasePortal):
         try:
             feedback = page.query_selector(SEL["already_applied"])
             if feedback:
-                text = feedback.text_content() or ""
-                return "applied" in text.lower() or "postulaste" in text.lower()
+                text = (feedback.text_content() or "").lower()
+                return "applied" in text or "postulaste" in text
         except Exception:
             pass
         return False
@@ -102,12 +120,10 @@ class LinkedInPortal(BasePortal):
             return False
 
     def _detect_step_count(self, page: Page) -> tuple[int, int]:
-        """Intenta leer 'Step X of Y' del modal. Retorna (current, total)."""
+        """Lee 'Step X of Y' del modal. Retorna (current, total)."""
         try:
-            indicators = page.query_selector_all(SEL["step_indicator"])
-            for el in indicators:
+            for el in page.query_selector_all(SEL["step_indicator"]):
                 text = el.text_content() or ""
-                import re
                 m = re.search(r"(\d+)\s+(?:of|de)\s+(\d+)", text, re.IGNORECASE)
                 if m:
                     return int(m.group(1)), int(m.group(2))
@@ -122,36 +138,52 @@ class LinkedInPortal(BasePortal):
 
     def _handle_dropdowns(self, page: Page) -> None:
         """
-        Intenta responder selects de screening comunes:
-        experiencia laboral, autorización, idioma.
+        Responde selects de screening:
+        1. Prefiere valores afirmativos explícitos (yes/sí/authorized)
+        2. Si no hay afirmativo, elige el primer valor que NO sea negativo
+        3. Nunca selecciona valores de la lista NO_VALUES
+
+        BUG FIX anterior: el código viejo seleccionaba el primer valor no vacío
+        aunque fuera "No" o "Not authorized".
         """
         try:
             selects = page.query_selector_all("select")
             for sel_el in selects:
                 if not sel_el.is_visible():
                     continue
+
                 options = sel_el.query_selector_all("option")
                 option_values = [o.get_attribute("value") or "" for o in options]
-                current = sel_el.input_value()
-                if current and current not in ("", "Select an option", "Selecciona una opción"):
+
+                # No sobreescribir si ya tiene selección válida
+                current = (sel_el.input_value() or "").strip()
+                if current and current.lower() not in NO_VALUES:
                     continue
-                # Preferir "Yes" / "Sí" / primer valor no vacío
-                for opt_val in option_values:
-                    lower = opt_val.lower()
-                    if lower in ("yes", "si", "sí", "true", "1", "authorized", "no", "n/a"):
-                        sel_el.select_option(opt_val)
-                        micro_delay()
+
+                # Paso 1: buscar valor afirmativo explícito
+                chosen = None
+                for val in option_values:
+                    if val.lower() in YES_VALUES:
+                        chosen = val
                         break
-                    if opt_val and opt_val != "Select an option":
-                        sel_el.select_option(opt_val)
-                        micro_delay()
-                        break
+
+                # Paso 2: primer valor que no sea negativo ni vacío
+                if not chosen:
+                    for val in option_values:
+                        if val and val.lower() not in NO_VALUES:
+                            chosen = val
+                            break
+
+                if chosen:
+                    sel_el.select_option(chosen)
+                    micro_delay()
+
         except Exception:
             pass
 
     def _advance_modal(self, page: Page) -> bool:
         """
-        Intenta avanzar al siguiente paso o enviar.
+        Avanza al siguiente paso o envía la aplicación.
         Retorna True si el modal sigue abierto, False si se cerró (submit exitoso).
         """
         for btn_sel in [SEL["submit_btn"], SEL["review_btn"], SEL["next_btn"]]:
@@ -160,9 +192,7 @@ class LinkedInPortal(BasePortal):
                 if btn and btn.is_visible() and btn.is_enabled():
                     btn.click()
                     human_delay(2.0, 3.5)
-                    if btn_sel == SEL["submit_btn"]:
-                        return False  # aplicación enviada
-                    return True
+                    return btn_sel != SEL["submit_btn"]  # False si fue submit
             except Exception:
                 continue
         return True
@@ -174,7 +204,6 @@ class LinkedInPortal(BasePortal):
             if close and close.is_visible():
                 close.click()
                 human_delay(1.0, 2.0)
-            # Confirmar descarte si aparece diálogo
             discard = page.query_selector(SEL["discard_btn"])
             if discard and discard.is_visible():
                 discard.click()
@@ -182,43 +211,48 @@ class LinkedInPortal(BasePortal):
         except Exception:
             pass
 
-    def apply_to_offer(self, page: Page, job_id: str) -> str:
+    def apply_to_offer(self, page: Page, job_id: str) -> tuple[str, str]:
         """
-        Flujo completo para una card de LinkedIn identificada por job_id.
+        Flujo completo para una card identificada por job_id.
+
+        BUG FIX: ahora retorna (status, title) en vez de solo status,
+        para que engine.py pueda guardar el título en los logs.
+
+        Returns:
+            tuple (status, title)
+            status: 'applied' | 'skipped_*' | 'error: ...'
+            title:  título del job o '' si no se pudo extraer
         """
-        # 1. Click en la card → cargar panel
         title = self._click_job_card(page, job_id)
         if not title:
-            return "error: card_not_found"
+            return "error: card_not_loaded", ""
 
         log.info("  [LinkedIn] %s", title)
 
-        # 2. Verificar si ya postulé
         if self._is_already_applied(page):
             log.info("  → ya postulado, skip")
-            return "skipped_already_applied"
+            return "skipped_already_applied", title
 
-        # 3. Verificar Easy Apply disponible
         if not self._has_easy_apply(page):
             log.info("  → sin Easy Apply, skip")
-            return "skipped_no_easy_apply"
+            return "skipped_no_easy_apply", title
 
-        # 4. Abrir modal
+        # Abrir modal
         try:
             human_click(page, SEL["easy_apply_btn"])
             human_delay(2.0, 3.5)
             page.wait_for_selector(SEL["modal"], timeout=8_000)
         except PlaywrightTimeout:
-            screenshot = take_error_screenshot(page, "linkedin", f"modal_open_{job_id}")
+            screenshot = take_error_screenshot(page, "linkedin", f"modal_{job_id}")
             log.warning("  Modal no abrió. Screenshot: %s", screenshot)
-            return "error: modal_timeout"
+            return "error: modal_timeout", title
 
-        # 5. Detectar CAPTCHA
+        # Detectar CAPTCHA antes de empezar
         if page.query_selector(SEL["captcha_check"]):
             self._close_modal_safely(page)
-            return "skipped_captcha"
+            return "skipped_captcha", title
 
-        # 6. Loop de pasos del modal
+        # Loop de pasos del modal
         step = 0
         while step < MAX_MODAL_STEPS:
             step += 1
@@ -228,7 +262,7 @@ class LinkedInPortal(BasePortal):
             if total_steps > MAX_MODAL_STEPS:
                 log.info("  Modal muy largo (%d pasos), skip", total_steps)
                 self._close_modal_safely(page)
-                return f"skipped_complex_{total_steps}_steps"
+                return f"skipped_complex_{total_steps}_steps", title
 
             self._fill_modal_step(page)
             human_delay(1.0, 2.0)
@@ -236,16 +270,10 @@ class LinkedInPortal(BasePortal):
             modal_still_open = self._advance_modal(page)
             if not modal_still_open:
                 log.info("  ✓ Aplicación enviada")
-                return "applied"
+                return "applied", title
 
-            # Verificar si el modal se cerró inesperadamente
             if not page.query_selector(SEL["modal"]):
-                return "applied"
+                return "applied", title
 
-        # Si salimos del loop sin submit
         self._close_modal_safely(page)
-        return "error: max_steps_exceeded"
-
-    def get_job_url(self, page: Page, job_id: str) -> str:
-        """Construye la URL canónica de LinkedIn para logs."""
-        return f"https://www.linkedin.com/jobs/view/{job_id}/"
+        return "error: max_steps_exceeded", title

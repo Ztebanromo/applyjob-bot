@@ -4,7 +4,7 @@ Detecta campos por name/id/placeholder/aria-label y aplica USER_PROFILE.
 """
 from pathlib import Path
 from playwright.sync_api import Page
-from .stealth_utils import human_type, micro_delay, human_delay
+from .stealth_utils import micro_delay, human_delay
 
 
 # Mapeo patrón → clave de USER_PROFILE
@@ -32,19 +32,12 @@ def _match_field(attrs: str) -> str | None:
     return None
 
 
-def _get_field_attrs(page: Page, selector: str) -> str:
-    """Extrae los atributos relevantes de un input para detección."""
-    return page.eval_on_selector(
-        selector,
-        """el => [
-            el.name || '',
-            el.id || '',
-            el.placeholder || '',
-            el.getAttribute('aria-label') || '',
-            el.getAttribute('data-testid') || '',
-            el.getAttribute('label') || ''
-        ].join(' ')"""
-    )
+def _is_textarea(el) -> bool:
+    """Verifica si el elemento es un textarea por tag name real (no por atributo type)."""
+    try:
+        return el.evaluate("el => el.tagName.toLowerCase()") == "textarea"
+    except Exception:
+        return False
 
 
 def fill_text_fields(page: Page, profile: dict) -> int:
@@ -53,8 +46,10 @@ def fill_text_fields(page: Page, profile: dict) -> int:
     Retorna la cantidad de campos completados.
     """
     filled = 0
-    selectors = ["input[type='text']", "input[type='tel']", "input[type='email']",
-                 "input:not([type])", "textarea"]
+    selectors = [
+        "input[type='text']", "input[type='tel']", "input[type='email']",
+        "input:not([type])", "textarea",
+    ]
 
     for sel in selectors:
         elements = page.query_selector_all(sel)
@@ -62,7 +57,8 @@ def fill_text_fields(page: Page, profile: dict) -> int:
             try:
                 if not el.is_visible() or not el.is_enabled():
                     continue
-                handle_selector = f"#{el.get_attribute('id')}" if el.get_attribute("id") else sel
+
+                # Recolectar atributos para detección
                 attrs = " ".join(filter(None, [
                     el.get_attribute("name") or "",
                     el.get_attribute("id") or "",
@@ -70,19 +66,28 @@ def fill_text_fields(page: Page, profile: dict) -> int:
                     el.get_attribute("aria-label") or "",
                     el.get_attribute("data-testid") or "",
                 ]))
+
                 profile_key = _match_field(attrs)
                 if not profile_key or profile_key not in profile:
                     continue
+
                 value = profile[profile_key]
-                # No sobreescribir si ya tiene contenido
-                current = el.input_value() if el.get_attribute("type") != "textarea" else el.text_content()
-                if current and current.strip():
-                    continue
+
+                # BUG FIX: usar tag name real para distinguir textarea de input
+                if _is_textarea(el):
+                    current = el.text_content() or ""
+                else:
+                    current = el.input_value() or ""
+
+                if current.strip():
+                    continue  # no sobreescribir si ya tiene contenido
+
                 el.click()
                 micro_delay()
                 el.fill(str(value))
                 human_delay(0.3, 0.8)
                 filled += 1
+
             except Exception:
                 continue
 
@@ -107,8 +112,8 @@ def fill_file_upload(page: Page, profile: dict) -> bool:
 
 def handle_yes_no_questions(page: Page) -> None:
     """
-    Intenta responder preguntas de screening de sí/no de forma segura
-    (selecciona 'Sí' / 'Yes' en radios cuando es posible).
+    Responde preguntas de screening de sí/no seleccionando 'Yes'/'Sí'
+    en radios cuando están disponibles.
     """
     try:
         radios = page.query_selector_all("input[type='radio']")
@@ -129,7 +134,7 @@ def fill_form(page: Page, profile: dict) -> dict:
     """
     human_delay(1.0, 2.0)
     result = {
-        "text_fields": fill_text_fields(page, profile),
+        "text_fields":   fill_text_fields(page, profile),
         "file_uploaded": fill_file_upload(page, profile),
     }
     handle_yes_no_questions(page)

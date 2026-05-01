@@ -12,17 +12,13 @@ from playwright.sync_api import sync_playwright, Page
 from .config import SITE_CONFIG, USER_PROFILE
 from .state import already_applied, save_application
 from .stealth_utils import (
-    apply_stealth, human_delay, human_scroll,
+    apply_stealth, human_delay, human_scroll, human_click,
     take_error_screenshot, random_user_agent, random_viewport,
 )
 from .form_filler import fill_form
 
+# BUG FIX: logging.basicConfig solo en main.py — aquí solo obtenemos el logger
 log = logging.getLogger("applyjob")
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    datefmt="%H:%M:%S",
-)
 
 BASE_DIR     = Path(__file__).parent.parent
 SESSIONS_DIR = BASE_DIR / "sessions"
@@ -54,7 +50,6 @@ def _csv_log(portal: str, url: str, title: str, status: str, detail: str = "") -
 def _apply_directa(page: Page, config: dict, profile: dict) -> str:
     btn_sel = config["selector_boton_aplicar"]
     try:
-        from .stealth_utils import human_click
         human_click(page, btn_sel)
         human_delay(2.0, 4.0)
         fill_form(page, profile)
@@ -76,7 +71,6 @@ def _apply_directa(page: Page, config: dict, profile: dict) -> str:
 
 
 def _apply_modal(page: Page, config: dict, profile: dict) -> str:
-    from .stealth_utils import human_click
     btn_sel = config["selector_boton_aplicar"]
     try:
         human_click(page, btn_sel)
@@ -105,7 +99,6 @@ def _apply_modal(page: Page, config: dict, profile: dict) -> str:
 
 
 def _apply_externa(page: Page, config: dict) -> str:
-    from .stealth_utils import human_click
     btn_sel = config["selector_boton_aplicar"]
     try:
         with page.context.expect_page() as new_page_info:
@@ -124,7 +117,7 @@ def _apply_externa(page: Page, config: dict) -> str:
 # ---------------------------------------------------------------------------
 def _process_offer_generic(
     page: Page, offer_url: str, config: dict, profile: dict,
-    portal: str, dry_run: bool
+    portal: str, dry_run: bool,
 ) -> tuple[str, str]:
     """Retorna (title, status)."""
     title = "unknown"
@@ -183,7 +176,7 @@ def run_bot(portal_name: str, dry_run: bool = False, headless: bool = False) -> 
 
     # Cargar portal específico si existe
     from .portals import PORTAL_REGISTRY
-    PortalClass = PORTAL_REGISTRY.get(portal_name)
+    PortalClass    = PORTAL_REGISTRY.get(portal_name)
     portal_handler = PortalClass(config, profile) if PortalClass else None
 
     session_dir = str(SESSIONS_DIR / portal_name)
@@ -218,7 +211,7 @@ def run_bot(portal_name: str, dry_run: bool = False, headless: bool = False) -> 
         page.goto(config["url_busqueda"], wait_until="domcontentloaded", timeout=30_000)
         human_delay(3.0, 5.0)
 
-        applied = 0
+        applied  = 0
         page_num = 1
 
         while applied < max_offers:
@@ -253,10 +246,14 @@ def run_bot(portal_name: str, dry_run: bool = False, headless: bool = False) -> 
                         applied += 1
                         continue
 
-                    title  = ""
-                    status = portal_handler.apply_to_offer(page, offer_id)
-                    log.info("  status: %s", status)
+                    # BUG FIX: apply_to_offer retorna (status, title)
+                    result = portal_handler.apply_to_offer(page, offer_id)
+                    if isinstance(result, tuple):
+                        status, title = result
+                    else:
+                        status, title = result, ""
 
+                    log.info("  [%s] %s → %s", portal_name, title or offer_id, status)
                     save_application(offer_url, portal_name, title, status)
                     _csv_log(portal_name, offer_url, title, status)
                     applied += 1
@@ -299,7 +296,6 @@ def run_bot(portal_name: str, dry_run: bool = False, headless: bool = False) -> 
                         page, url, config, profile, portal_name, dry_run
                     )
                     log.info("  [%s] %s → %s", portal_name, title, status)
-
                     save_application(url, portal_name, title, status)
                     _csv_log(portal_name, url, title, status)
                     applied += 1
@@ -312,7 +308,6 @@ def run_bot(portal_name: str, dry_run: bool = False, headless: bool = False) -> 
             if not next_sel or applied >= max_offers:
                 break
             try:
-                from .stealth_utils import human_click
                 next_btn = page.query_selector(next_sel)
                 if not next_btn or not next_btn.is_visible():
                     log.info("Sin página siguiente. Fin.")
