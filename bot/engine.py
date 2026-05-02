@@ -26,9 +26,27 @@ Flujo de alto nivel:
 import csv
 import datetime
 import logging
+import os
 from pathlib import Path
 
 from playwright.sync_api import sync_playwright, Page
+
+# ---------------------------------------------------------------------------
+# Auto-detección del ejecutable de Chrome/Chromium
+# ---------------------------------------------------------------------------
+_CHROME_CANDIDATES = [
+    r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+    r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+    r"C:\Program Files\Chromium\Application\chrome.exe",
+    os.path.expandvars(r"%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe"),
+]
+
+def _find_chrome_executable() -> str | None:
+    """Retorna la ruta al ejecutable de Chrome/Chromium si está en el sistema."""
+    for path in _CHROME_CANDIDATES:
+        if Path(path).exists():
+            return path
+    return None
 
 from .config import SITE_CONFIG, USER_PROFILE
 from .state import already_applied, save_application
@@ -312,8 +330,14 @@ def run_bot(portal_name: str, dry_run: bool = False, headless: bool = False) -> 
              PortalClass.__name__ if PortalClass else "genérico",
              rate_limiter.max_actions)
 
+    chrome_exe = _find_chrome_executable()
+    if chrome_exe:
+        log.info("Usando Chrome del sistema: %s", chrome_exe)
+    else:
+        log.info("Usando Chromium de Playwright")
+
     with sync_playwright() as pw:
-        browser = pw.chromium.launch_persistent_context(
+        launch_kwargs = dict(
             user_data_dir = session_dir,
             headless      = headless,
             user_agent    = random_user_agent(),
@@ -322,6 +346,10 @@ def run_bot(portal_name: str, dry_run: bool = False, headless: bool = False) -> 
             timezone_id   = "America/Argentina/Buenos_Aires",
             args          = ["--no-sandbox", "--disable-blink-features=AutomationControlled"],
         )
+        if chrome_exe:
+            launch_kwargs["executable_path"] = chrome_exe
+
+        browser = pw.chromium.launch_persistent_context(**launch_kwargs)
 
         page = browser.new_page()
         apply_stealth(page)
