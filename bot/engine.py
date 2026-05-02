@@ -327,11 +327,11 @@ def run_bot(portal_name: str, dry_run: bool = False, headless: bool = False) -> 
         apply_stealth(page)
 
         try:
-            from playwright_stealth import stealth_sync
-            stealth_sync(page)
+            from playwright_stealth import Stealth
+            Stealth().apply_stealth_sync(page)
             log.info("playwright-stealth activo")
-        except ImportError:
-            log.warning("playwright-stealth no instalado — usando stealth manual")
+        except (ImportError, Exception) as _se:
+            log.warning("playwright-stealth no disponible (%s) — usando stealth manual", _se)
 
         log.info("Navegando a: %s", config["url_busqueda"])
         with_retry(
