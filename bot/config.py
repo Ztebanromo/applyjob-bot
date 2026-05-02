@@ -7,20 +7,23 @@ Edita USER_PROFILE con tus datos y agrega portales en SITE_CONFIG.
 # Perfil del usuario — se usa para autocompletar formularios
 # ---------------------------------------------------------------------------
 USER_PROFILE = {
-    "full_name":   "Tu Nombre Completo",
-    "first_name":  "Tu Nombre",
-    "last_name":   "Tu Apellido",
-    "email":       "tuemail@gmail.com",
-    "phone":       "+1234567890",
-    "city":        "Ciudad, País",
-    "linkedin":    "https://linkedin.com/in/tu-perfil",
-    "portfolio":   "https://tu-portfolio.com",
-    "cv_path":     "C:/Users/TuUsuario/Documents/CV.pdf",  # ruta absoluta al PDF
-    "salary":      "3000",
-    "years_exp":   "3",
+    "full_name":   "Ignacio Romo",
+    "first_name":  "Ignacio",
+    "last_name":   "Romo",
+    "email":       "ygnacio1698@gmail.com",
+    "phone":       "+56 9 3420 0859",
+    "city":        "Gran Santiago, RM, Chile",
+    "linkedin":    "https://www.linkedin.com/in/ignacio-romo-dev",
+    "portfolio":   "",
+    "cv_path":     "C:/Users/ygnac/Downloads/cv.html",  # ⚠ reemplazar con ruta al PDF cuando lo generes
+    "salary":      "900",
+    "years_exp":   "4",
     "cover_letter": (
-        "Estoy muy interesado en esta posición y creo que mi experiencia "
-        "encaja perfectamente con los requerimientos del rol."
+        "Soy Analista Programador egresado de INACAP con 4+ años de exposicion directa "
+        "a sistemas empresariales (SAP, WMS). Combino base tecnica en Python, SQL y "
+        "desarrollo web con comprension real de flujos de negocio en entornos de alta "
+        "demanda. Estoy orientado a la automatizacion e integridad de datos, y busco "
+        "mi primera posicion formal en TI donde aportar desde el primer dia."
     ),
 }
 
