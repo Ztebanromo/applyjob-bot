@@ -15,7 +15,7 @@ USER_PROFILE = {
     "city":        "Gran Santiago, RM, Chile",
     "linkedin":    "https://www.linkedin.com/in/ignacio-romo-dev",
     "portfolio":   "",
-    "cv_path":     "C:/Users/ygnac/Downloads/cv.html",  # ⚠ reemplazar con ruta al PDF cuando lo generes
+    "cv_path":     "C:/Users/ygnac/Downloads/IgnacioCV.pdf",
     "salary":      "900",
     "years_exp":   "4",
     "cover_letter": (
