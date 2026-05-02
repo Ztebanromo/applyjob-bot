@@ -19,6 +19,13 @@ Notas:
 """
 import argparse
 import sys
+import io
+
+# Forzar UTF-8 en stdout/stderr para evitar UnicodeEncodeError en terminales Windows (cp1252)
+if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+if sys.stderr.encoding and sys.stderr.encoding.lower() != "utf-8":
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 
 from bot.config import SITE_CONFIG
 from bot.engine import run_bot
