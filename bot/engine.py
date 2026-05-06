@@ -279,6 +279,126 @@ def _process_offer_generic(
 
 
 # ---------------------------------------------------------------------------
+# Detección de login pendiente
+# ---------------------------------------------------------------------------
+
+# Selectores que indican que el portal pide login
+_LOGIN_SIGNALS = {
+    "linkedin": [
+        "div.nav__button-secondary",          # botón "Iniciar sesión" en nav
+        "button[data-tracking-control-name='guest_homepage-basic_sign-in-button']",
+        ".sign-in-form",
+        "#session_key",                        # campo email del login form
+        "a[href*='/login']",
+    ],
+}
+
+# Selectores que confirman que ya hay sesión activa
+_LOGGED_IN_SIGNALS = {
+    "linkedin": [
+        ".global-nav__me-photo",              # foto de perfil en nav
+        "img.global-nav__me-photo",
+        "[data-control-name='nav.settings']",
+        ".feed-identity-module",
+    ],
+}
+
+
+def _wait_for_login_if_needed(page, portal_name: str, config: dict) -> None:
+    """
+    Detecta si el portal está pidiendo login y, si es así, espera hasta que
+    el usuario inicie sesión manualmente en el browser abierto.
+
+    Una vez detectada la sesión activa, navega de vuelta a la URL de búsqueda
+    y retorna para que el bot continúe normalmente.
+
+    No hace nada si:
+    - El portal no tiene requires_login=True
+    - Ya hay sesión activa
+    - No hay señales de login en la página
+    """
+    if not config.get("requires_login"):
+        return
+
+    # Revisar si hay señal de login requerido
+    login_sels   = _LOGIN_SIGNALS.get(portal_name, [])
+    session_sels = _LOGGED_IN_SIGNALS.get(portal_name, [])
+
+    def _is_logged_in() -> bool:
+        for sel in session_sels:
+            try:
+                if page.query_selector(sel):
+                    return True
+            except Exception:
+                pass
+        return False
+
+    def _needs_login() -> bool:
+        # Si ya hay sesión activa no hace falta login
+        if _is_logged_in():
+            return False
+        # Revisar si hay algún selector de login visible
+        for sel in login_sels:
+            try:
+                el = page.query_selector(sel)
+                if el and el.is_visible():
+                    return True
+            except Exception:
+                pass
+        # También verificar por URL
+        current = page.url
+        if "login" in current or "authwall" in current or "checkpoint" in current:
+            return True
+        return False
+
+    if not _needs_login():
+        return
+
+    # ── Hay que hacer login ───────────────────────────────────────────────────
+    log.warning("=" * 60)
+    log.warning("LOGIN REQUERIDO en %s", portal_name)
+    log.warning("El browser está abierto. Iniciá sesión manualmente.")
+    log.warning("El bot esperará hasta que detecte sesión activa...")
+    log.warning("(Ctrl+C para cancelar)")
+    log.warning("=" * 60)
+
+    # Navegar a la página de login del portal si es necesario
+    login_urls = {
+        "linkedin": "https://www.linkedin.com/login",
+    }
+    if portal_name in login_urls and ("authwall" in page.url or page.url == config["url_busqueda"]):
+        try:
+            page.goto(login_urls[portal_name], wait_until="domcontentloaded", timeout=15_000)
+        except Exception as exc:
+            log.debug("No se pudo navegar a login page: %s", exc)
+
+    # Esperar hasta 5 minutos a que el usuario inicie sesión
+    import time as _time
+    deadline = _time.time() + 300  # 5 minutos máximo
+    while _time.time() < deadline:
+        _time.sleep(3)
+        try:
+            if _is_logged_in():
+                log.info("✓ Sesión detectada — continuando...")
+                # Volver a la URL de búsqueda
+                page.goto(config["url_busqueda"], wait_until="domcontentloaded", timeout=30_000)
+                human_delay(3.0, 5.0)
+                return
+            # También aceptar si la URL cambió a feed (login exitoso)
+            if "/feed" in page.url or "/jobs" in page.url:
+                log.info("✓ Login detectado por URL — continuando...")
+                if "/jobs" not in page.url:
+                    page.goto(config["url_busqueda"], wait_until="domcontentloaded", timeout=30_000)
+                human_delay(3.0, 5.0)
+                return
+        except Exception as exc:
+            log.debug("Error verificando login: %s", exc)
+
+    log.error("Tiempo de espera agotado (5 min). Cerrando.")
+    raise TimeoutError("Login no completado en el tiempo límite")
+
+
+# ---------------------------------------------------------------------------
 # run_bot — función principal pública
 # ---------------------------------------------------------------------------
 
@@ -367,6 +487,9 @@ def run_bot(portal_name: str, dry_run: bool = False, headless: bool = False) -> 
             attempts=2, delay=5.0, portal=portal_name,
         )
         human_delay(3.0, 5.0)
+
+        # ── Detección de login pendiente ──────────────────────────────────────
+        _wait_for_login_if_needed(page, portal_name, config)
 
         applied  = 0
         page_num = 1
