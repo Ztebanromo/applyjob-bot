@@ -26,9 +26,9 @@ log = logging.getLogger("applyjob.linkedin")
 
 # Selectores LinkedIn (actualizados a 2024)
 SEL = {
-    "job_card":          "li.jobs-search-results__list-item",
-    "job_card_link":     "a.job-card-list__title",
-    "easy_apply_btn":    "button.jobs-apply-button--top-card, button[aria-label*='Easy Apply']",
+    "job_card":          "li[data-occludable-job-id], li.scaffold-layout__list-item",
+    "job_card_link":     "a.job-card-list__title--link, a.job-card-container__link",
+    "easy_apply_btn":    "button.jobs-apply-button--top-card, button[aria-label*='Easy Apply'], button[aria-label*='Solicitud sencilla']",
     "already_applied":   "span.artdeco-inline-feedback__message",
     "modal":             "div.jobs-easy-apply-modal",
     "modal_title":       "h3.jobs-easy-apply-modal__title",

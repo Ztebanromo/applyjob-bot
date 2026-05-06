@@ -52,7 +52,7 @@ SITE_CONFIG = {
             "?keywords=Python+Developer&location=Remote&f_AL=true"
             # f_AL=true = Easy Apply solamente
         ),
-        "selector_oferta":          "li.jobs-search-results__list-item",
+        "selector_oferta":          "li[data-occludable-job-id]",
         "selector_boton_aplicar":   "button.jobs-apply-button",
         "selector_siguiente_pagina": "button[aria-label='Ver más empleos']",
         "selector_titulo_oferta":   "h1.job-details-jobs-unified-top-card__job-title",
