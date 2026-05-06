@@ -49,8 +49,9 @@ SITE_CONFIG = {
     "linkedin": {
         "url_busqueda": (
             "https://www.linkedin.com/jobs/search/"
-            "?keywords=Python+Developer&location=Remote&f_AL=true"
+            "?keywords=Junior+Python+Developer&location=Chile&f_AL=true&f_E=1%2C2"
             # f_AL=true = Easy Apply solamente
+            # f_E=1,2  = Internship + Entry Level (junior)
         ),
         "selector_oferta":          "li[data-occludable-job-id]",
         "selector_boton_aplicar":   "button.jobs-apply-button",

@@ -37,7 +37,7 @@ SEL = {
     "review_btn":        "button[aria-label='Review your application']",
     "submit_btn":        "button[aria-label='Submit application']",
     "close_modal":       "button[aria-label='Dismiss'], button[aria-label='Cerrar']",
-    "job_title_panel":   "h1.job-details-jobs-unified-top-card__job-title",
+    "job_title_panel":   "h1.job-details-jobs-unified-top-card__job-title, h1.t-24",
     "captcha_check":     "div.challenge-dialog, iframe[title*='security']",
     "discard_btn":       "button[data-control-name='discard_application_confirm_btn']",
 }
