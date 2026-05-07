@@ -26,7 +26,8 @@ log = logging.getLogger("applyjob.retry")
 # ---------------------------------------------------------------------------
 TRANSIENT_KEYWORDS = (
     "timeout", "connection", "network", "reset", "refused",
-    "eof", "timed out", "net::", "aborted",
+    "eof", "timed out", "net::", "aborted", "err_aborted",
+    "target page", "target closed", "browser has been closed",
 )
 
 
@@ -183,7 +184,7 @@ class RateLimiter:
 # Rate limiters por portal (configurados con valores seguros)
 # ---------------------------------------------------------------------------
 RATE_LIMITS: dict[str, RateLimiter] = {
-    "linkedin":     RateLimiter(max_actions=10, window_minutes=60),
+    "linkedin":     RateLimiter(max_actions=25, window_minutes=60),
     "indeed":       RateLimiter(max_actions=15, window_minutes=60),
     "computrabajo": RateLimiter(max_actions=25, window_minutes=60),
     "getonyboard":  RateLimiter(max_actions=20, window_minutes=60),

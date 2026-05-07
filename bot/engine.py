@@ -531,9 +531,6 @@ def run_bot(portal_name: str, dry_run: bool = False, headless: bool = False) -> 
                         log.info("  [dry_run] %s", offer_url)
                         continue
 
-                    # Rate limiting ANTES de postular
-                    rate_limiter.acquire(portal_name)
-
                     result = portal_handler.apply_to_offer(page, offer_id)
                     status, title = result if isinstance(result, tuple) else (result, "")
 
@@ -541,6 +538,12 @@ def run_bot(portal_name: str, dry_run: bool = False, headless: bool = False) -> 
                     save_application(offer_url, portal_name, title, status)
                     _csv_log(portal_name, offer_url, title, status)
                     applied += 1
+
+                    # Rate limiting SOLO para acciones reales (no timeouts ni skips técnicos)
+                    if status not in ("error: card_not_loaded", "error: modal_timeout") \
+                            and not status.startswith("skipped_"):
+                        rate_limiter.acquire(portal_name)
+
                     human_delay(3.0, 6.0)
 
             # ── Motor genérico ────────────────────────────────────────────────

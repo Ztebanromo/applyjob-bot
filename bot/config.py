@@ -1,30 +1,30 @@
-"""
-Configuración central del bot.
-Edita USER_PROFILE con tus datos y agrega portales en SITE_CONFIG.
-"""
+import os
+from dotenv import load_dotenv
+
+# Cargar variables de entorno desde .env
+load_dotenv()
 
 # ---------------------------------------------------------------------------
 # Perfil del usuario — se usa para autocompletar formularios
 # ---------------------------------------------------------------------------
 USER_PROFILE = {
-    "full_name":   "Ignacio Romo",
-    "first_name":  "Ignacio",
-    "last_name":   "Romo",
-    "email":       "ygnacio1698@gmail.com",
-    "phone":       "+56 9 3420 0859",
-    "city":        "Gran Santiago, RM, Chile",
-    "linkedin":    "https://www.linkedin.com/in/ignacio-romo-dev",
-    "portfolio":   "",
-    "cv_path":     "C:/Users/ygnac/Downloads/files/cv-ignacio-romo.pdf",
-    "salary":      "900",
-    "years_exp":   "4",
-    "cover_letter": (
-        "Soy Analista Programador egresado de INACAP con 4+ años de exposicion directa "
-        "a sistemas empresariales (SAP, WMS). Combino base tecnica en Python, SQL y "
-        "desarrollo web con comprension real de flujos de negocio en entornos de alta "
-        "demanda. Estoy orientado a la automatizacion e integridad de datos, y busco "
-        "mi primera posicion formal en TI donde aportar desde el primer dia."
-    ),
+    "full_name":     os.getenv("USER_FULL_NAME", "Ignacio Romo"),
+    "first_name":    os.getenv("USER_FIRST_NAME", "Ignacio"),
+    "last_name":     os.getenv("USER_LAST_NAME", "Romo"),
+    "email":         os.getenv("USER_EMAIL", "ygnacio1698@gmail.com"),
+    "phone":         os.getenv("USER_PHONE", "+56 9 3420 0859"),
+    "city":          os.getenv("USER_CITY", "Región Metropolitana de Santiago, Chile"),
+    "linkedin":      os.getenv("USER_LINKEDIN", "https://www.linkedin.com/in/ignacio-romo-dev"),
+    "portfolio":     os.getenv("USER_PORTFOLIO", "https://github.com/Ztebanromo"),
+    "cv_path":       os.getenv("USER_CV_PATH", "C:/Users/ygnac/Downloads/files/cv-ignacio-romo.pdf"),
+    "salary":        os.getenv("USER_SALARY", "850.000"),
+    "years_exp":     os.getenv("USER_YEARS_EXP", "0"),
+    "cover_letter":  os.getenv("USER_COVER_LETTER", (
+        "Soy Analista Programador recien egresado de INACAP, sin experiencia formal previa en TI. Cuento con conocimientos basicos en Python, SQL y desarrollo web adquiridos durante mi formacion. Tuve exposicion directa a sistemas empresariales como SAP y WMS en roles no TI. Busco mi primera oportunidad en el area donde pueda aprender y aportar desde el primer dia."
+    )),
+    "availability":  os.getenv("USER_AVAILABILITY", "Inmediata"),
+    "english_level": os.getenv("USER_ENGLISH_LEVEL", "Básico"),
+    "work_mode":     os.getenv("USER_WORK_MODE", "Sí"),
 }
 
 # ---------------------------------------------------------------------------
@@ -49,9 +49,11 @@ SITE_CONFIG = {
     "linkedin": {
         "url_busqueda": (
             "https://www.linkedin.com/jobs/search/"
-            "?keywords=Junior+Python+Developer&location=Chile&f_AL=true&f_E=1%2C2"
-            # f_AL=true = Easy Apply solamente
-            # f_E=1,2  = Internship + Entry Level (junior)
+            "?keywords=Desarrollador+Programador&location=Santiago%2C+Región+Metropolitana%2C+Chile"
+            "&f_AL=true"   # Easy Apply (Solicitud sencilla) solamente
+            "&f_E=2"       # Entry Level únicamente — sin experiencia previa
+            # Keywords amplias IT: captura Desarrollador Junior, Programador Jr,
+            # Analista Programador, Dev Backend/Frontend, etc.
         ),
         "selector_oferta":          "li[data-occludable-job-id]",
         "selector_boton_aplicar":   "button.jobs-apply-button",
@@ -63,7 +65,7 @@ SITE_CONFIG = {
     },
     "indeed": {
         "url_busqueda": (
-            "https://www.indeed.com/jobs?q=Python+Developer&l=Remote"
+            "https://cl.indeed.com/jobs?q=Desarrollador+Programador+Junior&l=Santiago%2C+Regi%C3%B3n+Metropolitana"
         ),
         "selector_oferta":          "div.job_seen_beacon",
         "selector_boton_aplicar":   "button#indeedApplyButton, a.indeed-apply-button",

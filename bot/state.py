@@ -70,10 +70,18 @@ def _conn():
 
 def already_applied(url: str) -> bool:
     """
-    Consulta O(1) — retorna True si la URL ya fue procesada con CUALQUIER status.
+    Retorna True solo si la oferta fue ENVIADA realmente.
 
-    Incluye "error" y "skipped" deliberadamente: si algo falló, el bot
-    lo vuelve a intentar en el siguiente run manualmente o vía --retry-errors.
+    Status que bloquean re-intento:
+      - 'applied'                  → enviado con éxito
+      - 'skipped_already_applied'  → LinkedIn mismo dice "ya postulaste"
+
+    Status que permiten re-intento (no bloquean):
+      - 'dry_run'            → nunca se envió, solo simulación
+      - 'error: *'           → falló, vale la pena reintentar
+      - 'skipped_no_easy_apply'   → puede aparecer Easy Apply en otro run
+      - 'skipped_complex_*'       → modal muy largo, puede cambiar
+      - 'skipped_captcha'         → CAPTCHA temporal
 
     Args:
         url: URL canónica de la oferta
@@ -83,7 +91,10 @@ def already_applied(url: str) -> bool:
     """
     with _conn() as con:
         row = con.execute(
-            "SELECT id FROM applications WHERE url = ?", (url,)
+            """SELECT id FROM applications
+               WHERE url = ?
+                 AND status IN ('applied', 'skipped_already_applied')""",
+            (url,),
         ).fetchone()
         return row is not None
 
