@@ -182,17 +182,17 @@ Plan de implementación completo. Las fases se ejecutan en orden de impacto.
 
 ---
 
-## ⏳ Fase 8 — Dashboard web local
+## ✅ Fase 8 — Dashboard Maestro (GUI Flask + Master Mode)
 
-**Objetivo:** visualizar el historial sin abrir archivos.
+**Objetivo:** Interfaz gráfica para controlar el bot en tiempo real sin tocar la consola.
 
-- [ ] `dashboard.py` — Flask mínimo (1 archivo)
-- [ ] Tabla de postulaciones con filtros por portal/status/fecha
-- [ ] Contadores por status
-- [ ] Botón "Exportar CSV"
-- [ ] `python dashboard.py` → `http://localhost:8080`
+- [x] `gui_server.py` — Servidor Flask con soporte para hilos (ejecución asíncrona)
+- [x] Dashboard Maestro — Selección dinámica de portales y configuración en vivo
+- [x] Sincronización de Logs — Terminal interactiva en el navegador
+- [x] Notificaciones Auditivas — Feedback sonoro en postulaciones exitosas
+- [x] Gestión de .env — Guardado de configuración persistente desde la web
 
-**Esfuerzo:** ~4h | **Riesgo:** bajo
+**Esfuerzo:** ~6h | **Riesgo:** bajo
 
 ---
 
@@ -252,12 +252,12 @@ Plan de implementación completo. Las fases se ejecutan en orden de impacto.
 | F5c — Logging centralizado | ✅ | ~2h |
 | F5d — Validación config | ✅ | ~2h |
 | F5e — Documentación completa | ✅ | ~3h |
+| F8 — Dashboard Maestro | ✅ | ~6h |
 | F6 — Notificaciones | ⏳ | ~2h |
 | F7 — Scheduler | ⏳ | ~2h |
-| F8 — Dashboard | ⏳ | ~4h |
 | F9 — Anti-detección avanzada | ⏳ | ~3h |
 | F10 — Wizard config | ⏳ | ~2h |
 | F11 — Indeed específico | ⏳ | ~4h |
 | F12 — Docker/distribución | ⏳ | ~3h |
-| **Completado** | **8/15 fases** | **~34h** |
-| **Pendiente** | **7/15 fases** | **~20h** |
+| **Completado** | **9/15 fases** | **~40h** |
+| **Pendiente** | **6/15 fases** | **~14h** |

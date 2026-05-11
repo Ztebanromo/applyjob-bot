@@ -28,8 +28,47 @@ build/
 # IDE
 .vscode/
 .idea/
+# Entorno virtual
+.venv/
+venv/
+env/
+
+# Sesiones de browser (contienen cookies/tokens)
+sessions/
+
+# Base de datos local
+data/
+
+# Logs y errores
+logs/
+errors/
+
+# Variables de entorno
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# IDE
+.vscode/
+.idea/
 *.swp
 
 # OS
 .DS_Store
 Thumbs.db
+
+# Temporales y logs en raíz
+*.log
+*.png
+scratch/
+research/
+docs/archive/
+docs/legacy/
+uploads/

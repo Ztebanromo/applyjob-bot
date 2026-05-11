@@ -8,9 +8,10 @@ from playwright.sync_api import Page
 
 class BasePortal(ABC):
 
-    def __init__(self, config: dict, profile: dict):
+    def __init__(self, config: dict, profile: dict, dry_run: bool = False):
         self.config  = config
         self.profile = profile
+        self.dry_run = dry_run
 
     @abstractmethod
     def apply_to_offer(self, page: Page, offer_url: str) -> str:

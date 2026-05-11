@@ -88,7 +88,7 @@ def apply_stealth(page: Page) -> None:
         Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
         Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3] });
         Object.defineProperty(navigator, 'languages', {
-            get: () => ['es-AR', 'es', 'en-US', 'en']
+            get: () => ['es-CL', 'es', 'en-US', 'en']
         });
         window.chrome = { runtime: {} };
     """)

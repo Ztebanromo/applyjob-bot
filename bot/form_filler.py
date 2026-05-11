@@ -1,143 +1,145 @@
 """
-Autocompletado inteligente de formularios LinkedIn Easy Apply.
+Módulo de Autocompletado de Formularios (Form Filler).
 
-Detecta campos por name / id / placeholder / aria-label / label asociado
-y aplica los valores de USER_PROFILE. Diseñado para el mercado chileno.
+Este módulo es responsable de identificar y rellenar automáticamente los diversos
+campos que pueden aparecer en un proceso de postulación (LinkedIn Easy Apply, 
+Laborum, Indeed, etc.).
 
-Campos cubiertos:
-  - text / tel / email / number / textarea
-  - select (dropdowns de screening)
-  - radio (sí/no, disponibilidad, etc.)
-  - file upload (CV)
+Estrategias de Detección:
+    - Análisis de Atributos: Se escanean atributos HTML como name, id, placeholder,
+      aria-label y etiquetas <label> asociadas.
+    - Pattern Matching: Se utilizan diccionarios de palabras clave (FIELD_PATTERNS)
+      para mapear los campos encontrados con los datos del USER_PROFILE.
+    - Heurística de Respuestas: Para preguntas de screening (sí/no, experiencia),
+      el bot prioriza respuestas afirmativas o basadas en los años de experiencia
+      declarados por el usuario.
+
+Soporte Multi-ATS:
+    Diseñado para funcionar en diversas plataformas (Navent, Greenhouse, Lever, 
+    Workday) manejando sus particularidades de renderizado.
 """
-from pathlib import Path
-from playwright.sync_api import Page
-from .stealth_utils import micro_delay, human_delay
-import logging
 
+from pathlib import Path
+import logging
+from typing import Dict, List, Optional, Set, Any
+
+from playwright.sync_api import Page, ElementHandle
+
+from .stealth_utils import micro_delay, human_delay
+
+# Configuración del Logger
 log = logging.getLogger("applyjob.form_filler")
 
 # ---------------------------------------------------------------------------
-# Patrones de detección  →  clave del perfil
-# Cada lista contiene substrings que, si aparecen en cualquier atributo
-# del campo (name / id / placeholder / aria-label / label-text), activan esa clave.
+# DICCIONARIO DE PATRONES (FIELD_PATTERNS)
 # ---------------------------------------------------------------------------
-FIELD_PATTERNS: dict[str, list[str]] = {
+# Mapea claves del USER_PROFILE con posibles nombres de campos en el DOM.
+# Se ha extendido para cubrir términos comunes en Chile (Laborum/Computrabajo).
+# ---------------------------------------------------------------------------
+FIELD_PATTERNS: Dict[str, List[str]] = {
     "full_name": [
         "fullname", "full_name", "nombre_completo", "nombre completo",
-        "your name", "tu nombre",
+        "your name", "tu nombre", "nombre y apellido"
     ],
     "first_name": [
         "firstname", "first_name", "nombre", "givenname", "given_name",
-        "first name", "primer nombre",
+        "first name", "primer nombre"
     ],
     "last_name": [
         "lastname", "last_name", "apellido", "surname", "familyname",
-        "last name",
+        "last name", "apellidos"
     ],
     "email": [
-        "email", "correo", "mail", "e-mail", "correo electrónico",
+        "email", "correo", "mail", "e-mail", "correo electrónico", "email_address"
     ],
     "phone": [
         "phone", "telefono", "teléfono", "tel", "mobile", "celular", "móvil",
-        "número de teléfono", "numero de telefono", "phone number",
+        "número de teléfono", "numero de telefono", "phone number", "whatsapp"
+    ],
+    "phone_number": [
+        "phone number", "numero de telefono sin codigo", "número sin prefijo",
+        "local phone", "number only"
+    ],
+    "country": [
+        "country", "país", "pais", "nacionalidad", "nationality",
+        "país de residencia", "pais de residencia", "country of residence",
+        "ubicación pais", "selecciona tu país"
+    ],
+    "country_code": [
+        "country code", "código de país", "codigo de pais", "prefijo",
+        "phone prefix", "dial code", "código telefónico", "codigo telefonico"
     ],
     "city": [
         "city", "ciudad", "location", "ubicacion", "ubicación", "localidad",
-        "ciudad de residencia",
+        "ciudad de residencia", "donde vives", "comuna", "región", "region"
     ],
     "linkedin": [
-        "linkedin", "linkedin_url", "perfil linkedin", "profile url",
+        "linkedin", "linkedin_url", "perfil linkedin", "profile url", "social link"
     ],
     "portfolio": [
-        "portfolio", "website", "sitio web", "web", "github", "portafolio",
+        "portfolio", "website", "sitio web", "web", "github", "portafolio", "personal site"
     ],
     "salary": [
         "salary", "salario", "pretension", "pretensión", "remuneracion",
         "remuneración", "sueldo", "renta", "renta líquida", "renta liquida",
-        "expected salary", "desired salary", "wage", "compensation",
-        "expectativa salarial", "expectativa de renta", "expectativas de renta",
-        "expectativas salariales", "renta esperada", "renta pretendida",
-        "pretension salarial", "pretensión salarial",
+        "expected salary", "desired salary", "expectativa salarial", 
+        "pretension salarial", "cuánto quieres ganar", "cuanto quieres ganar"
     ],
     "years_exp": [
-        "años de experiencia", "anos de experiencia",
-        "how many years", "cuántos años", "cuantos años",
-        "nivel de experiencia", "years of experience",
-        "years exp", "exp years", "yrs experience",
+        "años de experiencia", "anos de experiencia", "how many years", 
+        "cuántos años", "cuantos años", "nivel de experiencia", 
+        "years of experience", "experiencia en"
     ],
     "cover_letter": [
         "cover", "carta", "motivation", "presentacion", "presentación",
         "message", "mensaje", "sobre ti", "about you", "tell us",
         "cuéntanos", "cuentanos", "descripcion", "descripción",
-        # Preguntas de screening que piden contexto personal
-        "relaciona", "relacion", "perfil y experiencia", "perfil con",
         "por qué", "porque", "motiv", "interés", "interes",
-        "cuéntanos", "cuéntame", "cuentanos", "habilidades", "skills",
-        "fortaleza", "logro", "aporte", "valor",
+        "habilidades", "skills", "fortaleza", "logro", "aporte"
     ],
     "availability": [
         "disponibilidad", "disponible", "cuando puedes", "cuándo puedes",
-        "inicio", "fecha de inicio", "start date", "available from",
-        "disponibilidad para comenzar", "cuando podrias", "cuándo podrías",
-        "incorporacion", "incorporación",
+        "inicio", "fecha de inicio", "start date", "incorporacion", "incorporación"
     ],
     "english_level": [
         "ingles", "inglés", "english", "idioma", "language", "nivel de ingles",
-        "nivel de inglés", "english level", "language level",
+        "nivel de inglés", "english level"
     ],
     "work_mode": [
         "presencial", "remoto", "hibrido", "híbrido", "modalidad",
-        "trabajo presencial", "work mode", "remote", "on-site", "onsite",
-        "dispuesto", "dispuesta", "presencial en santiago",
+        "trabajo presencial", "work mode", "remote", "on-site"
     ],
 }
 
-# Valores numéricos sin formato (LinkedIn espera enteros en inputs type=number)
-NUMERIC_VALUES: dict[str, str] = {
-    "salary":    "850000",   # sin puntos ni coma
+# Valores que deben enviarse como números puros (sin puntos ni símbolos)
+# para evitar errores de validación en inputs de tipo 'number'.
+NUMERIC_VALUES: Dict[str, str] = {
+    "salary":    "850000", 
     "years_exp": "0",
 }
 
-# Respuestas afirmativas para radios / dropdowns de screening
-YES_VALUES: set[str] = {
-    "yes", "si", "sí", "true", "1", "authorized",
-    "yes, i am authorized", "i am authorized", "sí, estoy autorizado",
-    "habilitado", "disponible",
+# Valores que el bot interpreta como "Afirmativos"
+YES_VALUES: Set[str] = {
+    "yes", "si", "sí", "true", "1", "authorized", "permitido",
+    "yes, i am authorized", "sí, estoy autorizado", "habilitado", 
+    "disponible", "acepto", "concedo"
 }
 
-# Respuestas a evitar en dropdowns
-NO_VALUES: set[str] = {
+# Valores que el bot evita seleccionar en dropdowns (filtros negativos)
+NO_VALUES: Set[str] = {
     "no", "false", "0", "not authorized", "no estoy autorizado",
-    "select an option", "selecciona una opción", "seleccionar",
-    "choose", "elegir", "",
+    "select an option", "selecciona una opción", "choose", "elegir", ""
 }
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
 
-def _is_textarea(el) -> bool:
-    try:
-        return el.evaluate("el => el.tagName.toLowerCase()") == "textarea"
-    except Exception:
-        return False
-
-
-def _get_input_type(el) -> str:
-    try:
-        return (el.get_attribute("type") or "text").lower()
-    except Exception:
-        return "text"
-
-
-def _get_label_text(page: Page, el) -> str:
+def _get_label_text(page: Page, el: ElementHandle) -> str:
     """
-    Busca el texto de la etiqueta asociada al input.
-    Maneja:
-      - <label for="id">          (HTML estándar)
-      - <label> contenedor padre  (Greenhouse, Lever)
-      - div/span hermano anterior (SmartRecruiters, Workday)
+    Busca de forma exhaustiva el texto de la etiqueta (label) asociada a un input.
+    
+    Busca por:
+        1. Atributo 'for' en etiquetas <label>.
+        2. Padre de tipo <label> (encapsulamiento).
+        3. Hermanos visuales (div, span, p) que actúen como etiqueta en sistemas ATS.
     """
     try:
         field_id = el.get_attribute("id") or ""
@@ -145,23 +147,19 @@ def _get_label_text(page: Page, el) -> str:
             label = page.query_selector(f"label[for='{field_id}']")
             if label:
                 return (label.text_content() or "").strip()
-        # Buscar vía JS: subir al contenedor más cercano y obtener texto de
-        # etiquetas (label, div con clase label/field-label, span) hermanos/padres
+        
+        # Heurística mediante evaluación JS para subir en el DOM
         text = el.evaluate("""
             el => {
-                // 1. <label> contenedor padre
                 let cur = el.parentElement;
                 for (let i = 0; i < 4; i++) {
                     if (!cur) break;
                     if (cur.tagName === 'LABEL') return cur.textContent.trim();
-                    // 2. Hermano anterior con texto (div.label, span, p)
                     let sib = cur.previousElementSibling;
                     if (sib) {
                         const tag = sib.tagName.toLowerCase();
-                        const cls = (sib.className || '').toLowerCase();
-                        if (tag === 'label' || cls.includes('label') || cls.includes('field') || tag === 'p') {
-                            const t = sib.textContent.trim();
-                            if (t.length > 0 && t.length < 120) return t;
+                        if (tag === 'label' || tag === 'p' || tag === 'span' || sib.className.includes('label')) {
+                            return sib.textContent.trim();
                         }
                     }
                     cur = cur.parentElement;
@@ -171,12 +169,14 @@ def _get_label_text(page: Page, el) -> str:
         """)
         return (text or "").strip()
     except Exception:
-        pass
-    return ""
+        return ""
 
 
-def _build_attrs(page: Page, el) -> str:
-    """Concatena todos los atributos del campo para detección de patrón."""
+def _build_attrs(page: Page, el: ElementHandle) -> str:
+    """
+    Construye una cadena de texto con todos los atributos identificativos del campo.
+    Esta cadena se usa luego para el matching de patrones.
+    """
     try:
         parts = [
             el.get_attribute("name") or "",
@@ -184,7 +184,6 @@ def _build_attrs(page: Page, el) -> str:
             el.get_attribute("placeholder") or "",
             el.get_attribute("aria-label") or "",
             el.get_attribute("data-testid") or "",
-            el.get_attribute("autocomplete") or "",
             _get_label_text(page, el),
         ]
         return " ".join(p for p in parts if p).lower()
@@ -192,35 +191,26 @@ def _build_attrs(page: Page, el) -> str:
         return ""
 
 
-def _match_field(attrs: str) -> str | None:
+def _match_field(attrs: str) -> Optional[str]:
+    """Determina a qué clave del perfil pertenece un campo según sus atributos."""
     for profile_key, patterns in FIELD_PATTERNS.items():
         if any(p in attrs for p in patterns):
             return profile_key
     return None
 
 
-# ---------------------------------------------------------------------------
-# Llenado de campos de texto / número / textarea
-# ---------------------------------------------------------------------------
-
 def fill_text_fields(page: Page, profile: dict) -> int:
     """
-    Rellena todos los inputs/textareas visibles que reconoce.
-    Incluye type=number (crucial para años de experiencia y salario).
+    Localiza y rellena inputs de texto, email, teléfono y textareas.
+    Implementa una lógica de simulación de escritura para campos de ciudad/comuna
+    que activan autocompletado en el ATS.
     """
     filled = 0
-    selectors = [
-        "input[type='text']",
-        "input[type='tel']",
-        "input[type='email']",
-        "input[type='number']",   # ← años de experiencia, salario
-        "input:not([type])",
-        "textarea",
-    ]
+    selectors = ["input[type='text']", "input[type='tel']", "input[type='email']", 
+                 "input[type='number']", "input:not([type])", "textarea"]
 
     for sel in selectors:
-        elements = page.query_selector_all(sel)
-        for el in elements:
+        for el in page.query_selector_all(sel):
             try:
                 if not el.is_visible() or not el.is_enabled():
                     continue
@@ -230,255 +220,191 @@ def fill_text_fields(page: Page, profile: dict) -> int:
                 if not profile_key or profile_key not in profile:
                     continue
 
-                # Para inputs type=number usar valor numérico limpio
-                input_type = _get_input_type(el)
-                if input_type == "number":
-                    value = NUMERIC_VALUES.get(profile_key, str(profile[profile_key]))
-                else:
-                    value = str(profile[profile_key])
+                # Evitar sobreescribir si ya tiene contenido (respetar datos manuales)
+                current_val = el.input_value() if sel != "textarea" else el.text_content()
+                if (current_val or "").strip():
+                    continue
 
-                # Leer valor actual
-                if _is_textarea(el):
-                    current = (el.text_content() or "").strip()
-                else:
-                    current = (el.input_value() or "").strip()
+                # Determinar valor a ingresar (numérico o texto)
+                value = NUMERIC_VALUES.get(profile_key, str(profile[profile_key]))
 
-                if current:
-                    continue  # no sobreescribir campos ya completos
+                # Limpieza especial para Teléfonos (quitar espacios si es input tel/number)
+                if profile_key in ("phone", "phone_number"):
+                    # Si el input es numérico o tel, quitamos todo lo que no sea número o +
+                    if sel in ("input[type='tel']", "input[type='number']"):
+                        value = "".join(c for c in value if c.isdigit() or c == "+")
+                    
+                    # Si detectamos que es un campo de "número local" (sin prefix), 
+                    # usamos phone_number en vez de phone
+                    if any(p in attrs for p in ["sin prefijo", "local", "number only"]):
+                        value = str(profile.get("phone_number", value)).replace(" ", "")
 
                 el.click()
                 micro_delay()
 
-                # Ciudad: usar type() real para activar autocomplete de ATS
-                # (SmartRecruiters, Workday, Greenhouse requieren eventos de teclado)
+                # Manejo especial para Autocomplete de ATS (Ciudad)
                 if profile_key == "city":
-                    el.fill("")          # limpiar primero
-                    micro_delay()
-                    el.type(value, delay=40)  # simula escritura humana
-                    human_delay(0.8, 1.2)     # espera sugerencias
-                    # Seleccionar primera sugerencia si aparece
-                    try:
-                        page.keyboard.press("ArrowDown")
-                        micro_delay()
-                        page.keyboard.press("Enter")
-                        micro_delay()
-                    except Exception:
-                        pass
+                    el.fill("")
+                    el.type(value, delay=50)
+                    human_delay(1.0, 1.5)
+                    page.keyboard.press("ArrowDown")
+                    page.keyboard.press("Enter")
                 else:
                     el.fill(value)
 
-                human_delay(0.3, 0.8)
                 filled += 1
-                log.debug("  fill_text: [%s] = '%s'", profile_key, value[:30])
-
+                human_delay(0.2, 0.5)
             except Exception:
                 continue
-
     return filled
 
 
-# ---------------------------------------------------------------------------
-# Llenado de selects (dropdowns de screening)
-# ---------------------------------------------------------------------------
+def fill_dropdowns(page: Page, profile: dict) -> int:
+    """
+    Responde menús desplegables (select).
+    Intenta coincidir con el perfil del usuario, de lo contrario, prioriza
+    respuestas afirmativas (Yes/Sí) para avanzar en los filtros de la empresa.
 
-def fill_dropdowns(page: Page, profile: dict | None = None) -> int:
+    Manejo especial:
+    - País / country → busca "Chile" o "CL" antes que cualquier otro valor
+    - Código de país / phone prefix → busca "+56" o "56" (Chile)
     """
-    Responde selects de screening:
-    1. Si el campo matchea un profile_key, busca opción que contenga el valor del perfil
-    2. Prefiere valores afirmativos (yes/sí/authorized)
-    3. Si no hay afirmativo, elige el primer valor que NO sea negativo/vacío
-    4. Nunca selecciona valores de NO_VALUES
-    """
-    profile = profile or {}
     filled = 0
-    try:
-        selects = page.query_selector_all("select")
-        for sel_el in selects:
+
+    # Términos que identifican un dropdown de país
+    _COUNTRY_ATTRS   = {"country", "país", "pais", "nationality", "nacionalidad"}
+    # Términos que identifican un dropdown de código de país / prefijo
+    _PHONE_PREFIX_ATTRS = {"country code", "código de país", "codigo de pais",
+                           "prefijo", "phone prefix", "dial code"}
+    # Términos de Chile para buscar en las opciones
+    _CHILE_TERMS = {"chile", "cl", "chi"}
+    _CHILE_CODE  = {"+56", "56", "56 "}
+
+    for sel_el in page.query_selector_all("select"):
+        try:
             if not sel_el.is_visible():
                 continue
 
-            # No sobreescribir si ya tiene selección válida
-            current = (sel_el.input_value() or "").strip()
-            if current and current.lower() not in NO_VALUES:
-                continue
-
-            options = sel_el.query_selector_all("option")
-            option_values = [
-                (o.get_attribute("value") or "").strip()
-                for o in options
-            ]
-            option_texts = [
-                (o.text_content() or "").strip()
-                for o in options
-            ]
-
-            chosen = None
-
-            # Paso 0: intentar matchear con valor del perfil según patrón del campo
             attrs = _build_attrs(page, sel_el)
-            profile_key = _match_field(attrs)
-            if profile_key and profile_key in profile:
-                profile_val = str(profile[profile_key]).lower()
-                # Buscar opción cuyo texto o value contenga el valor del perfil
-                for val, txt in zip(option_values, option_texts):
-                    if profile_val in txt.lower() or profile_val in val.lower():
-                        chosen = val
+            options = sel_el.query_selector_all("option")
+            chosen_val = None
+
+            # ── Caso especial: dropdown de PAÍS ─────────────────────────────
+            if any(t in attrs for t in _COUNTRY_ATTRS):
+                for opt in options:
+                    o_text = (opt.text_content() or "").strip().lower()
+                    o_val  = (opt.get_attribute("value") or "").strip().lower()
+                    if any(t in o_text or t == o_val for t in _CHILE_TERMS):
+                        chosen_val = opt.get_attribute("value")
+                        log.debug("  [form] país → Chile (%r)", chosen_val)
                         break
-                # Si no encontró coincidencia exacta, buscar por primeras letras
-                if not chosen:
-                    for val, txt in zip(option_values, option_texts):
-                        if val and val.lower() not in NO_VALUES:
-                            combined = txt.lower() + val.lower()
-                            if any(w in combined for w in profile_val.split()):
-                                chosen = val
-                                break
 
-            # Paso 1: valor afirmativo explícito
-            if not chosen:
-                chosen = next(
-                    (v for v in option_values if v.lower() in YES_VALUES), None
-                )
+            # ── Caso especial: dropdown de CÓDIGO DE PAÍS / prefijo ──────────
+            elif any(t in attrs for t in _PHONE_PREFIX_ATTRS):
+                for opt in options:
+                    o_text = (opt.text_content() or "").strip()
+                    o_val  = (opt.get_attribute("value") or "").strip()
+                    if any(c in o_text or c == o_val for c in _CHILE_CODE):
+                        chosen_val = opt.get_attribute("value")
+                        log.debug("  [form] código de país → +56 (%r)", chosen_val)
+                        break
 
-            # Paso 2: primer valor que no sea negativo ni vacío
-            if not chosen:
-                chosen = next(
-                    (v for v in option_values
-                     if v and v.lower() not in NO_VALUES),
-                    None
-                )
+            else:
+                profile_key = _match_field(attrs)
 
-            if chosen:
-                sel_el.select_option(chosen)
-                micro_delay()
+                # 1. Intentar match con perfil
+                if profile_key and profile_key in profile:
+                    p_val = str(profile[profile_key]).lower()
+                    for opt in options:
+                        o_text = (opt.text_content() or "").lower()
+                        if p_val in o_text:
+                            chosen_val = opt.get_attribute("value")
+                            break
+
+                # 2. Fallback: Priorizar respuesta afirmativa
+                if not chosen_val:
+                    for opt in options:
+                        o_text = (opt.text_content() or "").lower()
+                        if any(y in o_text for y in YES_VALUES):
+                            chosen_val = opt.get_attribute("value")
+                            break
+
+            if chosen_val:
+                sel_el.select_option(chosen_val)
                 filled += 1
-                log.debug("  fill_dropdown: [%s] selected '%s'",
-                          profile_key or "?", chosen[:30])
-
-    except Exception as exc:
-        log.debug("fill_dropdowns error: %s", exc)
-
+                micro_delay()
+        except Exception:
+            continue
     return filled
 
 
-# ---------------------------------------------------------------------------
-# Manejo de radios (sí/no, disponibilidad)
-# ---------------------------------------------------------------------------
-
 def handle_yes_no_questions(page: Page) -> int:
     """
-    Responde preguntas de sí/no seleccionando la opción afirmativa.
-    Maneja tanto radios visibles (LinkedIn Easy Apply) como radios ocultos
-    con label visual (Greenhouse, Lever).
-    También maneja checkboxes de consentimiento (los marca).
+    Maneja botones de radio y checkboxes de tipo sí/no o consentimiento.
+    Útil para preguntas de '¿Estás legalmente autorizado para trabajar?' o
+    '¿Aceptas los términos y condiciones?'.
     """
     answered = 0
-    try:
-        radios = page.query_selector_all("input[type='radio']")
-        for radio in radios:
-            label_val = (radio.get_attribute("value") or "").lower()
-            if label_val not in YES_VALUES:
-                continue
-            try:
-                if radio.is_checked():
-                    continue
-            except Exception:
-                continue
-            # Intentar click directo si es visible
-            try:
-                if radio.is_visible():
+    # Manejo de Radios (Sí/No)
+    for radio in page.query_selector_all("input[type='radio']"):
+        try:
+            val = (radio.get_attribute("value") or "").lower()
+            # Si el valor del radio es afirmativo y no está marcado
+            if val in YES_VALUES and not radio.is_checked():
+                # Algunos ATS ocultan el input, intentamos click en el label
+                r_id = radio.get_attribute("id")
+                label = page.query_selector(f"label[for='{r_id}']") if r_id else None
+                if label and label.is_visible():
+                    label.click()
+                else:
                     radio.click()
-                    micro_delay()
-                    answered += 1
-                    continue
-            except Exception:
-                pass
-            # Fallback: buscar <label> asociado y clickearlo (Greenhouse oculta el input)
-            try:
-                radio_id = radio.get_attribute("id") or ""
-                if radio_id:
-                    label = page.query_selector(f"label[for='{radio_id}']")
-                    if label and label.is_visible():
-                        label.click()
-                        micro_delay()
-                        answered += 1
-                        continue
-            except Exception:
-                pass
-            # Fallback JS: forzar check + disparar evento change
-            try:
-                page.evaluate("""
-                    (el) => {
-                        el.checked = true;
-                        el.dispatchEvent(new Event('change', {bubbles: true}));
-                        el.dispatchEvent(new Event('input',  {bubbles: true}));
-                    }
-                """, radio)
-                micro_delay()
                 answered += 1
-            except Exception:
-                pass
-    except Exception as exc:
-        log.debug("handle_yes_no error: %s", exc)
+                micro_delay()
+        except Exception:
+            continue
 
-    # Checkboxes de consentimiento / términos
-    try:
-        checkboxes = page.query_selector_all("input[type='checkbox']")
-        for cb in checkboxes:
-            if not cb.is_visible():
-                continue
-            if not cb.is_checked():
+    # Manejo de Checkboxes (Consentimiento)
+    for cb in page.query_selector_all("input[type='checkbox']"):
+        try:
+            if not cb.is_checked() and cb.is_visible():
                 cb.click()
-                micro_delay()
                 answered += 1
-    except Exception:
-        pass
-
+                micro_delay()
+        except Exception:
+            continue
     return answered
 
 
-# ---------------------------------------------------------------------------
-# Upload de CV
-# ---------------------------------------------------------------------------
-
 def fill_file_upload(page: Page, profile: dict) -> bool:
+    """Sube el archivo de CV si se encuentra un campo de tipo file."""
     cv_path = profile.get("cv_path", "")
     if not cv_path or not Path(cv_path).exists():
-        log.debug("fill_file_upload: CV no encontrado en %s", cv_path)
         return False
     try:
-        # LinkedIn puede tener el input oculto — usar set_input_files directamente
         file_input = page.query_selector("input[type='file']")
         if file_input:
             file_input.set_input_files(cv_path)
+            print(f"\n[!] CV SUBIDO CON ÉXITO")
             human_delay(1.0, 2.0)
-            log.debug("fill_file_upload: CV subido")
             return True
-    except Exception as exc:
-        log.debug("fill_file_upload error: %s", exc)
+    except Exception:
+        pass
     return False
 
 
-# ---------------------------------------------------------------------------
-# Entry point
-# ---------------------------------------------------------------------------
-
 def fill_form(page: Page, profile: dict) -> dict:
     """
-    Ejecuta todas las estrategias de llenado en orden.
-    Retorna resumen de acciones realizadas.
+    Orquestador principal de llenado de formularios.
+    Ejecuta todas las estrategias y devuelve un resumen de las acciones.
     """
-    human_delay(0.8, 1.5)
-
-    text   = fill_text_fields(page, profile)
-    drops  = fill_dropdowns(page, profile)
-    radios = handle_yes_no_questions(page)
-    cv     = fill_file_upload(page, profile)
-
-    log.debug("  fill_form: text=%d drops=%d radios=%d cv=%s",
-              text, drops, radios, cv)
-    return {
-        "text_fields":   text,
-        "dropdowns":     drops,
-        "radio_answers": radios,
-        "file_uploaded": cv,
+    human_delay(1.0, 2.0)
+    
+    results = {
+        "text_fields":   fill_text_fields(page, profile),
+        "dropdowns":     fill_dropdowns(page, profile),
+        "radio_answers": handle_yes_no_questions(page),
+        "file_uploaded": fill_file_upload(page, profile),
     }
+    
+    log.debug("Resumen de formulario: %s", results)
+    return results

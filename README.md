@@ -127,6 +127,9 @@ python main.py --portal computrabajo --headless
 # Ver estadísticas de postulaciones
 python main.py --stats
 
+# Lanzar Dashboard Maestro (Interfaz Web)
+python gui_server.py
+
 # Limpiar registros skipped/dry_run de más de 90 días
 python main.py --purge --days 90
 ```
@@ -338,7 +341,7 @@ Ver diagnóstico completo en [TROUBLESHOOTING.md](TROUBLESHOOTING.md).
 | F5 | Retry + rate limiting + validación + logging | ✅ Completado |
 | F6 | Notificaciones (email + webhook Discord/ntfy) | 🔲 Pendiente |
 | F7 | Scheduler autónomo (daemon con horarios) | 🔲 Pendiente |
-| F8 | Dashboard web HTML | 🔲 Pendiente |
+| F8 | Dashboard Maestro (GUI Flask + Master Mode) | ✅ Completado |
 | F9–F11 | Anti-detección avanzada, Indeed, Docker | 🔲 Pendiente |
 
 Ver detalle completo en [ROADMAP.md](ROADMAP.md).

@@ -94,7 +94,7 @@ Ejemplos:
     )
 
     parser.add_argument("--portal", "-p",
-        help="Nombre del portal (linkedin, indeed, computrabajo, getonyboard)")
+        help="Nombre del portal (linkedin, indeed, computrabajo, getonyboard, chiletrabajos, laborum)")
     parser.add_argument("--max", "-m", type=int, default=None,
         help="Máximo de postulaciones (sobreescribe el config del portal)")
     parser.add_argument("--dry-run", action="store_true",
@@ -111,10 +111,19 @@ Ejemplos:
         help="Elimina registros skipped/dry_run más viejos que --days días")
     parser.add_argument("--days", type=int, default=90,
         help="Días de retención para --purge (default: 90)")
+    parser.add_argument("--setup", action="store_true",
+        help="Inicia el asistente de configuración (Wizard) y extrae datos del CV")
+    parser.add_argument("--run-all", action="store_true",
+        help="Ejecuta el bot secuencialmente en todos los portales configurados")
 
     args = parser.parse_args()
 
     # Comandos que no necesitan portal
+    if args.setup:
+        from bot.profile_manager import run_setup_wizard
+        run_setup_wizard()
+        sys.exit(0)
+
     if args.list_portals:
         list_portals()
         sys.exit(0)
@@ -127,10 +136,35 @@ Ejemplos:
         run_purge(args.days)
         sys.exit(0)
 
+    # Sobreescribir límites si hay variable de entorno (para el Dashboard)
+    import os
+    env_max = os.getenv("USER_MAX_OFFERS")
+    if env_max and env_max.isdigit():
+        for p in SITE_CONFIG:
+            SITE_CONFIG[p]["max_offers_per_run"] = int(env_max)
+
+    # Modo Ejecutar Todo
+    if args.run_all:
+        print("\n>>> Iniciando ejecución global (Modo Maestro) <<<\n")
+        portals = list(SITE_CONFIG.keys())
+        for portal in portals:
+            print(f"\n--- Procesando portal: {portal.upper()} ---")
+            try:
+                run_bot(
+                    portal_name = portal,
+                    dry_run     = args.dry_run,
+                    headless    = args.headless,
+                )
+            except Exception as e:
+                print(f"Error en portal {portal}: {e}")
+        print("\n>>> EJECUCIÓN GLOBAL FINALIZADA <<<\n")
+        sys.stdout.flush()
+        sys.exit(0)
+
     # Comandos que sí necesitan portal
     if not args.portal:
         parser.print_help()
-        print("\nError: especifica --portal o usa --list-portals\n")
+        print("\nError: especifica --portal, usa --run-all o --setup\n")
         sys.exit(1)
 
     if args.portal not in SITE_CONFIG:
@@ -146,10 +180,11 @@ Ejemplos:
         SITE_CONFIG[args.portal]["max_offers_per_run"] = args.max
 
     run_bot(
-        portal_name = args.portal,
+        portal_name = portal_name if 'portal_name' in locals() else args.portal,
         dry_run     = args.dry_run,
         headless    = args.headless,
     )
+    sys.stdout.flush()
 
 
 if __name__ == "__main__":

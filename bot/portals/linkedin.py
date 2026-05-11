@@ -708,6 +708,7 @@ class LinkedInPortal(BasePortal):
 
         # Detectar CAPTCHA antes de empezar
         if page.query_selector(SEL["captcha_check"]):
+            print(f"\n[!] CAPTCHA DETECTADO EN {portal_name.upper()}... Por favor resuélvelo manualmente.")
             self._close_modal_safely(page)
             return "skipped_captcha", title
 
@@ -719,6 +720,7 @@ class LinkedInPortal(BasePortal):
             log.info("  Paso %d/%d", current_step, total_steps)
 
             if total_steps > MAX_MODAL_STEPS:
+                print(f"\n[!] MODAL DEMASIADO COMPLEJO ({total_steps} pasos) en {portal_name.upper()}.")
                 log.info("  Modal muy largo (%d pasos), skip", total_steps)
                 self._close_modal_safely(page)
                 return f"skipped_complex_{total_steps}_steps", title

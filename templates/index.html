@@ -1,0 +1,763 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ApplyJob Bot | Master Mode Dashboard</title>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --primary: #6366f1;
+            --primary-glow: rgba(99, 102, 241, 0.5);
+            --secondary: #a855f7;
+            --bg: #0f172a;
+            --card-bg: rgba(30, 41, 59, 0.7);
+            --text: #f8fafc;
+            --text-dim: #94a3b8;
+            --accent: #22d3ee;
+            --success: #10b981;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: 'Outfit', sans-serif;
+        }
+
+        body {
+            background-color: var(--bg);
+            background-image: 
+                radial-gradient(at 0% 0%, rgba(99, 102, 241, 0.15) 0px, transparent 50%),
+                radial-gradient(at 100% 100%, rgba(168, 85, 247, 0.15) 0px, transparent 50%);
+            color: var(--text);
+            min-height: 100vh;
+            padding: 2rem;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        .container {
+            width: 100%;
+            max-width: 1000px;
+            display: grid;
+            grid-template-columns: 1fr 1.5fr;
+            gap: 2rem;
+            margin-top: 2rem;
+        }
+
+        header {
+            text-align: center;
+            margin-bottom: 2rem;
+        }
+
+        header h1 {
+            font-size: 3rem;
+            font-weight: 800;
+            background: linear-gradient(to right, #6366f1, #a855f7, #22d3ee);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            margin-bottom: 0.5rem;
+        }
+
+        header p {
+            color: var(--text-dim);
+            font-size: 1.1rem;
+        }
+
+        .card {
+            background: var(--card-bg);
+            backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 24px;
+            padding: 2rem;
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+        }
+
+        .card h2 {
+            font-size: 1.5rem;
+            margin-bottom: 1.5rem;
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+
+        .form-group {
+            margin-bottom: 1.25rem;
+        }
+
+        label {
+            display: block;
+            font-size: 0.9rem;
+            color: var(--text-dim);
+            margin-bottom: 0.5rem;
+        }
+
+        input[type="text"],
+        input[type="email"],
+        input[type="password"],
+        input[type="number"],
+        select {
+            width: 100%;
+            background: rgba(15, 23, 42, 0.5);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 12px;
+            padding: 0.75rem 1rem;
+            color: white;
+            outline: none;
+            transition: all 0.3s;
+        }
+
+        input:focus {
+            border-color: var(--primary);
+            box-shadow: 0 0 0 4px var(--primary-glow);
+        }
+
+        .btn {
+            cursor: pointer;
+            border: none;
+            border-radius: 12px;
+            padding: 0.75rem 1.5rem;
+            font-weight: 600;
+            transition: all 0.3s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.5rem;
+            width: 100%;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, var(--primary), var(--secondary));
+            color: white;
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px -5px var(--primary-glow);
+        }
+
+        .btn-success {
+            background: linear-gradient(135deg, #10b981, #059669);
+            color: white;
+        }
+
+        .btn-danger {
+            background: linear-gradient(135deg, #ef4444, #dc2626);
+            color: white;
+        }
+
+        .control-btn {
+            height: 55px !important;
+            border-radius: 16px !important;
+            font-size: 1rem !important;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.3);
+        }
+
+        .terminal {
+            background: #000;
+            border-radius: 16px;
+            padding: 1.5rem;
+            font-family: 'Courier New', Courier, monospace;
+            font-size: 0.85rem;
+            height: 450px;
+            overflow-y: auto;
+            color: #10b981;
+            border: 1px solid rgba(16, 185, 129, 0.2);
+            position: relative;
+        }
+
+        .terminal-header {
+            display: flex;
+            gap: 6px;
+            margin-bottom: 1rem;
+        }
+
+        .dot { width: 12px; height: 12px; border-radius: 50%; }
+        .dot-red { background: #ff5f56; }
+        .dot-yellow { background: #ffbd2e; }
+        .dot-green { background: #27c93f; }
+
+        .log-entry {
+            margin-bottom: 4px;
+            line-height: 1.4;
+            animation: fadeIn 0.3s ease;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateX(-10px); }
+            to { opacity: 1; transform: translateX(0); }
+        }
+
+        .status-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 0.8rem;
+            font-weight: 600;
+            background: rgba(16, 185, 129, 0.1);
+            color: var(--success);
+            margin-bottom: 1rem;
+        }
+
+        .running-animation {
+            width: 8px;
+            height: 8px;
+            background: var(--success);
+            border-radius: 50%;
+            animation: pulse 1.5s infinite;
+        }
+
+        @keyframes pulse {
+            0% { transform: scale(1); opacity: 1; }
+            50% { transform: scale(1.5); opacity: 0.5; }
+            100% { transform: scale(1); opacity: 1; }
+        }
+
+        .file-upload {
+            position: relative;
+            border: 2px dashed rgba(255, 255, 255, 0.1);
+            border-radius: 12px;
+            padding: 1rem;
+            text-align: center;
+            transition: all 0.3s;
+        }
+
+        .file-upload:hover {
+            border-color: var(--primary);
+            background: rgba(99, 102, 241, 0.05);
+        }
+
+        .file-upload input {
+            position: absolute;
+            inset: 0;
+            opacity: 0;
+            cursor: pointer;
+        }
+
+        .limit-selector {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 1.5rem;
+        }
+
+        .limit-btn {
+            flex: 1;
+            background: rgba(15, 23, 42, 0.5);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            color: var(--text-dim);
+            padding: 0.5rem;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.3s;
+            font-weight: 600;
+        }
+
+        .limit-btn.active {
+            background: var(--primary);
+            color: white;
+            border-color: var(--primary);
+            box-shadow: 0 0 15px var(--primary-glow);
+        }
+
+        .portal-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+            gap: 1rem;
+            margin-bottom: 2rem;
+        }
+        .portal-item {
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            padding: 1rem;
+            border-radius: 12px;
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+            transition: all 0.3s ease;
+        }
+        .portal-info {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 0.85rem;
+            opacity: 0.7;
+        }
+        .portal-status-text {
+            color: var(--accent);
+            font-weight: 500;
+        }
+        .portal-counter {
+            background: var(--accent);
+            color: #000;
+            padding: 2px 8px;
+            border-radius: 10px;
+            font-size: 0.75rem;
+            font-weight: bold;
+        }
+        .portal-item.active {
+            border-color: var(--accent);
+            background: rgba(0, 242, 254, 0.05);
+            box-shadow: 0 0 15px rgba(0, 242, 254, 0.1);
+        }
+        .portal-item.done {
+            border-color: var(--success);
+            background: rgba(0, 242, 150, 0.05);
+        }
+        .portal-item.waiting-login {
+            border-color: #ffcc00;
+            animation: pulse-gold 2s infinite;
+        }
+        @keyframes pulse-gold {
+            0% { box-shadow: 0 0 0 0 rgba(255, 204, 0, 0.4); }
+            70% { box-shadow: 0 0 0 10px rgba(255, 204, 0, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(255, 204, 0, 0); }
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #475569;
+        }
+
+        .portal-item.active .status-dot { background: var(--primary); animation: pulse 1s infinite; }
+        .portal-item.done .status-dot { background: var(--success); }
+    </style>
+</head>
+<body>
+    <header>
+        <h1>Master Mode</h1>
+        <p>Automatización de Empleo de Nueva Generación</p>
+        <div style="margin-top: 10px; color: var(--accent); font-size: 0.9rem; font-weight: 600;">
+            🛡️ Filtros Activos: Junior & Sin Experiencia (Hardcoded)
+        </div>
+    </header>
+
+    <div class="container">
+        <!-- Configuración -->
+        <div class="card">
+            <h2>⚙️ Configuración</h2>
+            <form id="configForm">
+                <div class="form-group">
+                    <label>Nombre Completo</label>
+                    <input type="text" name="USER_FULL_NAME" value="{{ env.USER_FULL_NAME }}" placeholder="Ej: Juan Pérez">
+                </div>
+                <div class="form-group">
+                    <label>Email Principal</label>
+                    <input type="email" name="USER_EMAIL" value="{{ env.USER_EMAIL }}" placeholder="email@ejemplo.com">
+                </div>
+                <div class="form-group">
+                    <label>Teléfono (Formato corto)</label>
+                    <input type="text" name="USER_PHONE" value="{{ env.USER_PHONE }}" placeholder="934200859">
+                </div>
+                
+                <div class="form-group">
+                    <label>CV (PDF)</label>
+                    <div class="file-upload">
+                        <span id="cv-status">
+                            {% if env.CV_PATH %}
+                                📄 {{ env.CV_PATH.split('\\')[-1] }}
+                            {% else %}
+                                Seleccionar CV
+                            {% endif %}
+                        </span>
+                        <input type="file" name="cv_file" id="cv_input" accept=".pdf">
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label>Keywords de Búsqueda</label>
+                    <input type="text" name="USER_KEYWORDS" value="{{ env.USER_KEYWORDS }}" placeholder="Ej: Desarrollador Python">
+                </div>
+
+                <div class="form-group">
+                    <label>Experiencia (Años)</label>
+                    <input type="number" name="USER_EXPERIENCE" value="{{ env.USER_EXPERIENCE }}" placeholder="0">
+                </div>
+
+                <button type="submit" class="btn btn-primary">Guardar Configuración</button>
+            </form>
+        </div>
+
+        <!-- Consola de Control -->
+        <div class="card">
+            <div id="bot-status" style="display: none;">
+                <div class="status-badge">
+                    <div class="running-animation"></div>
+                    Ejecutando Master Mode...
+                </div>
+            </div>
+            <h2>🚀 Panel de Control</h2>
+            
+            <div class="form-group">
+                <label>Postulaciones por Portal (Ej: 1 a 50)</label>
+                <div style="display: flex; gap: 10px; align-items: center;">
+                    <input type="number" id="max_offers_input" value="20" min="1" max="100" style="font-size: 1.5rem; text-align: center; font-weight: 800; color: var(--accent);">
+                    <input type="hidden" name="MAX_OFFERS" id="max_offers" value="20">
+                    <span style="color: var(--text-dim); font-size: 0.9rem;">ofertas / sitio</span>
+                </div>
+            </div>
+
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+                <label>Seleccionar Portales para Postular</label>
+                <span onclick="toggleAllPortals()" style="font-size: 0.75rem; cursor: pointer; color: var(--accent);">Invertir Selección</span>
+            </div>
+            <div class="portal-grid" id="portal-status-container">
+                <div class="portal-item" data-portal="linkedin" id="p-linkedin">
+                    <div style="display: flex; align-items: center; gap: 10px;">
+                        <input type="checkbox" class="portal-checkbox" value="linkedin" checked>
+                        <div class="status-dot"></div> 
+                        <span class="portal-name">LinkedIn</span>
+                    </div>
+                    <div class="portal-info">
+                        <span class="portal-status-text">Pendiente</span>
+                        <span class="portal-counter">0</span>
+                    </div>
+                </div>
+                <div class="portal-item" data-portal="indeed" id="p-indeed">
+                    <div style="display: flex; align-items: center; gap: 10px;">
+                        <input type="checkbox" class="portal-checkbox" value="indeed" checked>
+                        <div class="status-dot"></div> 
+                        <span class="portal-name">Indeed</span>
+                    </div>
+                    <div class="portal-info">
+                        <span class="portal-status-text">Pendiente</span>
+                        <span class="portal-counter">0</span>
+                    </div>
+                </div>
+                <div class="portal-item" data-portal="computrabajo" id="p-computrabajo">
+                    <div style="display: flex; align-items: center; gap: 10px;">
+                        <input type="checkbox" class="portal-checkbox" value="computrabajo" checked>
+                        <div class="status-dot"></div> 
+                        <span class="portal-name">Computrabajo</span>
+                    </div>
+                    <div class="portal-info">
+                        <span class="portal-status-text">Pendiente</span>
+                        <span class="portal-counter">0</span>
+                    </div>
+                </div>
+                <div class="portal-item" data-portal="getonyboard" id="p-getonyboard">
+                    <div style="display: flex; align-items: center; gap: 10px;">
+                        <input type="checkbox" class="portal-checkbox" value="getonyboard" checked>
+                        <div class="status-dot"></div> 
+                        <span class="portal-name">GetOnBoard</span>
+                    </div>
+                    <div class="portal-info">
+                        <span class="portal-status-text">Pendiente</span>
+                        <span class="portal-counter">0</span>
+                    </div>
+                </div>
+                <div class="portal-item" data-portal="chiletrabajos" id="p-chiletrabajos">
+                    <div style="display: flex; align-items: center; gap: 10px;">
+                        <input type="checkbox" class="portal-checkbox" value="chiletrabajos" checked>
+                        <div class="status-dot"></div> 
+                        <span class="portal-name">Chiletrabajos</span>
+                    </div>
+                    <div class="portal-info">
+                        <span class="portal-status-text">Pendiente</span>
+                        <span class="portal-counter">0</span>
+                    </div>
+                </div>
+                <div class="portal-item" data-portal="laborum" id="p-laborum">
+                    <div style="display: flex; align-items: center; gap: 10px;">
+                        <input type="checkbox" class="portal-checkbox" value="laborum" checked>
+                        <div class="status-dot"></div> 
+                        <span class="portal-name">Laborum</span>
+                    </div>
+                    <div class="portal-info">
+                        <span class="portal-status-text">Pendiente</span>
+                        <span class="portal-counter">0</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="terminal" id="terminal" style="height: 280px;">
+                <div class="terminal-header">
+                    <div class="dot dot-red"></div>
+                    <div class="dot dot-yellow"></div>
+                    <div class="dot dot-green"></div>
+                </div>
+                <div id="log-container">
+                    <!-- Logs aparecerán aquí -->
+                </div>
+            </div>
+
+            <div style="display: flex; gap: 1rem; margin-top: 1rem; height: 55px;">
+                <button id="runBtn" class="btn btn-success control-btn" style="flex: 1; transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);">
+                    <i class="fas fa-play"></i> <span>LANZAR MASTER MODE</span>
+                </button>
+                <button id="stopBtn" class="btn btn-danger control-btn" style="flex: 1; display: none; transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);">
+                    <i class="fas fa-stop"></i> <span>PARAR PROCESO</span>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const form = document.getElementById('configForm');
+        const runBtn = document.getElementById('runBtn');
+        const stopBtn = document.getElementById('stopBtn');
+        const terminal = document.getElementById('terminal');
+        const logContainer = document.getElementById('log-container');
+        const botStatus = document.getElementById('bot-status');
+        const cvInput = document.getElementById('cv_input');
+        const cvStatus = document.getElementById('cv-status');
+
+        cvInput.addEventListener('change', (e) => {
+            if (e.target.files.length > 0) {
+                cvStatus.innerText = '📄 ' + e.target.files[0].name;
+            }
+        });
+
+        form.onsubmit = async (e) => {
+            e.preventDefault();
+            const formData = new FormData(form);
+            const res = await fetch('/save_config', {
+                method: 'POST',
+                body: formData
+            });
+            const data = await res.json();
+            alert(data.message);
+        };
+
+        function playSuccessSound(type = 'portal') {
+            try {
+                const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                const oscillator = audioCtx.createOscillator();
+                const gainNode = audioCtx.createGain();
+
+                oscillator.connect(gainNode);
+                gainNode.connect(audioCtx.destination);
+
+                if (type === 'success') {
+                    // Beep corto para éxito individual
+                    oscillator.type = 'sine';
+                    oscillator.frequency.setValueAtTime(880, audioCtx.currentTime); // La5
+                    gainNode.gain.setValueAtTime(0.1, audioCtx.currentTime);
+                    oscillator.start();
+                    gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.1);
+                    oscillator.stop(audioCtx.currentTime + 0.1);
+                } else {
+                    // Chime para portal finalizado
+                    oscillator.type = 'triangle';
+                    oscillator.frequency.setValueAtTime(523.25, audioCtx.currentTime); // Do5
+                    oscillator.frequency.exponentialRampToValueAtTime(1046.50, audioCtx.currentTime + 0.5); // Do6
+                    gainNode.gain.setValueAtTime(0.1, audioCtx.currentTime);
+                    gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.5);
+                    oscillator.start();
+                    oscillator.stop(audioCtx.currentTime + 0.5);
+                }
+            } catch (e) { console.log("Audio no soportado o bloqueado por el navegador"); }
+        }
+
+        function toggleAllPortals() {
+            document.querySelectorAll('.portal-checkbox').forEach(cb => cb.checked = !cb.checked);
+        }
+
+        runBtn.onclick = async () => {
+            const selectedPortals = Array.from(document.querySelectorAll('.portal-checkbox:checked')).map(cb => cb.value);
+            
+            if (selectedPortals.length === 0) {
+                alert('Selecciona al menos un portal');
+                return;
+            }
+
+            // Feedback inmediato (Modo Maestro)
+            runBtn.disabled = true;
+            runBtn.querySelector('span').innerText = 'EJECUTANDO...';
+            runBtn.style.opacity = '0.7';
+            stopBtn.style.display = 'flex';
+
+            // Limpiar estados previos
+            document.querySelectorAll('.portal-item').forEach(item => {
+                item.classList.remove('active', 'done', 'waiting-login');
+                item.querySelector('.portal-counter').innerText = '0';
+                item.querySelector('.portal-status-text').innerText = 'Pendiente';
+                item.querySelector('.portal-status-text').style.color = 'var(--accent)';
+            });
+
+            await fetch('/start_bot', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ portals: selectedPortals })
+            });
+        };
+
+        stopBtn.onclick = async () => {
+            stopBtn.disabled = true;
+            stopBtn.querySelector('span').innerText = 'DETENIENDO...';
+            await fetch('/stop_bot', { method: 'POST' });
+        };
+
+
+        const maxOffersInput = document.getElementById('max_offers_input');
+        const maxOffersHidden = document.getElementById('max_offers');
+        
+        maxOffersInput.addEventListener('change', () => {
+            maxOffersHidden.value = maxOffersInput.value;
+        });
+
+        let currentPortal = null;
+        let portalCounts = {};
+
+        async function pollLogs() {
+            try {
+                const res = await fetch('/logs');
+                if (!res.ok) throw new Error('Network error');
+                const data = await res.json();
+                
+                // --- SINCRONIZACIÓN PROFESIONAL DE BOTONES ---
+                if (data.running) {
+                    runBtn.disabled = true;
+                    runBtn.querySelector('span').innerText = 'EJECUTANDO...';
+                    runBtn.classList.remove('btn-success');
+                    runBtn.classList.add('btn-primary');
+                    stopBtn.style.display = 'flex';
+                    stopBtn.disabled = false;
+                    if (!stopBtn.querySelector('span').innerText.includes('DETENIENDO')) {
+                        stopBtn.querySelector('span').innerText = 'PARAR PROCESO';
+                    }
+                } else {
+                    runBtn.disabled = false;
+                    runBtn.querySelector('span').innerText = 'LANZAR MASTER MODE';
+                    runBtn.classList.add('btn-success');
+                    runBtn.classList.remove('btn-primary');
+                    runBtn.style.opacity = '1';
+                    stopBtn.style.display = 'none';
+                }
+
+                if (data.logs && data.logs.length > 0) {
+                    logContainer.innerHTML = '';
+                    
+                    data.logs.forEach(log => {
+                        const isHighValue = log.includes("[PORTAL_ACTIVO]") || 
+                                           log.includes("[EXITO]") || 
+                                           log.includes("[FALLO]") || 
+                                           log.includes("[LOGIN_REQUERIDO]") || 
+                                           log.includes("[SESION_INICIADA]") ||
+                                           log.includes("[PROGRESO]") ||
+                                           log.includes("[PORTAL_FINALIZADO]") ||
+                                           log.includes(">>>") ||
+                                           log.includes("🛑");
+
+                        if (!isHighValue) return;
+
+                        const line = document.createElement('div');
+                        line.className = 'log-line';
+                        line.style.marginBottom = '6px';
+                        line.style.fontSize = '0.9rem';
+                        line.style.borderLeft = '2px solid transparent';
+                        line.style.paddingLeft = '8px';
+                        
+                        if (log.includes("[PORTAL_ACTIVO]")) {
+                            const portalMatch = log.match(/PORTAL: (\w+)/i);
+                            if (portalMatch) {
+                                currentPortal = portalMatch[1].toLowerCase();
+                                document.querySelectorAll('.portal-item').forEach(i => i.classList.remove('active'));
+                                const item = document.getElementById(`p-${currentPortal}`);
+                                if (item) {
+                                    item.classList.add('active');
+                                    item.querySelector('.portal-status-text').innerText = '🚀 Procesando...';
+                                    item.querySelector('.portal-status-text').style.color = 'var(--primary)';
+                                }
+                            }
+                            line.style.color = 'var(--primary)';
+                            line.style.fontWeight = 'bold';
+                        }
+
+                        if (log.includes("[PORTAL_FINALIZADO]")) {
+                            if (currentPortal) {
+                                const item = document.getElementById(`p-${currentPortal}`);
+                                if (item) {
+                                    item.classList.remove('active');
+                                    item.classList.add('done');
+                                    item.querySelector('.portal-status-text').innerText = '✅ Finalizado';
+                                    item.querySelector('.portal-status-text').style.color = 'var(--success)';
+                                }
+                                playSuccessSound('portal');
+                            }
+                            line.style.color = 'var(--success)';
+                            line.style.fontWeight = 'bold';
+                        }
+
+
+                        if (log.includes("[EXITO]")) {
+                            const item = document.getElementById(`p-${currentPortal}`);
+                            if (item) {
+                                item.querySelector('.portal-status-text').innerText = '✅ Postulación Exitosa';
+                                item.querySelector('.portal-status-text').style.color = 'var(--success)';
+                            }
+                            line.style.color = 'var(--success)';
+                            playSuccessSound('success');
+                        }
+
+                        if (log.includes("[FALLO]")) {
+                            const item = document.getElementById(`p-${currentPortal}`);
+                            if (item) {
+                                item.querySelector('.portal-status-text').innerText = '❌ Error / Salteado';
+                                item.querySelector('.portal-status-text').style.color = '#ff4d4d';
+                            }
+                            line.style.color = '#ff4d4d';
+                        }
+
+                        if (log.includes("[LOGIN_REQUERIDO]")) {
+                            const item = document.getElementById(`p-${currentPortal}`);
+                            if (item) {
+                                item.classList.add('waiting-login');
+                                item.querySelector('.portal-status-text').innerText = '🔑 Login Necesario';
+                                item.querySelector('.portal-status-text').style.color = '#ffcc00';
+                            }
+                            line.style.color = '#ffcc00';
+                            line.style.borderLeftColor = '#ffcc00';
+                        }
+
+                        if (log.includes("[SESION_INICIADA]")) {
+                            const item = document.getElementById(`p-${currentPortal}`);
+                            if (item) {
+                                item.classList.remove('waiting-login');
+                                item.querySelector('.portal-status-text').innerText = '🔓 Sesión Activa';
+                                item.querySelector('.portal-status-text').style.color = 'var(--success)';
+                            }
+                            line.style.color = 'var(--success)';
+                        }
+
+                        if (log.includes("[PROGRESO]")) {
+                            const countMatch = log.match(/Aplicadas (\d+)\//);
+                            if (countMatch && currentPortal) {
+                                const count = countMatch[1];
+                                const item = document.getElementById(`p-${currentPortal}`);
+                                if (item) item.querySelector('.portal-counter').innerText = count;
+                            }
+                            return;
+                        }
+
+                        let cleanText = log.replace(/\[\w+\]/g, '').trim();
+                        if (cleanText.startsWith('---') || cleanText.startsWith('>>>')) {
+                            line.style.opacity = '0.7';
+                            line.style.fontSize = '0.8rem';
+                        }
+                        
+                        line.innerText = cleanText;
+                        logContainer.appendChild(line);
+                    });
+                    terminal.scrollTop = terminal.scrollHeight;
+                }
+            } catch (err) {
+                console.error("Poll Error:", err);
+            } finally {
+                setTimeout(pollLogs, 1000);
+            }
+        }
+
+        window.onload = () => {
+            pollLogs();
+        };
+    </script>
+</body>
+</html>

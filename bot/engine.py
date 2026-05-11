@@ -257,6 +257,19 @@ def _process_offer_generic(
                 log.debug("No se pudo leer título con '%s': %s", title_sel, exc)
 
         if dry_run:
+            log.info("  [dry_run] Llenando formulario para verificación visual...")
+            tipo = config.get("tipo_postulacion", "directa")
+            if tipo == "directa":
+                # En dry_run, solo clickeamos el primer botón y llenamos, sin hacer submit
+                try:
+                    btn_sel = config.get("selector_boton_aplicar")
+                    if btn_sel:
+                        page.click(btn_sel)
+                        human_delay(2.0, 4.0)
+                        fill_form(page, profile)
+                        human_delay(5.0, 8.0) # Tiempo para que el usuario vea
+                except Exception as e:
+                    log.debug("Error en dry_run fill: %s", e)
             return title, "dry_run"
 
         tipo = config.get("tipo_postulacion", "directa")
@@ -291,6 +304,12 @@ _LOGIN_SIGNALS = {
         "#session_key",                        # campo email del login form
         "a[href*='/login']",
     ],
+    "laborum": [
+        "#ingresarNavBar",
+        "button:has-text('Ingresar')",
+        "input#email",
+        "a[href*='/login']",
+    ],
 }
 
 # Selectores que confirman que ya hay sesión activa
@@ -300,6 +319,12 @@ _LOGGED_IN_SIGNALS = {
         "img.global-nav__me-photo",
         "[data-control-name='nav.settings']",
         ".feed-identity-module",
+    ],
+    "laborum": [
+        "[data-testid='header-user-menu']",
+        "button:has-text('Mi Perfil')",
+        "a[href*='/postulante/']",
+        "img[class*='Avatar']",
     ],
 }
 
@@ -357,6 +382,7 @@ def _wait_for_login_if_needed(page, portal_name: str, config: dict) -> None:
     # ── Hay que hacer login ───────────────────────────────────────────────────
     log.warning("=" * 60)
     log.warning("LOGIN REQUERIDO en %s", portal_name)
+    print(f"\n[LOGIN_REQUERIDO] {portal_name.upper()} — Por favor ingresa tus datos en el navegador.")
     log.warning("El browser está abierto. Iniciá sesión manualmente.")
     log.warning("El bot esperará hasta que detecte sesión activa...")
     log.warning("(Ctrl+C para cancelar)")
@@ -365,21 +391,47 @@ def _wait_for_login_if_needed(page, portal_name: str, config: dict) -> None:
     # Navegar a la página de login del portal si es necesario
     login_urls = {
         "linkedin": "https://www.linkedin.com/login",
+        "laborum":  "https://www.laborum.cl/login",
     }
-    if portal_name in login_urls and ("authwall" in page.url or page.url == config["url_busqueda"]):
+    if portal_name in login_urls and ("authwall" in page.url or "login" not in page.url):
         try:
             page.goto(login_urls[portal_name], wait_until="domcontentloaded", timeout=15_000)
+            human_delay(1.0, 2.0)
         except Exception as exc:
             log.debug("No se pudo navegar a login page: %s", exc)
 
-    # Esperar hasta 5 minutos a que el usuario inicie sesión
+    # --- Intento de Auto-Login si hay credenciales ---
+    if portal_name == "laborum":
+        email = USER_PROFILE.get("laborum_email")
+        password = USER_PROFILE.get("laborum_password")
+        if email and password:
+            log.info("Intentando auto-login en Laborum...")
+            try:
+                page.fill("input#email", email)
+                human_delay(0.5, 1.0)
+                page.fill("input#password", password)
+                human_delay(0.5, 1.2)
+                page.click("button#ingresar")
+                human_delay(3.0, 5.0)
+            except Exception as exc:
+                log.warning("Fallo auto-login Laborum: %s", exc)
+
+    # Esperar hasta 20 minutos a que el usuario inicie sesión
     import time as _time
-    deadline = _time.time() + 300  # 5 minutos máximo
+    deadline = _time.time() + 1200  # 20 minutos máximo
+    last_log = 0
+    
     while _time.time() < deadline:
+        current_time = _time.time()
+        if current_time - last_log > 15:
+            print(f"\n[LOGIN_REQUERIDO] ESPERANDO LOGIN EN {portal_name.upper()}... Por favor ingresa tus datos en el navegador.")
+            last_log = current_time
+            
         _time.sleep(3)
         try:
             if _is_logged_in():
                 log.info("✓ Sesión detectada — continuando...")
+                print(f"\n[SESION_INICIADA] LOGIN DETECTADO EN {portal_name.upper()} — Continuando automáticamente...")
                 # Volver a la URL de búsqueda
                 page.goto(config["url_busqueda"], wait_until="domcontentloaded", timeout=30_000)
                 human_delay(3.0, 5.0)
@@ -387,6 +439,7 @@ def _wait_for_login_if_needed(page, portal_name: str, config: dict) -> None:
             # También aceptar si la URL cambió a feed (login exitoso)
             if "/feed" in page.url or "/jobs" in page.url:
                 log.info("✓ Login detectado por URL — continuando...")
+                print(f"\n[SESION_INICIADA] LOGIN DETECTADO EN {portal_name.upper()} — Continuando automáticamente...")
                 if "/jobs" not in page.url:
                     page.goto(config["url_busqueda"], wait_until="domcontentloaded", timeout=30_000)
                 human_delay(3.0, 5.0)
@@ -394,7 +447,8 @@ def _wait_for_login_if_needed(page, portal_name: str, config: dict) -> None:
         except Exception as exc:
             log.debug("Error verificando login: %s", exc)
 
-    log.error("Tiempo de espera agotado (5 min). Cerrando.")
+    log.error("Tiempo de espera agotado (20 min). Cerrando.")
+    print(f"\n[FALLO] TIEMPO DE ESPERA AGOTADO EN {portal_name.upper()}")
     raise TimeoutError("Login no completado en el tiempo límite")
 
 
@@ -436,7 +490,7 @@ def run_bot(portal_name: str, dry_run: bool = False, headless: bool = False) -> 
     # ── 2. Cargar portal específico si existe ─────────────────────────────────
     from .portals import PORTAL_REGISTRY
     PortalClass    = PORTAL_REGISTRY.get(portal_name)
-    portal_handler = PortalClass(config, profile) if PortalClass else None
+    portal_handler = PortalClass(config, profile, dry_run) if PortalClass else None
 
     # ── 3. Rate limiter ───────────────────────────────────────────────────────
     rate_limiter = get_rate_limiter(portal_name)
@@ -456,14 +510,25 @@ def run_bot(portal_name: str, dry_run: bool = False, headless: bool = False) -> 
     else:
         log.info("Usando Chromium de Playwright")
 
+    # Ajustar locale / timezone según el portal — SIEMPRE Chile
+    _PORTAL_LOCALE = {
+        "indeed":         ("es-CL", "America/Santiago"),
+        "laborum":        ("es-CL", "America/Santiago"),
+        "getonyboard":    ("es-CL", "America/Santiago"),
+        "computrabajo":   ("es-CL", "America/Santiago"),
+        "linkedin":       ("es-CL", "America/Santiago"),
+        "chiletrabajos":  ("es-CL", "America/Santiago"),
+    }
+    _locale, _tz = _PORTAL_LOCALE.get(portal_name, ("es-CL", "America/Santiago"))
+
     with sync_playwright() as pw:
         launch_kwargs = dict(
             user_data_dir = session_dir,
             headless      = headless,
             user_agent    = random_user_agent(),
             viewport      = random_viewport(),
-            locale        = "es-AR",
-            timezone_id   = "America/Argentina/Buenos_Aires",
+            locale        = _locale,
+            timezone_id   = _tz,
             args          = ["--no-sandbox", "--disable-blink-features=AutomationControlled"],
         )
         if chrome_exe:
@@ -503,6 +568,8 @@ def run_bot(portal_name: str, dry_run: bool = False, headless: bool = False) -> 
 
             # ── Portal específico (ej. LinkedIn) ──────────────────────────────
             if portal_handler:
+                current_listing_url = page.url
+                print(f"  [BUSCANDO] Buscando ofertas en {portal_name.upper()}...")
                 offer_ids = portal_handler.get_offer_urls(page)
                 if not offer_ids:
                     log.warning("Sin ofertas detectadas con selector: %s",
@@ -510,7 +577,7 @@ def run_bot(portal_name: str, dry_run: bool = False, headless: bool = False) -> 
                     take_error_screenshot(page, portal_name, "no_offers")
                     break
 
-                log.info("Ofertas en página: %d", len(offer_ids))
+                log.info("  ✓ Ofertas encontradas: %d", len(offer_ids))
 
                 for offer_id in offer_ids:
                     if applied >= max_offers:
@@ -525,19 +592,44 @@ def run_bot(portal_name: str, dry_run: bool = False, headless: bool = False) -> 
                         continue
 
                     if dry_run:
-                        save_application(offer_url, portal_name, "", "dry_run")
-                        _csv_log(portal_name, offer_url, "", "dry_run")
-                        applied += 1
-                        log.info("  [dry_run] %s", offer_url)
-                        continue
+                        log.debug("  [dry_run] %s", offer_url)
 
+                    # ── Recuperar página si fue cerrada por el portal ────────
+                    try:
+                        _ = page.url  # lanza TargetClosedError si la página murió
+                    except Exception:
+                        log.warning("Página cerrada inesperadamente. Creando nueva página...")
+                        try:
+                            page = browser.new_page()
+                            apply_stealth(page)
+                            try:
+                                from playwright_stealth import Stealth
+                                Stealth().apply_stealth_sync(page)
+                            except Exception:
+                                pass
+                        except Exception as page_err:
+                            log.error("No se pudo recrear la página: %s", page_err)
+                            break
+
+                    log.info("  [ABRIENDO] Oferta %s...", offer_id)
+                    import time
+                    start_time = time.time()
                     result = portal_handler.apply_to_offer(page, offer_id)
+                    elapsed = time.time() - start_time
                     status, title = result if isinstance(result, tuple) else (result, "")
 
-                    log.info("  ✓ [%s] %s → %s", portal_name, title or offer_id, status)
+                    # Reporte de estado para el Dashboard
+                    if status == "applied":
+                        print(f"  [EXITO] Postulación completada para: {title or offer_id}")
+                    elif status.startswith("error"):
+                        print(f"  [FALLO] Error en {title or offer_id}: {status}")
+                    
+                    log.info("  ✓ [%s] %s → %s (Tiempo: %.1fs)", portal_name, title or offer_id, status, elapsed)
                     save_application(offer_url, portal_name, title, status)
                     _csv_log(portal_name, offer_url, title, status)
                     applied += 1
+                    
+                    print(f"  [PROGRESO] Aplicadas {applied}/{max_offers} en {portal_name.upper()}")
 
                     # Rate limiting SOLO para acciones reales (no timeouts ni skips técnicos)
                     if status not in ("error: card_not_loaded", "error: modal_timeout") \
@@ -556,6 +648,7 @@ def run_bot(portal_name: str, dry_run: bool = False, headless: bool = False) -> 
                     break
 
                 log.info("Ofertas en página: %d", len(elements))
+                print(f"  [BUSCANDO] Detectadas {len(elements)} ofertas en página {page_num}")
 
                 offer_urls: list[str] = []
                 for el in elements:
@@ -584,13 +677,23 @@ def run_bot(portal_name: str, dry_run: bool = False, headless: bool = False) -> 
                     # Rate limiting ANTES de postular
                     rate_limiter.acquire(portal_name)
 
+                    print(f"  [ABRIENDO] Navegando a oferta: {url[:60]}...")
                     title, status = _process_offer_generic(
                         page, url, config, profile, portal_name, dry_run
                     )
+                    
+                    if status == "applied":
+                        print(f"  [EXITO] Postulación completada para: {title or 'Sin Título'}")
+                    elif status.startswith("error"):
+                        print(f"  [FALLO] Error en {title or 'Sin Título'}: {status}")
+
                     log.info("  ✓ [%s] %s → %s", portal_name, title, status)
                     save_application(url, portal_name, title, status)
                     _csv_log(portal_name, url, title, status)
                     applied += 1
+
+                    print(f"  [PROGRESO] Aplicadas {applied}/{max_offers} en {portal_name.upper()}")
+
                     human_delay(3.0, 6.0)
                     try:
                         page.go_back(wait_until="domcontentloaded")
@@ -602,6 +705,17 @@ def run_bot(portal_name: str, dry_run: bool = False, headless: bool = False) -> 
             next_sel = config.get("selector_siguiente_pagina")
             if not next_sel or applied >= max_offers:
                 break
+
+            # Si el portal handler navega fuera del listado, volver antes de paginar
+            if portal_handler:
+                try:
+                    if page.url != current_listing_url:
+                        log.debug("Volviendo al listado antes de paginar: %s", current_listing_url[:60])
+                        page.goto(current_listing_url, wait_until="domcontentloaded", timeout=15_000)
+                        human_delay(2.0, 3.0)
+                except Exception:
+                    pass
+
             try:
                 next_btn = page.query_selector(next_sel)
                 if not next_btn or not next_btn.is_visible():
@@ -614,8 +728,8 @@ def run_bot(portal_name: str, dry_run: bool = False, headless: bool = False) -> 
                 log.warning("Error al paginar: %s", exc)
                 break
 
-        browser.close()
-
+    browser.close()
+    print(f"\n[PORTAL_FINALIZADO] --- PORTAL {portal_name.upper()} COMPLETADO ---")
     log.info("=== Fin. Procesadas: %d | Rate usado: %d/%d ===",
              applied, rate_limiter.current_count, rate_limiter.max_actions)
     log.info("Logs CSV: %s", LOGS_DIR)
