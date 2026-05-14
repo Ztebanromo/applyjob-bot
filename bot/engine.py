@@ -1173,6 +1173,11 @@ def run_bot(
         else:
             browser_instance.close()
         
+        print(f"\n[PORTAL_FINALIZADO] --- PORTAL {portal_name.upper()} COMPLETADO ---")
+        log.info("=== Fin. Procesadas: %d | Rate usado: %d/%d ===",
+                 applied, rate_limiter.current_count, rate_limiter.max_actions)
+        log.info("Logs CSV: %s", LOGS_DIR)
+
         return applied
 
     if pw:
@@ -1180,8 +1185,3 @@ def run_bot(
     else:
         with sync_playwright() as pw_instance:
             return _exec(pw_instance)
-
-    print(f"\n[PORTAL_FINALIZADO] --- PORTAL {portal_name.upper()} COMPLETADO ---")
-    log.info("=== Fin. Procesadas: %d | Rate usado: %d/%d ===",
-             applied, rate_limiter.current_count, rate_limiter.max_actions)
-    log.info("Logs CSV: %s", LOGS_DIR)
