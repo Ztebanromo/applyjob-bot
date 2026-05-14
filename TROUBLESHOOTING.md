@@ -144,7 +144,7 @@ Si el pre-llenado es incorrecto, despeja el campo manualmente o edita la lógica
    ```bash
    .venv/Scripts/python -c "import playwright_stealth; print('OK')"
    ```
-4. Si persiste, considerá usar un proxy residencial (F8, no implementado aún)
+4. Si persiste, considera usar un proxy residencial (F8, no implementado aún)
 
 **Nota:** el bot detecta el CAPTCHA y cierra el modal sin enviar — nunca postula con datos incompletos.
 
@@ -268,7 +268,7 @@ for r in get_recent(20):
     print(r['url'])
 ```
 
-Si las URLs tienen parámetros variables (`?trackingId=...`), hay que normalizar antes de guardar. Por ahora, limpiar y re-correr con `--dry-run` para repoblar con URLs normalizadas.
+Si las URLs tienen parámetros variables (`?trackingId=...`), hay que normalizar antes de guardar. Por ahora, limpiar y recorrer con `--dry-run` para repoblar con URLs normalizadas.
 
 ---
 

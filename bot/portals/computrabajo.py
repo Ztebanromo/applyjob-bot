@@ -26,6 +26,7 @@ from playwright.sync_api import Page, TimeoutError as PlaywrightTimeout
 from .base import BasePortal
 from ..stealth_utils import human_delay, micro_delay, take_error_screenshot
 from ..form_filler import fill_form
+from ..config import schedule_ok
 
 log = logging.getLogger("applyjob.computrabajo")
 
@@ -116,6 +117,8 @@ _TECH_WORDS = {
     "analista", "sistemas", "informática", "ti ", " ti,",
     "soporte ti", "data", "base de datos", "qa ", "tester",
     "cloud", "aws", "azure", "seguridad informática",
+    # Logística / Bodega
+    "bodega", "logística", "logistica", "operario", "operador", "picking",
 }
 
 MAX_FORM_STEPS = 3      # máximo pasos de formulario interno
@@ -171,12 +174,12 @@ class ComputrabajoPortal(BasePortal):
         while _t.time() < deadline:
             _t.sleep(3)
             if _logged_in():
-                log.info("✓ Sesión Computrabajo detectada — continuando")
+                log.info("Sesión de Computrabajo detectada. Continuando.")
                 ComputrabajoPortal._login_done = True
                 human_delay(2.0, 3.0)
                 return True
 
-        log.error("Timeout esperando login Computrabajo. Abortando.")
+        log.error("Tiempo de espera agotado esperando login en Computrabajo. Abortando.")
         return False
 
     def _title_is_tech(self, title: str) -> bool:
@@ -197,7 +200,7 @@ class ComputrabajoPortal(BasePortal):
             try:
                 page.wait_for_selector(SEL["card"], timeout=10_000)
             except PlaywrightTimeout:
-                log.warning("ComputrabajoPortal: timeout esperando cards — intentando de todos modos")
+                log.warning("ComputrabajoPortal: tiempo de espera agotado esperando tarjetas de oferta. Se intentará continuar.")
 
             # Estrategia 1: links dentro de las cards
             cards = page.query_selector_all(SEL["card"])
@@ -230,6 +233,16 @@ class ComputrabajoPortal(BasePortal):
                             title = (title_el.text_content() or "").strip()
                     except Exception:
                         pass
+
+                    # Filtro de horario en el card (título + snippet visible)
+                    card_text = ""
+                    try:
+                        card_text = (card.text_content() or "")[:500]
+                    except Exception:
+                        pass
+                    if not schedule_ok(card_text):
+                        log.info("  [ct] Descartado por horario: %s", card_text[:80].strip())
+                        continue
 
                     # Si no hay título o es de TI, incluir
                     if not title or self._title_is_tech(title):

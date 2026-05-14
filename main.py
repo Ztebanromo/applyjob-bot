@@ -28,7 +28,7 @@ if sys.stderr.encoding and sys.stderr.encoding.lower() != "utf-8":
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 
 from bot.config import SITE_CONFIG
-from bot.engine import run_bot
+from bot.engine import run_bot, run_bot_multi_keywords
 from bot.logger import configure_logging
 
 
@@ -96,7 +96,7 @@ Ejemplos:
     parser.add_argument("--portal", "-p",
         help="Nombre del portal (linkedin, indeed, computrabajo, getonyboard, chiletrabajos, laborum)")
     parser.add_argument("--max", "-m", type=int, default=None,
-        help="Máximo de postulaciones (sobreescribe el config del portal)")
+        help="Máximo de postulaciones (sobrescribe el config del portal)")
     parser.add_argument("--dry-run", action="store_true",
         help="Navega y loguea sin postular — útil para verificar selectores")
     parser.add_argument("--headless", action="store_true",
@@ -115,6 +115,8 @@ Ejemplos:
         help="Inicia el asistente de configuración (Wizard) y extrae datos del CV")
     parser.add_argument("--run-all", action="store_true",
         help="Ejecuta el bot secuencialmente en todos los portales configurados")
+    parser.add_argument("--multi-keyword", action="store_true",
+        help="Búsqueda atómica: lanza una búsqueda separada por cada keyword del KEYWORD_GROUPS")
 
     args = parser.parse_args()
 
@@ -136,55 +138,78 @@ Ejemplos:
         run_purge(args.days)
         sys.exit(0)
 
-    # Sobreescribir límites si hay variable de entorno (para el Dashboard)
+    # Sobrescribir límites si hay variable de entorno (para el Dashboard)
     import os
     env_max = os.getenv("USER_MAX_OFFERS")
     if env_max and env_max.isdigit():
         for p in SITE_CONFIG:
             SITE_CONFIG[p]["max_offers_per_run"] = int(env_max)
 
-    # Modo Ejecutar Todo
-    if args.run_all:
-        print("\n>>> Iniciando ejecución global (Modo Maestro) <<<\n")
-        portals = list(SITE_CONFIG.keys())
-        for portal in portals:
-            print(f"\n--- Procesando portal: {portal.upper()} ---")
-            try:
-                run_bot(
-                    portal_name = portal,
-                    dry_run     = args.dry_run,
-                    headless    = args.headless,
-                )
-            except Exception as e:
-                print(f"Error en portal {portal}: {e}")
-        print("\n>>> EJECUCIÓN GLOBAL FINALIZADA <<<\n")
-        sys.stdout.flush()
-        sys.exit(0)
-
-    # Comandos que sí necesitan portal
-    if not args.portal:
-        parser.print_help()
-        print("\nError: especifica --portal, usa --run-all o --setup\n")
-        sys.exit(1)
-
-    if args.portal not in SITE_CONFIG:
+    if args.portal and args.portal not in SITE_CONFIG and "," not in args.portal:
         list_portals()
         print(f"Error: portal '{args.portal}' no encontrado.\n")
         sys.exit(1)
 
-    if args.validate:
+    if args.validate and args.portal:
         run_validate(args.portal)
         sys.exit(0)
 
-    if args.max is not None:
-        SITE_CONFIG[args.portal]["max_offers_per_run"] = args.max
+    if args.setup:
+        # Aquí podrías llamar a una función de setup si existiera
+        print("Setup no implementado en CLI. Usa el Dashboard.")
+        sys.exit(0)
 
-    run_bot(
-        portal_name = portal_name if 'portal_name' in locals() else args.portal,
-        dry_run     = args.dry_run,
-        headless    = args.headless,
-    )
-    sys.stdout.flush()
+    # ── Ejecución de Portales (Modo Master o Individual) ──
+    portal_list = []
+    if args.run_all:
+        portal_list = list(SITE_CONFIG.keys())
+    elif args.portal:
+        portal_list = [p.strip() for p in args.portal.split(",") if p.strip()]
+
+    if portal_list:
+        print(f"\n[SISTEMA] Iniciando ejecución para: {', '.join(portal_list).upper()}\n")
+        from playwright.sync_api import sync_playwright
+        
+        with sync_playwright() as pw:
+            total_global = 0
+            for portal in portal_list:
+                if portal not in SITE_CONFIG:
+                    print(f"Error: portal '{portal}' no encontrado. Saltando.")
+                    continue
+                
+                print(f"\n[PORTAL_ACTIVO] PORTAL: {portal}")
+                print(f"--- Procesando portal: {portal.upper()} ---")
+                try:
+                    if args.max is not None:
+                        SITE_CONFIG[portal]["max_offers_per_run"] = args.max
+                    
+                    if args.multi_keyword:
+                        # run_bot_multi_keywords no fue actualizado para recibir pw aún,
+                        # pero run_bot_multi_keywords ya es eficiente por sí mismo.
+                        # Para máxima velocidad, lo ideal sería que también recibiera pw.
+                        run_bot_multi_keywords(
+                            portal_name = portal,
+                            dry_run     = args.dry_run,
+                            headless    = args.headless,
+                        )
+                    else:
+                        applied = run_bot(
+                            portal_name = portal,
+                            dry_run     = args.dry_run,
+                            headless    = args.headless,
+                            pw          = pw
+                        )
+                        total_global += (applied or 0)
+                except Exception as e:
+                    print(f"Error crítico en portal {portal}: {e}")
+            
+            print(f"\n[SISTEMA] Ejecución finalizada. Total global: {total_global}\n")
+        sys.stdout.flush()
+        sys.exit(0)
+
+    parser.print_help()
+    print("\nError: especifica --portal, usa --run-all o --setup\n")
+    sys.exit(1)
 
 
 if __name__ == "__main__":

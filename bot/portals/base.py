@@ -23,7 +23,7 @@ class BasePortal(ABC):
     def get_offer_urls(self, page: Page) -> list[str]:
         """
         Extrae URLs de ofertas de la página actual.
-        Puede ser sobreescrito por cada portal para lógica específica.
+        Puede ser sobrescrito por cada portal para lógica específica.
         """
         urls = []
         elements = page.query_selector_all(self.config["selector_oferta"])

@@ -1,48 +1,81 @@
-# 3.1 Diccionario de Componentes (Core)
+# 03 — Diccionario de Componentes
 
-## bot/engine.py — `run_bot`
-**Propósito**: Orquestador central del ciclo de vida de una sesión de postulación.
-**Patrón aplicado**: Control Loop / Facade.
+## BotState — `gui_server.py:25`
+**Proposito:** Estado global thread-safe del proceso del bot en el servidor web.
+**Patron:** Singleton con Lock threading.
 
-| Método | Parámetros | Retorno | Lógica resumida |
-| :--- | :--- | :--- | :--- |
-| `run_bot()` | `portal_name`, `dry_run`, `headless` | `None` | Inicializa Playwright, carga el handler, itera ofertas y registra resultados. |
-
----
-
-## bot/portals/base.py — `BasePortal`
-**Propósito**: Interfaz abstracta que define el contrato para todos los portales.
-**Patrón aplicado**: Abstract Base Class (ABC).
-
-| Método | Parámetros | Retorno | Lógica resumida |
-| :--- | :--- | :--- | :--- |
-| `get_offer_urls()` | `page: Page` | `list[str]` | Extrae identificadores de ofertas de la página de búsqueda. |
-| `apply_to_offer()` | `page: Page, id: str` | `tuple[str, str]` | Ejecuta el flujo de postulación dentro de una oferta específica. |
+| Metodo | Parametros | Retorno | Logica | Efectos |
+|---|---|---|---|---|
+| `add_log(message)` | str | None | Agrega al buffer, emite SocketIO, detecta tags | SocketIO emit, stdout |
+| `get_status()` | — | dict | Retorna snapshot del estado actual | lectura |
+| `stop_process()` | — | bool | Mata el subprocess si existe | process.kill() |
+| `clear_logs()` | — | None | Limpia buffer y stats | SocketIO emit |
 
 ---
 
-## bot/form_filler.py — `fill_form`
-**Propósito**: Motor inteligente de detección y llenado de campos de formulario.
-**Patrón aplicado**: Data Mapper / Input Strategy.
+## run_bot() — `bot/engine.py:499`
+**Proposito:** Orquestador principal. Abre browser, itera ofertas, aplica estrategia.
+**Patron:** Template Method (flujo fijo, pasos intercambiables por portal).
 
-| Método | Parámetros | Retorno | Lógica resumida |
-| :--- | :--- | :--- | :--- |
-| `fill_form()` | `page: Page, profile: dict` | `None` | Detecta inputs/selects visibles y los mapea con el perfil del usuario. |
+| Parametro | Tipo | Descripcion |
+|---|---|---|
+| `portal_name` | str | Clave de SITE_CONFIG |
+| `dry_run` | bool | Sin submit final |
+| `headless` | bool | Browser sin ventana |
+| `config_override` | dict | URL alternativa (busqueda atomica) |
+| `profile_mode` | str | "it" o "bodega" |
 
----
-
-## gui_server.py — `run_bot_thread`
-**Propósito**: Gestiona la ejecución asíncrona del bot para no bloquear el dashboard.
-**Patrón aplicado**: Worker Thread / Process Manager.
-
-| Método | Parámetros | Retorno | Lógica resumida |
-| :--- | :--- | :--- | :--- |
-| `run_bot_thread()` | `portals: list` | `None` | Lanza subprocesos de `main.py` y redirige logs a una variable global. |
+**Variables criticas:** `applied` (contador), `rate_limiter` (por portal), `session_dir` (path Playwright).
 
 ---
 
-## 3.2 Casos Borde y Puntos Críticos
+## run_bot_multi_keywords() — `bot/engine.py:459`
+**Proposito:** Itera KEYWORD_GROUPS y llama run_bot() por cada termino.
+**Flujo:** Para cada group en KEYWORD_GROUPS -> build_config_for_keyword() -> run_bot(config_override, profile_mode).
 
-1.  **Manejo de CV**: Si `USER_CV_PATH` no es absoluto o no existe, el bot falla silenciosamente en el momento de la carga. (Detectado en `bot/form_filler.py`)
-2.  **Selectores Obsoletos**: Si un portal cambia su DOM, el bot entra en `no_offers` o `panel_timeout`. (Detectado en `bot/engine.py`)
-3.  **Cloudflare**: Indeed y LinkedIn pueden bloquear la navegación si detectan patrones de scraping no-humanos. (Gestionado en `bot/stealth_utils.py`)
+---
+
+## fill_form() — `bot/form_filler.py:430`
+**Proposito:** Detecta y rellena todos los campos del formulario activo en la pagina.
+**Patron:** Chain of Responsibility (text -> dropdowns -> radio -> file).
+
+| Sub-funcion | Que detecta | Logica especial |
+|---|---|---|
+| `fill_text_fields()` | inputs text/email/tel/number, textarea | Autocomplete para ciudad, limpieza de telefono |
+| `fill_dropdowns()` | select | Prioriza Chile/+56, fallback afirmativo |
+| `handle_yes_no_questions()` | radio, checkbox | Prioriza valores en YES_VALUES |
+| `fill_file_upload()` | input[type=file] | Sube CV del path en profile |
+
+**Nuevo en v2:** Carga `profile_kb.json` via `_load_kb()`, detecta modo por `profile["_mode"]` o infiere de `job_title`. Sobreescribe `cover_letter` con la version contextual.
+
+---
+
+## build_config_for_keyword() — `bot/config.py:34`
+**Proposito:** Genera una copia de SITE_CONFIG[portal] con URL especifica para un keyword.
+**Retorno:** dict con `url_busqueda` reemplazada. Agrega "junior sin experiencia" automaticamente.
+
+---
+
+## get_session_status() — `gui_server.py:113`
+**Proposito:** Detecta que portales tienen sesion guardada (carpeta sessions/<portal> no vacia).
+**Retorno:** `{"indeed": True, "linkedin": False, ...}`
+**Uso:** Emitido via SocketIO evento `session_status` al conectar el dashboard.
+
+---
+
+## already_applied() — `bot/state.py`
+**Proposito:** Deduplicacion. Retorna True si la URL ya fue procesada con status "applied" o "skipped_already_applied".
+**Indice:** Columna `url` indexada en SQLite para busqueda O(log n).
+
+---
+
+## RateLimiter — `bot/retry.py`
+**Proposito:** Ventana deslizante de acciones maximas por hora por portal.
+**Logica:** `acquire()` bloquea con `time.sleep()` si se alcanzo el maximo. Ventana: `max_actions` en `window_minutes`.
+
+| Portal | Limite |
+|---|---|
+| LinkedIn | 25/hora |
+| Indeed | 15/hora |
+| Computrabajo | 25/hora |
+| Default | 15/hora |

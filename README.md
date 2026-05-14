@@ -50,14 +50,14 @@ pip install -r requirements.txt
 playwright install chromium
 ```
 
-> **Nota:** si tenés Chrome instalado en el sistema (`C:\Program Files\Google\Chrome\Application\chrome.exe`),
-> el bot lo detecta automáticamente y no necesitás descargar Chromium.
+> Nota: si tienes Chrome instalado en el sistema (`C:\Program Files\Google\Chrome\Application\chrome.exe`),
+> el bot lo detecta automáticamente y no necesitas descargar Chromium.
 
 ---
 
 ## Configuración rápida
 
-### 1. Completá tu perfil en `bot/config.py`
+### 1. Completa tu perfil en `bot/config.py`
 
 ```python
 USER_PROFILE = {
@@ -81,14 +81,14 @@ USER_PROFILE = {
 }
 ```
 
-### 2. Actualizá la URL de búsqueda de LinkedIn
+### 2. Actualiza la URL de búsqueda de LinkedIn
 
 En `bot/config.py` → `SITE_CONFIG["linkedin"]["url_busqueda"]`:
 
-1. Andá a LinkedIn Jobs en tu browser
-2. Aplicá tus filtros (keywords, ubicación, nivel, etc.)
-3. Activá el filtro **"Easy Apply"** (agrega `f_AL=true` a la URL)
-4. Copiá la URL completa y pegala en el config
+1. Ve a LinkedIn Jobs en tu browser
+2. Aplica tus filtros (keywords, ubicación, nivel, etc.)
+3. Activa el filtro **"Easy Apply"** (agrega `f_AL=true` a la URL)
+4. Copia la URL completa y pégala en el config
 
 ```python
 "url_busqueda": "https://www.linkedin.com/jobs/search/?keywords=Python+Developer&location=Remote&f_AL=true"
@@ -146,7 +146,7 @@ LinkedIn requiere sesión activa. El **primer run SIEMPRE debe hacerse sin `--he
 # Paso 1: Dry-run sin headless para iniciar sesión
 python main.py --portal linkedin --dry-run
 
-# El browser abre → iniciás sesión en LinkedIn manualmente
+# El browser abre → inicias sesión en LinkedIn manualmente
 # La sesión queda guardada en sessions/linkedin/
 
 # Paso 2: Validar que todo funciona
@@ -155,7 +155,7 @@ python main.py --validate --portal linkedin
 # Paso 3: Run real con pocos para probar
 python main.py --portal linkedin --max 3
 
-# Paso 4: A partir de ahora podés usar --headless
+# Paso 4: A partir de ahora puedes usar --headless
 python main.py --portal linkedin --max 15 --headless
 ```
 
@@ -170,9 +170,9 @@ Ver la guía completa en [docs/03_linkedin.md](docs/03_linkedin.md).
 
 **En 5 minutos** con selectores CSS:
 
-1. Abrí el portal en tu browser → F12 → Inspector
-2. Identificá los selectores de: card de oferta, botón postular, botón "siguiente página", título del puesto
-3. Agregá la entrada en `bot/config.py`:
+1. Abre el portal en tu browser → F12 → Inspector
+2. Identifica los selectores de: card de oferta, botón postular, botón "siguiente página", título del puesto
+3. Agrega la entrada en `bot/config.py`:
 
 ```python
 SITE_CONFIG = {
@@ -329,7 +329,7 @@ Ver diagnóstico completo en [TROUBLESHOOTING.md](TROUBLESHOOTING.md).
 - **No subir `sessions/` ni `data/` a git** — están en `.gitignore`
 - **LinkedIn detecta ráfagas**: el rate limiter es la primera línea de defensa
 - **LinkedIn Easy Apply** salta automáticamente modales con más de 6 pasos
-- Si aparecen muchos `skipped_captcha`: esperá 24h y reducí el `max` por run
+- Si aparecen muchos `skipped_captcha`: espera 24h y reduce el `max` por run
 
 ---
 

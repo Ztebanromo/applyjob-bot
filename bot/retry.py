@@ -184,11 +184,13 @@ class RateLimiter:
 # Rate limiters por portal (configurados con valores seguros)
 # ---------------------------------------------------------------------------
 RATE_LIMITS: dict[str, RateLimiter] = {
-    "linkedin":     RateLimiter(max_actions=25, window_minutes=60),
-    "indeed":       RateLimiter(max_actions=15, window_minutes=60),
-    "computrabajo": RateLimiter(max_actions=25, window_minutes=60),
-    "getonyboard":  RateLimiter(max_actions=20, window_minutes=60),
-    "_default":     RateLimiter(max_actions=15, window_minutes=60),
+    "linkedin":      RateLimiter(max_actions=20, window_minutes=60),
+    "indeed":        RateLimiter(max_actions=30, window_minutes=60),  # solo cuenta applies reales
+    "computrabajo":  RateLimiter(max_actions=40, window_minutes=60),
+    "laborum":       RateLimiter(max_actions=30, window_minutes=60),
+    "chiletrabajos": RateLimiter(max_actions=40, window_minutes=60),
+    "getonyboard":   RateLimiter(max_actions=30, window_minutes=60),
+    "_default":      RateLimiter(max_actions=30, window_minutes=60),
 }
 
 

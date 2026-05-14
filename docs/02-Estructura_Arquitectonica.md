@@ -1,72 +1,71 @@
-# 2.1 Patrón Arquitectónico
+# 02 — Estructura Arquitectonica
 
-El sistema utiliza un patrón de **Estrategia (Strategy)** combinado con una arquitectura de **Capas (Layered Architecture)**.
+## 2.1 Patron Arquitectonico
 
-- **Definición**: El patrón Estrategia permite definir una familia de algoritmos (handlers de portales), encapsular cada uno y hacerlos intercambiables. Esto permite que el motor central (`engine.py`) sea agnóstico a si está navegando en LinkedIn o en Indeed.
-- **Evidencia**:
-  - `bot/portals/base.py`: Clase base que define el contrato (`get_offer_urls`, `apply_to_offer`).
-  - `bot/portals/linkedin.py`, `bot/portals/indeed.py`: Implementaciones concretas.
-- **Desviaciones**: 
-  - 🟡 Se detecta un acoplamiento ligero en `engine.py` con lógica específica para LinkedIn/Indeed en el manejo de sesiones, lo que rompe parcialmente la abstracción pura.
+**Nombre:** Layered Architecture + Strategy Pattern
 
----
+**Definicion:** La arquitectura en capas organiza el codigo en niveles donde cada capa solo puede llamar a la capa inmediata inferior. El Strategy Pattern permite intercambiar algoritmos (estrategias de postulacion) sin modificar el cliente.
+
+**Evidencia en el codigo:**
+- Capa de entrada: `main.py` (CLI) y `gui_server.py` (Web)
+- Capa de orquestacion: `bot/engine.py`
+- Capa de estrategias: `bot/portals/*.py` + funciones `_apply_directa/modal/externa`
+- Capa de datos: `bot/state.py` (SQLite) + `bot/config.py`
+- Capa de utilidades: `bot/stealth_utils.py`, `bot/retry.py`, `bot/form_filler.py`
 
 ## 2.2 Mapa de Capas/Carpetas
 
-| Capa / Carpeta | Responsabilidad | Regla de Dependencia |
-| :--- | :--- | :--- |
-| **Raíz (/)** | Orquestación y Punto de Entrada | Puede importar de todas las capas inferiores. |
-| **bot/engine** | Motor de navegación y flujo de control | Importa de `portals` y `utils`. No debe importar del servidor Flask. |
-| **bot/portals** | Adaptadores específicos para cada sitio web | Solo deben importar de `base.py` y utilidades comunes. |
-| **bot/utils** | Funciones de soporte (stealth, filling, stats) | No deben tener dependencias circulares. |
-| **templates** | Interfaz de usuario (Frontend) | Se comunica vía REST API con `gui_server.py`. |
-
----
+| Directorio | Responsabilidad | Puede importar | Archivos clave |
+|---|---|---|---|
+| `/` (raiz) | Entry points y servidor web | `bot/` | `main.py`, `gui_server.py` |
+| `bot/` | Logica de negocio | `bot/portals/`, stdlib | `engine.py`, `config.py`, `form_filler.py` |
+| `bot/portals/` | Implementaciones por portal | `bot/` (base) | `linkedin.py`, `indeed.py`, `computrabajo.py` |
+| `data/` | Persistencia y knowledge base | — | `applyjob.db`, `profile_kb.json`, `qa_cache.json` |
+| `sessions/` | Estado de browsers | — | `{portal}/` dirs |
+| `templates/` | UI del dashboard | — | `index.html` |
+| `logs/` | CSV diario + log rotativo | — | `applied_YYYY-MM-DD.csv` |
 
 ## 2.3 Flujo de Datos End-to-End
 
-```mermaid
-sequenceDiagram
-    participant U as Usuario (Browser)
-    participant S as gui_server.py (Flask)
-    participant M as main.py (Subprocess)
-    participant E as bot/engine.py
-    participant H as bot/portals (Handler)
-    participant P as Playwright (Chromium)
-
-    U->>S: POST /start_bot {portals: ["indeed"]}
-    S->>M: spawn process: main.py --portal indeed
-    M->>E: run_bot(portal_name="indeed")
-    E->>H: init IndeedPortal()
-    E->>P: launch_browser()
-    loop Por cada oferta
-        E->>H: get_offer_urls(page)
-        H-->>E: list[ids]
-        E->>H: apply_to_offer(page, id)
-        H->>P: fill_form / click_apply
-        P-->>H: success/fail
-        H-->>E: status, title
-        E->>M: print log to stdout
-        M-->>S: capture line from pipe
-        S-->>U: GET /logs (poll)
-    end
+```
+Dashboard (index.html)
+  -- socket.emit('start_master') -->
+gui_server.py:run_bot_thread()
+  -- subprocess.Popen(['python', 'main.py', '--portal', X]) -->
+main.py:main()
+  -- run_bot(portal, config_override, profile_mode) -->
+bot/engine.py:run_bot()
+  -- Playwright: navegar a url_busqueda -->
+  -- extraer offer_urls (selector_oferta) -->
+  -- por cada URL: already_applied()? skip -->
+  -- rate_limiter.acquire() -->
+  -- _process_offer_generic() -->
+      -- _apply_directa/modal/externa() -->
+          -- fill_form(page, profile, job_title) -->
+              -- _load_kb() -> cover_letter por modo -->
+              -- fill_text_fields(), fill_dropdowns() -->
+  -- save_application() -> SQLite -->
+  -- _csv_log() -> logs/applied_YYYY-MM-DD.csv -->
+  -- stdout -> gui_server captura y emite via SocketIO -->
+Dashboard: actualiza terminal + stats en tiempo real
 ```
 
----
+## 2.4 Diagrama de Dependencias
 
-## 2.4 Diagrama de Dependencias entre Capas
-
-```mermaid
-graph TD
-    A[gui_server.py] -->|Ejecuta| B[main.py]
-    B -->|Invoca| C[bot/engine.py]
-    C -->|Instancia| D[bot/portals/*.py]
-    D -->|Hereda de| E[bot/portals/base.py]
-    C -->|Usa| F[bot/stealth_utils.py]
-    C -->|Usa| G[bot/form_filler.py]
-    C -->|Persiste en| H[bot/state.py]
-    D -->|Usa| F
+```
+main.py ──────────────┐
+                       ├──> bot/engine.py
+gui_server.py ─────────┘        ├──> bot/config.py
+                                 ├──> bot/state.py
+                                 ├──> bot/form_filler.py ──> data/profile_kb.json
+                                 ├──> bot/retry.py
+                                 ├──> bot/stealth_utils.py
+                                 ├──> bot/validator.py
+                                 └──> bot/portals/
+                                          ├──> base.py
+                                          ├──> linkedin.py
+                                          ├──> indeed.py
+                                          └──> computrabajo.py ...
 ```
 
-> [!NOTE]
-> No se detectan dependencias circulares críticas entre los módulos core de Python.
+No hay dependencias circulares detectadas.

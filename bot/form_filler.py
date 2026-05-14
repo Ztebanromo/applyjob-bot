@@ -20,6 +20,7 @@ Soporte Multi-ATS:
 """
 
 from pathlib import Path
+import json
 import logging
 from typing import Dict, List, Optional, Set, Any
 
@@ -27,8 +28,32 @@ from playwright.sync_api import Page, ElementHandle
 
 from .stealth_utils import micro_delay, human_delay
 
-# Configuración del Logger
 log = logging.getLogger("applyjob.form_filler")
+
+# ---------------------------------------------------------------------------
+# Knowledge Base por modo (IT / Bodega)
+# ---------------------------------------------------------------------------
+_KB_PATH = Path(__file__).parent.parent / "data" / "profile_kb.json"
+_PROFILE_KB: dict = {}
+
+
+def _load_kb() -> dict:
+    global _PROFILE_KB
+    if not _PROFILE_KB and _KB_PATH.exists():
+        with open(_KB_PATH, encoding="utf-8") as f:
+            _PROFILE_KB = json.load(f)
+    return _PROFILE_KB
+
+
+def _detect_mode_from_title(job_title: str) -> str:
+    """Infiere 'it' o 'bodega' desde el título del puesto."""
+    title_lower = job_title.lower()
+    kb = _load_kb()
+    for mode, data in kb.items():
+        for kw in data.get("role_keywords", []):
+            if kw in title_lower:
+                return mode
+    return "it"
 
 # ---------------------------------------------------------------------------
 # DICCIONARIO DE PATRONES (FIELD_PATTERNS)
@@ -83,7 +108,7 @@ FIELD_PATTERNS: Dict[str, List[str]] = {
         "salary", "salario", "pretension", "pretensión", "remuneracion",
         "remuneración", "sueldo", "renta", "renta líquida", "renta liquida",
         "expected salary", "desired salary", "expectativa salarial", 
-        "pretension salarial", "cuánto quieres ganar", "cuanto quieres ganar"
+        "pretensión salarial", "cuánto quieres ganar", "cuanto quieres ganar"
     ],
     "years_exp": [
         "años de experiencia", "anos de experiencia", "how many years", 
@@ -91,15 +116,15 @@ FIELD_PATTERNS: Dict[str, List[str]] = {
         "years of experience", "experiencia en"
     ],
     "cover_letter": [
-        "cover", "carta", "motivation", "presentacion", "presentación",
+        "cover", "carta", "motivation", "presentación", "presentación",
         "message", "mensaje", "sobre ti", "about you", "tell us",
-        "cuéntanos", "cuentanos", "descripcion", "descripción",
+        "cuéntanos", "cuentanos", "descripción", "descripción",
         "por qué", "porque", "motiv", "interés", "interes",
         "habilidades", "skills", "fortaleza", "logro", "aporte"
     ],
     "availability": [
         "disponibilidad", "disponible", "cuando puedes", "cuándo puedes",
-        "inicio", "fecha de inicio", "start date", "incorporacion", "incorporación"
+        "inicio", "fecha de inicio", "start date", "incorporación", "incorporación"
     ],
     "english_level": [
         "ingles", "inglés", "english", "idioma", "language", "nivel de ingles",
@@ -220,7 +245,7 @@ def fill_text_fields(page: Page, profile: dict) -> int:
                 if not profile_key or profile_key not in profile:
                     continue
 
-                # Evitar sobreescribir si ya tiene contenido (respetar datos manuales)
+                # Evitar sobrescribir si ya tiene contenido (respetar datos manuales)
                 current_val = el.input_value() if sel != "textarea" else el.text_content()
                 if (current_val or "").strip():
                     continue
@@ -392,19 +417,30 @@ def fill_file_upload(page: Page, profile: dict) -> bool:
     return False
 
 
-def fill_form(page: Page, profile: dict) -> dict:
+def fill_form(page: Page, profile: dict, job_title: str = "") -> dict:
     """
     Orquestador principal de llenado de formularios.
-    Ejecuta todas las estrategias y devuelve un resumen de las acciones.
+    Aplica el perfil contextual (IT o Bodega) para personalizar cover_letter.
     """
     human_delay(1.0, 2.0)
-    
+
+    # Determinar modo: explícito en profile["_mode"] o inferido del título del puesto
+    mode = profile.get("_mode") or _detect_mode_from_title(job_title)
+    kb = _load_kb()
+
+    active_profile = dict(profile)
+    if mode in kb:
+        mode_data = kb[mode]
+        if "cover_letter" in mode_data:
+            active_profile["cover_letter"] = mode_data["cover_letter"]
+        log.debug("  [form] modo=%s (título=%r)", mode, job_title[:50] if job_title else "")
+
     results = {
-        "text_fields":   fill_text_fields(page, profile),
-        "dropdowns":     fill_dropdowns(page, profile),
+        "text_fields":   fill_text_fields(page, active_profile),
+        "dropdowns":     fill_dropdowns(page, active_profile),
         "radio_answers": handle_yes_no_questions(page),
-        "file_uploaded": fill_file_upload(page, profile),
+        "file_uploaded": fill_file_upload(page, active_profile),
     }
-    
+
     log.debug("Resumen de formulario: %s", results)
     return results

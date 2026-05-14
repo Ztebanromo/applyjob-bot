@@ -17,14 +17,16 @@ Observaciones:
   - Las sesiones se guardan en sessions/chiletrabajos/.
   - Filtro TI por título — los resultados de búsqueda incluyen todo tipo de trabajos.
 """
-import time
 import logging
+import re
+import time
 
 from playwright.sync_api import Page, TimeoutError as PlaywrightTimeout
 
 from .base import BasePortal
 from ..stealth_utils import human_delay, micro_delay, take_error_screenshot
 from ..form_filler import fill_form
+from ..config import schedule_ok
 
 log = logging.getLogger("applyjob.chiletrabajos")
 
@@ -76,31 +78,42 @@ SEL = {
     "next_page":    "a[rel='next'], a[data-ci-pagination-page]",
 }
 
+# Palabras TI — suficientemente específicas para no dar falsos positivos
 _TECH_WORDS = {
-    # Roles TI
-    "desarrollador", "programador", "developer", "software",
+    # Roles TI (específicos)
+    "desarrollador", "programador", "developer", "software engineer",
     "fullstack", "full stack", "frontend", "front-end", "backend", "back-end",
-    "devops", "ingeniero", "engineer",
-    # Lenguajes / stacks
-    "python", "java", "javascript", "typescript", "react", "angular", "node",
-    "php", "ruby", "golang", "kotlin", "swift", ".net",
-    # Especialidades
-    "analista", "sistemas", "informática", "telecomunicaciones",
-    "soporte ti", "técnico ti", "técnico en", "data", "machine learning",
-    "qa", "tester", "testing", "cloud", "aws", "azure", "gcp",
-    "sap", "erp", "crm", "ux", "ui", "ciberseguridad", "seguridad informática",
-    "consultor", "infraestructura", "redes", "networking",
-    # Niveles junior / entrada
-    "trainee", "práctica", "practicante", "junior", "jr.", "jr ",
+    "devops", "ingeniero en", "ingeniero de sistemas", "ingeniero ti",
+    # Lenguajes / stacks (únicos en contexto TI)
+    "python", "javascript", "typescript", "react", "angular", "node.js",
+    "php", "ruby", "golang", "kotlin", "swift", ".net", "java developer",
+    # Especialidades TI (compuestas para evitar falsos positivos)
+    "analista programador", "analista de sistemas", "analista ti", "analista bi",
+    "soporte ti", "soporte técnico ti", "soporte técnico en ti",
+    "técnico ti", "técnico en informática", "técnico en telecomunicaciones",
+    "data engineer", "data scientist", "machine learning", "inteligencia artificial",
+    "qa engineer", "qa analyst", "tester", "testing",
+    "cloud", "aws", "azure", "gcp", "ciberseguridad", "seguridad informática",
+    "infraestructura ti", "redes y telecomunicaciones",
+    # Bodega/Logística — términos compuestos para precisión
+    "operario bodega", "operario de bodega",
+    "auxiliar bodega", "auxiliar de bodega",
+    "ayudante bodega", "ayudante de bodega",
+    "bodeguero", "jefe de bodega",
+    "operador logístico", "operador logistico",
+    "auxiliar logístico", "auxiliar logistico",
+    "logística y distribución",
+    # Niveles entrada
+    "trainee", "junior", "jr.", "practicante",
     "recién titulado", "recien titulado", "egresado",
 }
 
-# Palabras que indican nivel senior/dirección — se excluyen de las postulaciones
+# Palabras que indican nivel senior/dirección — se excluyen
 _SENIOR_WORDS = {
     "senior", " sr.", " sr ", "semi senior", "ssr", "semi-senior",
-    "jefe", "gerente", "director", "lead ", "tech lead", "líder",
-    "principal", "arquitecto", "cto", "vp de", "head of",
-    "manager", "coordinador", "supervisor",
+    "jefe de proyecto", "gerente", "director de", "lead ", "tech lead", "líder de",
+    "principal", "arquitecto de", "cto", "vp de", "head of",
+    "manager", "coordinador", "supervisor de",
 }
 
 DETAIL_TIMEOUT = 25_000
@@ -131,8 +144,6 @@ class ChileTrabajosPortal(BasePortal):
         return self._title_is_tech(title) and not self._title_is_senior(title)
 
     def _wait_for_login(self, page: Page, timeout_s: int = 300) -> bool:
-        import time as _t
-
         def _on_login() -> bool:
             try:
                 url = page.url
@@ -150,22 +161,19 @@ class ChileTrabajosPortal(BasePortal):
         if not _on_login():
             return True
 
-        log.warning("=" * 60)
-        log.warning("CHILETRABAJOS requiere inicio de sesión.")
-        log.warning("Por favor, inicia sesión en la ventana de Chrome.")
-        log.warning("El bot esperará hasta %d segundos...", timeout_s)
-        log.warning("=" * 60)
+        log.warning("ChileTrabajos requiere inicio de sesión. Esperando hasta %ds...", timeout_s)
+        print(f"\n[LOGIN_REQUERIDO] Inicia sesión en ChileTrabajos en el navegador abierto.\n")
 
-        deadline = _t.time() + timeout_s
-        while _t.time() < deadline:
-            _t.sleep(3)
+        deadline = time.time() + timeout_s
+        while time.time() < deadline:
+            time.sleep(3)
             if _logged_in():
-                log.info("✓ Sesión ChileTrabajos detectada — continuando")
+                log.info("Sesión de ChileTrabajos detectada. Continuando.")
                 ChileTrabajosPortal._login_done = True
-                human_delay(2.0, 3.0)
+                human_delay(1.0, 1.5)
                 return True
 
-        log.error("Timeout esperando login ChileTrabajos.")
+        log.error("Tiempo de espera agotado esperando login en ChileTrabajos.")
         return False
 
     def get_offer_urls(self, page: Page) -> list[str]:
@@ -176,7 +184,7 @@ class ChileTrabajosPortal(BasePortal):
             try:
                 page.wait_for_selector(SEL["card"], timeout=10_000)
             except PlaywrightTimeout:
-                log.warning("ChileTrabajosPortal: timeout esperando cards")
+                log.warning("ChileTrabajosPortal: tiempo de espera agotado esperando tarjetas de oferta.")
 
             cards = page.query_selector_all(SEL["card"])
             log.debug("ChileTrabajos: %d cards encontradas", len(cards))
@@ -206,6 +214,16 @@ class ChileTrabajosPortal(BasePortal):
                     except Exception:
                         pass
 
+                    # Filtro de horario en el card
+                    card_text = ""
+                    try:
+                        card_text = (card.text_content() or "")[:500]
+                    except Exception:
+                        pass
+                    if not schedule_ok(card_text):
+                        log.info("  [ct2] Descartado por horario: %s", card_text[:80].strip())
+                        continue
+
                     if self._title_ok(title):
                         if href not in seen:
                             seen.add(href)
@@ -230,7 +248,7 @@ class ChileTrabajosPortal(BasePortal):
         try:
             # ── 1. Navegar al detalle ─────────────────────────────────────
             page.goto(offer_url, wait_until="domcontentloaded", timeout=DETAIL_TIMEOUT)
-            human_delay(2.0, 3.0)
+            human_delay(0.8, 1.5)
 
             # ── 2. Extraer título ─────────────────────────────────────────
             try:
@@ -247,7 +265,7 @@ class ChileTrabajosPortal(BasePortal):
             apply_btn = self._find_visible(page, SEL["apply_btn"])
             if not apply_btn:
                 page.evaluate("window.scrollTo(0, 400)")
-                human_delay(1.0, 1.5)
+                human_delay(0.5, 0.8)
                 apply_btn = self._find_visible(page, SEL["apply_btn"])
 
             if not apply_btn:
@@ -265,7 +283,7 @@ class ChileTrabajosPortal(BasePortal):
                 apply_btn.scroll_into_view_if_needed()
                 micro_delay()
                 apply_btn.click()
-                human_delay(2.5, 4.0)
+                human_delay(1.2, 2.0)
             except Exception as exc:
                 return f"error: click_apply {exc}", title
 
@@ -282,12 +300,11 @@ class ChileTrabajosPortal(BasePortal):
                     # Reintentar desde la URL de postulación directa
                     postular_url = offer_url.replace("/trabajo/", "/trabajo/postular/")
                     # Extraer ID del slug: /trabajo/slug-123456 → /trabajo/postular/123456
-                    import re
                     m = re.search(r'-(\d+)$', offer_url.rstrip('/'))
                     if m:
                         postular_url = f"{BASE_URL}/trabajo/postular/{m.group(1)}"
                     page.goto(postular_url, wait_until="domcontentloaded", timeout=DETAIL_TIMEOUT)
-                    human_delay(2.0, 3.0)
+                    human_delay(1.0, 1.5)
                     current_url = page.url
                 else:
                     ChileTrabajosPortal._login_done = False
@@ -324,7 +341,7 @@ class ChileTrabajosPortal(BasePortal):
 
     def _fill_apply_form(self, page: Page, title: str) -> tuple[str, str]:
         """Rellena y envía el formulario de postulación interno de ChileTrabajos."""
-        human_delay(1.5, 2.5)
+        human_delay(0.8, 1.2)
 
         if self._check_success(page):
             return "applied", title
@@ -346,7 +363,7 @@ class ChileTrabajosPortal(BasePortal):
         except Exception:
             pass
 
-        human_delay(1.0, 1.5)
+        human_delay(0.5, 0.8)
 
         # Submit
         for sel in SEL["form_submit"].split(","):
@@ -355,7 +372,7 @@ class ChileTrabajosPortal(BasePortal):
                 btn = page.query_selector(sel)
                 if btn and btn.is_visible() and btn.is_enabled():
                     btn.click()
-                    human_delay(2.5, 3.5)
+                    human_delay(1.2, 2.0)
                     break
             except Exception:
                 continue

@@ -25,6 +25,7 @@ import json
 import time
 import logging
 import re as _re
+from datetime import datetime
 from pathlib import Path
 from typing import List, Tuple, Set, Optional, Dict
 
@@ -33,9 +34,45 @@ from playwright.sync_api import Page, TimeoutError as PlaywrightTimeout, Element
 from .base import BasePortal
 from ..stealth_utils import human_delay, take_error_screenshot
 from ..form_filler import fill_form
+from ..config import schedule_ok
 
 # Ruta del archivo de caché persistente de preguntas y respuestas
 _QA_CACHE_PATH = Path(__file__).parent.parent.parent / "data" / "qa_cache.json"
+
+# Ruta de preguntas pendientes de respuesta del usuario
+_PENDING_QUESTIONS_PATH = Path(__file__).parent.parent.parent / "data" / "pending_questions.json"
+
+
+def _save_pending_question(question_text: str, offer_url: str = "") -> None:
+    """
+    Guarda una pregunta desconocida en pending_questions.json para que
+    el usuario la responda desde el dashboard HTML.
+    """
+    try:
+        _PENDING_QUESTIONS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        existing: list = []
+        if _PENDING_QUESTIONS_PATH.exists():
+            with open(_PENDING_QUESTIONS_PATH, encoding="utf-8") as f:
+                existing = json.load(f)
+
+        # No duplicar la misma pregunta
+        norm = question_text.strip().lower()[:200]
+        if any(e.get("norm", "") == norm for e in existing):
+            return
+
+        existing.append({
+            "question":  question_text.strip(),
+            "norm":      norm,
+            "portal":    "laborum",
+            "offer_url": offer_url,
+            "timestamp": datetime.now().isoformat(timespec="seconds"),
+            "answered":  False,
+            "answer":    "",
+        })
+        with open(_PENDING_QUESTIONS_PATH, "w", encoding="utf-8") as f:
+            json.dump(existing, f, ensure_ascii=False, indent=2)
+    except Exception as exc:
+        logging.getLogger("applyjob.laborum").debug("Error guardando pregunta pendiente: %s", exc)
 
 # Configuración del Logger específico para este portal
 log = logging.getLogger("applyjob.laborum")
@@ -92,10 +129,9 @@ class LaborumPortal(BasePortal):
     directa o con formularios intermedios.
     """
 
-    # Keyword principal para la API de Laborum.
-    # La API ordena por relevancia pero no filtra — necesitamos escanear muchas páginas.
-    # Para cubrir 20 aplicaciones usamos 15 páginas x 50 = 750 items → ~30 tech jobs.
-    SEARCH_KEYWORD: str = "desarrollador programador software"
+    # Keywords dinámicas del .env
+    from ..config import CLEAN_KEYWORDS
+    SEARCH_KEYWORD: str = CLEAN_KEYWORDS
     API_MAX_PAGES: int = 15   # 750 items totales escaneados por run
 
     # Palabras en el TÍTULO que indican trabajo de TI (substring seguro — son largas)
@@ -192,6 +228,26 @@ class LaborumPortal(BasePortal):
         except Exception as exc:
             log.warning("No se pudo guardar qa_cache.json: %s", exc)
 
+    def _get_pending_answer(self, question_text: str) -> Optional[str]:
+        """
+        Busca si el usuario ya respondió esta pregunta en pending_questions.json.
+        Retorna la respuesta si existe y está marcada como answered=True.
+        """
+        try:
+            if not _PENDING_QUESTIONS_PATH.exists():
+                return None
+            with open(_PENDING_QUESTIONS_PATH, encoding="utf-8") as f:
+                data = json.load(f)
+            norm = self._normalize_question(question_text)
+            for entry in data:
+                if not entry.get("answered") or not entry.get("answer"):
+                    continue
+                if entry.get("norm", "") == norm or norm in entry.get("norm", ""):
+                    return entry["answer"]
+        except Exception:
+            pass
+        return None
+
     def _get_cached_answer(self, question_text: str) -> Optional[str]:
         """
         Busca una respuesta guardada para la pregunta dada.
@@ -241,14 +297,14 @@ class LaborumPortal(BasePortal):
         """
         try:
             log.debug("Navegando a %s (networkidle)", url[:60])
-            page.goto(url, wait_until="networkidle", timeout=30_000)
-            time.sleep(2.5)  # Tiempo de gracia para React
+            page.goto(url, wait_until="networkidle", timeout=25_000)
+            time.sleep(1.5)  # Tiempo de gracia para React
             return True
         except PlaywrightTimeout:
             log.warning("Timeout networkidle en %s, intentando fallback domcontentloaded", url[:60])
             try:
-                page.goto(url, wait_until="domcontentloaded", timeout=20_000)
-                time.sleep(5)
+                page.goto(url, wait_until="domcontentloaded", timeout=15_000)
+                time.sleep(3)
                 return True
             except Exception as exc:
                 log.error("Fallo total de navegación en %s: %s", url[:60], exc)
@@ -303,6 +359,10 @@ class LaborumPortal(BasePortal):
                             items: (data.content || []).map(j => ({{
                                 id: String(j.id || ''),
                                 title: j.titulo || '',
+                                url: j.url || j.postulacionUrl || j.link || j.slug || '',
+                                titulo_slug: (j.titulo || '').toLowerCase()
+                                    .normalize('NFD').replace(/[̀-ͯ]/g, '')
+                                    .replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, ''),
                             }})),
                         }};
                     }} catch(e) {{
@@ -325,17 +385,33 @@ class LaborumPortal(BasePortal):
                     title = item.get('title', '').strip()
                     if not jid or jid in seen_ids:
                         continue
-                    
+
                     # Filtro de seguridad: el título debe ser de TI
                     if self._title_is_tech(title):
                         seen_ids.add(jid)
-                        urls.append(f"https://www.laborum.cl/empleos/oferta-{jid}.html")
+                        # Preferir URL directa de la API; si no, construir con slug + id
+                        raw_url = item.get('url', '').strip()
+                        if raw_url:
+                            if not raw_url.startswith('http'):
+                                raw_url = 'https://www.laborum.cl' + raw_url
+                            urls.append(raw_url)
+                        else:
+                            # Construir URL con slug del título para evitar 404
+                            titulo_slug = item.get('titulo_slug', '').strip()
+                            if titulo_slug:
+                                urls.append(f"https://www.laborum.cl/empleos/{titulo_slug}-{jid}.html")
+                            else:
+                                urls.append(f"https://www.laborum.cl/empleos/oferta-{jid}.html")
 
                 # Si recibimos menos del pageSize, es la última página
                 if len(items) < page_size:
                     break
 
             except Exception as exc:
+                # TargetClosedError → re-raise para que el engine recupere la página
+                if "TargetClosedError" in type(exc).__name__ or "Target page" in str(exc):
+                    log.warning("Página cerrada durante API fetch (página %d) — re-lanzando", page_num)
+                    raise
                 log.error("Error crítico consultando API en página %d: %s", page_num, exc)
                 break
 
@@ -353,13 +429,9 @@ class LaborumPortal(BasePortal):
         Returns:
             List[str]: URLs únicas no procesadas en esta sesión.
         """
-        # Esperar carga inicial
-        try:
-            page.wait_for_selector(SEL["card"], timeout=5_000)
-        except PlaywrightTimeout:
-            log.debug("Tarjetas no visibles aún, procediendo directamente a API.")
-
         # ── API scan: un solo keyword, muchas páginas ─────────────────────────
+        # NOTA: Omitimos la espera de tarjetas DOM — Laborum detecta bots en ~5s
+        # y puede cerrar la página. Ir directo a la API es más rápido y seguro.
         # La API devuelve el mismo pool ordenado por relevancia; escanear más páginas
         # nos da acceso a los jobs tech dispersos entre los no-tech.
         api_urls = self._fetch_job_urls_via_api(page, self.SEARCH_KEYWORD,
@@ -422,10 +494,37 @@ class LaborumPortal(BasePortal):
             if not self._goto_networkidle(page, offer_url):
                 return "error: navegación fallida", title
 
+            # Detectar 404 (URL cambiada o oferta eliminada)
+            current_url = page.url
+            if "/404" in current_url or "not-found" in current_url:
+                log.info("  [laborum] 404 detectado: %s", offer_url[:60])
+                return "skipped_404", title
+            try:
+                page_text = (page.evaluate("() => document.body?.innerText?.slice(0,300) || ''") or "").lower()
+                if any(x in page_text for x in ("no encontramos la página", "página no encontrada", "error 404")):
+                    log.info("  [laborum] 404 detectado por texto: %s", offer_url[:60])
+                    return "skipped_404", title
+            except Exception:
+                pass
+
             # Extracción del título para el reporte
             title_el = page.query_selector(SEL["job_title"])
             if title_el:
                 title = (title_el.text_content() or "").strip()[:80]
+
+            # Filtro de horario: leer descripción visible y descartar si es noche/finde
+            try:
+                desc_text = page.evaluate(
+                    "() => { const d = document.querySelector('[class*=\"description\"], [class*=\"Description\"], "
+                    "#job-description, [data-testid*=\"description\"]'); "
+                    "return d ? d.innerText : document.body?.innerText?.slice(0, 800) || ''; }"
+                ) or ""
+                if not schedule_ok(title + " " + desc_text):
+                    log.info("  [laborum] Descartada por turno incompatible: '%s'", title)
+                    print(f"  [FILTRO] Descartada por turno incompatible: {title}")
+                    return "skipped_schedule", title
+            except Exception:
+                pass
 
             # Esperar que React hidrate el botón de postulación (SPA)
             try:
@@ -465,7 +564,7 @@ class LaborumPortal(BasePortal):
 
             # Clic humano y espera de transición SPA
             apply_btn.click()
-            human_delay(2.0, 4.0)
+            human_delay(1.0, 2.0)
 
             # --- Manejo de Estados Post-Click ---
             
@@ -494,7 +593,7 @@ class LaborumPortal(BasePortal):
                 # En dry_run pausamos para inspección visual
                 if self.dry_run:
                     log.info("  [dry_run] Paso %d completado. Pausa visual...", step + 1)
-                    human_delay(8.0, 10.0)
+                    human_delay(4.0, 6.0)
                     return "dry_run", title
 
                 # Buscar y pulsar el botón de submit de ESTE paso
@@ -514,7 +613,7 @@ class LaborumPortal(BasePortal):
                         sub_btn = page.query_selector(sub_sel)
                         if sub_btn and sub_btn.is_visible() and sub_btn.is_enabled():
                             sub_btn.click()
-                            human_delay(3.0, 5.0)
+                            human_delay(1.5, 2.5)
                             submitted_step = True
                             form_submitted = True
                             log.debug("  [form] paso %d enviado con: %r", step + 1, sub_sel)
@@ -613,31 +712,39 @@ class LaborumPortal(BasePortal):
                 """) or ""
                 question_lc = question_text.lower()
 
-                # ── Elegir respuesta (prioridad: cache > salary-detect > cover_letter) ──
-                answer_source = "cover_letter"  # fuente por defecto para log
+                # ── Elegir respuesta (prioridad: cache > salary-detect > PENDIENTE) ──
+                # Primero verificar si la pregunta pendiente ya tiene respuesta del usuario
+                pending_answer = self._get_pending_answer(question_text)
 
-                # a) Caché persistente
+                # a) Caché persistente (respuesta ya guardada)
                 cached = self._get_cached_answer(question_text)
                 if cached:
                     value = cached
                     answer_source = "cache"
-                # b) Pregunta de sueldo detectada por keywords
+                # b) Respuesta del usuario desde pending_questions.json
+                elif pending_answer:
+                    value = pending_answer
+                    answer_source = "pending_answered"
+                    self._cache_answer(question_text, value)  # promover a cache
+                # c) Pregunta de sueldo detectada por keywords
                 elif any(w in question_lc for w in self._SALARY_WORDS):
                     value = profile.get("salary", "850.000")
                     answer_source = "salary"
-                # c) Fallback genérico
+                    self._cache_answer(question_text, value)
+                # d) Pregunta desconocida → NO rellenar, guardar como pendiente
                 else:
-                    value = profile.get("cover_letter", "")
-                    answer_source = "cover_letter"
+                    _save_pending_question(question_text)
+                    log.warning(
+                        "  [form] PREGUNTA PENDIENTE (sin respuesta): %r — dejando vacío",
+                        question_text[:80],
+                    )
+                    print(f"\n[PREGUNTA_PENDIENTE] {question_text[:120]}\n", flush=True)
+                    continue  # no rellenar este campo
 
                 ta.click()
                 ta.fill(value)
                 filled += 1
                 log.debug("  [form] pregunta=%r → [%s]", question_text[:60], answer_source)
-
-                # Guardar en caché si es una respuesta nueva (no desde cache)
-                if answer_source != "cache" and question_text.strip():
-                    self._cache_answer(question_text, value)
 
             except Exception as exc:
                 log.debug("  [form] textarea error: %s", exc)
@@ -684,7 +791,7 @@ class LaborumPortal(BasePortal):
         "médico", "enfermera", "tens", "dental", "salud",
         "administrativo", "secretaria", "recepcionista",
         "vendedor", "vendedora", "ventas", "comercial",
-        "logística", "bodega", "chofer",
+        "chofer",
     }
 
     def _title_is_tech(self, title: str) -> bool:

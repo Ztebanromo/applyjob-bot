@@ -627,9 +627,9 @@ class LinkedInPortal(BasePortal):
                 card_clicked = True
 
         if not card_clicked:
-            # ── Fallback final: navegar via currentJobId URL param ──
+            # ── Fallback final: navegar vía currentJobId URL param ──
             # LinkedIn virtualiza cards fuera del viewport — si ningún selector
-            # encuentra el elemento, forzamos la carga del job via URL param.
+            # encuentra el elemento, forzamos la carga del job vía URL param.
             try:
                 search_base = self.config["url_busqueda"]
                 job_url = f"{search_base}&currentJobId={job_id}"
@@ -708,7 +708,7 @@ class LinkedInPortal(BasePortal):
 
         # Detectar CAPTCHA antes de empezar
         if page.query_selector(SEL["captcha_check"]):
-            print(f"\n[!] CAPTCHA DETECTADO EN {portal_name.upper()}... Por favor resuélvelo manualmente.")
+            print(f"\n[!] CAPTCHA DETECTADO EN LINKEDIN... Por favor resuélvelo manualmente.")
             self._close_modal_safely(page)
             return "skipped_captcha", title
 
@@ -720,7 +720,7 @@ class LinkedInPortal(BasePortal):
             log.info("  Paso %d/%d", current_step, total_steps)
 
             if total_steps > MAX_MODAL_STEPS:
-                print(f"\n[!] MODAL DEMASIADO COMPLEJO ({total_steps} pasos) en {portal_name.upper()}.")
+                print(f"\n[!] MODAL DEMASIADO COMPLEJO ({total_steps} pasos) en LINKEDIN.")
                 log.info("  Modal muy largo (%d pasos), skip", total_steps)
                 self._close_modal_safely(page)
                 return f"skipped_complex_{total_steps}_steps", title
