@@ -1013,7 +1013,7 @@ def run_bot_multi_keywords(portal_name: str, dry_run: bool = False, headless: bo
             if page_needs_recreation:
                 log.warning("Página cerrada/no responde entre keywords. Recreando...")
                 try:
-                    page = browser.new_page() if not using_cdp else _ctx.new_page()
+                    page = browser_ctx.new_page()
                     if not using_cdp:
                         apply_stealth(page)
                 except Exception as page_err:
