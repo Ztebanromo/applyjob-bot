@@ -20,6 +20,14 @@ Notas:
 import argparse
 import sys
 import io
+import asyncio
+
+# Parche para evitar conflictos de asyncio en Windows (necesario para Playwright Sync)
+if sys.platform == 'win32':
+    try:
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+    except:
+        pass
 
 # Forzar UTF-8 en stdout/stderr para evitar UnicodeEncodeError en terminales Windows (cp1252)
 if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":

@@ -29,8 +29,19 @@ import logging
 import os
 import random
 import socket
+import sys
 import time
+import asyncio
 from pathlib import Path
+
+# ── Parche de compatibilidad para Playwright Sync en Windows ──────────────────
+# Evita el error "Playwright Sync API inside the asyncio loop" al ejecutar desde el dashboard.
+if sys.platform == 'win32':
+    try:
+        # Forzar política de Selector para evitar conflictos con Proactor/Asyncio
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+    except:
+        pass
 
 log = logging.getLogger("applyjob.engine")
 
