@@ -930,7 +930,7 @@ def run_bot_multi_keywords(portal_name: str, dry_run: bool = False, headless: bo
         using_cdp  = cdp_result is not None
 
         if using_cdp:
-            browser, _ctx, page = cdp_result
+            browser_instance, browser_ctx, page = cdp_result
             log.info("Modo CDP — usando Chrome real del usuario (puerto %d)", _CDP_PORT)
             print(f"[CDP] ✓ Conectado a tu Chrome real — tus sesiones de Indeed/LinkedIn activas.")
         else:
@@ -952,8 +952,9 @@ def run_bot_multi_keywords(portal_name: str, dry_run: bool = False, headless: bo
             if chrome_exe:
                 launch_kwargs["executable_path"] = chrome_exe
 
-            browser = pw.chromium.launch_persistent_context(**launch_kwargs)
-            page    = browser.new_page()
+            browser_ctx = pw.chromium.launch_persistent_context(**launch_kwargs)
+            page        = browser_ctx.new_page()
+            browser_instance = None # No lo necesitamos en modo no-CDP
             apply_stealth(page)
             try:
                 from playwright_stealth import Stealth
@@ -1009,7 +1010,7 @@ def run_bot_multi_keywords(portal_name: str, dry_run: bool = False, headless: bo
                     break
 
             applied = _run_keyword_loop(
-                page, browser, portal_name, config, profile,
+                page, browser_ctx, portal_name, config, profile,
                 max_offers, dry_run, rate_limiter, portal_handler,
                 using_cdp=using_cdp,
             )
@@ -1037,9 +1038,9 @@ def run_bot_multi_keywords(portal_name: str, dry_run: bool = False, headless: bo
                 pass
         else:
             try:
-                browser.close()
+                browser_ctx.close()
             except Exception as close_err:
-                log.warning("browser.close() ignorado (ya cerrado): %s", close_err)
+                log.warning("browser_ctx.close() ignorado: %s", close_err)
 
     log.info("=== Multi-Keyword Fin. Total aplicadas: %d | Rate: %d/%d ===",
              total_applied, rate_limiter.current_count, rate_limiter.max_actions)
@@ -1136,7 +1137,7 @@ def run_bot(
         is_cdp = cdp_result is not None
 
         if is_cdp:
-            browser_instance, _ctx, page = cdp_result
+            browser_instance, browser_ctx, page = cdp_result
             log.info("Modo CDP — usando Chrome real del usuario (puerto %d)", _CDP_PORT)
         else:
             # Fallback: lanzar Chrome propio (sin sesiones reales)
@@ -1152,8 +1153,9 @@ def run_bot(
             if chrome_exe:
                 launch_kwargs["executable_path"] = chrome_exe
 
-            browser_instance = pw_obj.chromium.launch_persistent_context(**launch_kwargs)
-            page = browser_instance.new_page()
+            browser_ctx = pw_obj.chromium.launch_persistent_context(**launch_kwargs)
+            page = browser_ctx.new_page()
+            browser_instance = None # No lo necesitamos en modo no-CDP
             apply_stealth(page)
             try:
                 from playwright_stealth import Stealth
@@ -1162,7 +1164,7 @@ def run_bot(
                 pass
 
         applied = _run_keyword_loop(
-            page, browser_instance, portal_name, config, profile,
+            page, browser_ctx, portal_name, config, profile,
             max_offers, dry_run, rate_limiter, portal_handler,
             using_cdp=is_cdp,
         )
@@ -1171,7 +1173,7 @@ def run_bot(
             try: page.close()
             except: pass
         else:
-            browser_instance.close()
+            browser_ctx.close()
         
         print(f"\n[PORTAL_FINALIZADO] --- PORTAL {portal_name.upper()} COMPLETADO ---")
         log.info("=== Fin. Procesadas: %d | Rate usado: %d/%d ===",
