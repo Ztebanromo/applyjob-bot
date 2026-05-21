@@ -7,6 +7,7 @@ import sys
 import secrets
 import re
 import tempfile
+import signal
 from flask import Flask, render_template, request, jsonify
 from flask_socketio import SocketIO, emit
 from dotenv import load_dotenv
@@ -17,7 +18,12 @@ app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024
 app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', secrets.token_hex(24))
 
 # Inicializar SocketIO con hilos (modo más compatible en Windows sin eventlet/gevent)
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
+# SECURITY: CORS restringido a localhost — nunca permitir orígenes externos
+socketio = SocketIO(
+    app,
+    cors_allowed_origins=["http://127.0.0.1:5000", "http://localhost:5000"],
+    async_mode='threading',
+)
 
 # Asegurar directorios
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
@@ -25,15 +31,27 @@ os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 # Estado global thread-safe
 class BotState:
     def __init__(self):
-        self.process = None
+        self.scan_process  = None   # subproceso de scan (independiente)
+        self.apply_process = None   # subproceso de postulación (independiente)
         self.logs = []
         self.lock = threading.RLock()
         self.stop_requested = False
-        self.is_active = False
-        self.stats = {"applied": 0, "errors": 0, "total": 0}
+        self.scan_active  = False
+        self.apply_active = False
+        self.stats = {"applied": 0, "external": 0, "filtered": 0, "errors": 0, "no_nav": 0, "total": 0}
         self.current_portal = None
         self.intervention = None
-        self.run_id = 0
+        self.scan_run_id  = 0
+        self.apply_run_id = 0
+
+    @property
+    def is_active(self):
+        return self.scan_active or self.apply_active
+
+    @property
+    def process(self):
+        """Compatibilidad con código legado."""
+        return self.apply_process or self.scan_process
 
     def add_log(self, message):
         print(f"[BOT] {message.strip()}", flush=True)
@@ -54,21 +72,54 @@ class BotState:
                 socketio.emit('portal_change', {"portal": self.current_portal}, namespace='/bot')
 
         # Actualizar contadores y emitir eventos específicos
-        if "[EXITO]" in message or "Postulación completada" in message:
+        msg = message.strip()
+        portal = self.current_portal or ""
+
+        # --- Postulación exitosa ---
+        if ("[ÉXITO]" in message or "[EXITO]" in message
+                or "Postulación completada" in message
+                or "-> ✅ Postulado" in message):
             with self.lock:
                 self.stats["applied"] += 1
-            # Extraer portal del mensaje de progreso o del portal actual
-            portal = self.current_portal or ""
-            title_match = re.search(r"Postulación completada para: (.+)", message)
-            title = title_match.group(1).strip() if title_match else ""
+                self.stats["total"]   += 1
+            title_m = re.search(r"(?:Postulación completada para|para):\s*(.+)", message)
+            title = title_m.group(1).strip() if title_m else msg[:60]
             socketio.emit('update_stats', self.stats, namespace='/bot')
             socketio.emit('job_applied', {"portal": portal, "title": title, "status": "success"}, namespace='/bot')
-        elif "[FALLO]" in message or "Error en" in message:
+
+        # --- Postulación externa registrada ---
+        elif ("external_apply" in message or "-> ✅ external:" in message
+              or ("[OK]" in message and "external:" in message)):
+            with self.lock:
+                self.stats["external"] += 1
+                self.stats["total"]    += 1
+            socketio.emit('update_stats', self.stats, namespace='/bot')
+
+        # --- Sin navegación / no_navigation ---
+        elif ("no_navigation" in message or "sin navegación" in message
+              or "no navigation" in message.lower()):
+            with self.lock:
+                self.stats["no_nav"] += 1
+                self.stats["total"]  += 1
+            socketio.emit('update_stats', self.stats, namespace='/bot')
+
+        # --- Filtrada / descartada ---
+        elif ("[FILTRO]" in message or "skipped" in message.lower()
+              or "Descartad" in message or "OFERTA_CERRADA" in message
+              or "URL_MUERTA" in message or "filtrada" in message.lower()):
+            with self.lock:
+                self.stats["filtered"] += 1
+                self.stats["total"]    += 1
+            socketio.emit('update_stats', self.stats, namespace='/bot')
+
+        # --- Error real ---
+        elif ("[FALLO]" in message or "-> ❌" in message
+              or re.search(r"\[OK\].*error:", message, re.IGNORECASE)):
             with self.lock:
                 self.stats["errors"] += 1
-            portal = self.current_portal or ""
+                self.stats["total"]  += 1
             socketio.emit('update_stats', self.stats, namespace='/bot')
-            socketio.emit('job_applied', {"portal": portal, "title": message.strip(), "status": "error"}, namespace='/bot')
+            socketio.emit('job_applied', {"portal": portal, "title": msg[:60], "status": "error"}, namespace='/bot')
         elif "[CAPTCHA]" in message or "CAPTCHA DETECTADO" in message.upper():
             portal = self._portal_from_message(message) or self.current_portal or ""
             with self.lock:
@@ -113,72 +164,120 @@ class BotState:
     def clear_logs(self):
         with self.lock:
             self.logs = []
-            self.stats = {"applied": 0, "errors": 0, "total": 0}
+            self.stats = {"applied": 0, "external": 0, "filtered": 0, "errors": 0, "no_nav": 0, "total": 0}
         socketio.emit('update_stats', self.stats, namespace='/bot')
 
     def set_process(self, proc):
+        """Compatibilidad legado — asigna al proceso de apply."""
         with self.lock:
-            self.process = proc
+            self.apply_process = proc
+
+    def set_scan_process(self, proc):
+        with self.lock:
+            self.scan_process = proc
+
+    def set_apply_process(self, proc):
+        with self.lock:
+            self.apply_process = proc
 
     def get_status(self):
         with self.lock:
+            scan_live  = self.scan_process  is not None and self.scan_process.poll()  is None
+            apply_live = self.apply_process is not None and self.apply_process.poll() is None
             return {
-                "running": self.is_active,
-                "process_active": self.process is not None and self.process.poll() is None,
-                "logs": list(self.logs),
-                "stats": dict(self.stats),
+                "running":       self.is_active,
+                "scan_active":   self.scan_active,
+                "apply_active":  self.apply_active,
+                "process_active": scan_live or apply_live,
+                "logs":          list(self.logs),
+                "stats":         dict(self.stats),
                 "current_portal": self.current_portal,
-                "intervention": self.intervention,
-                "run_id": self.run_id,
+                "intervention":  self.intervention,
+                "run_id":        self.scan_run_id + self.apply_run_id,
             }
 
+    def _kill_proc(self, proc):
+        try:
+            subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                           capture_output=True, timeout=5)
+        except Exception:
+            pass
+        try:
+            proc.kill()
+        except Exception:
+            pass
+
     def stop_process(self):
-        process = None
+        procs = []
         with self.lock:
             self.stop_requested = True
-            if self.process and self.process.poll() is None:
-                process = self.process
-            self.process = None
-            self.is_active = False
-            self.intervention = None
-        if process:
-            try:
-                process.kill()
-            except Exception:
-                pass
-            return True
-        return False
+            for p in [self.scan_process, self.apply_process]:
+                if p and p.poll() is None:
+                    procs.append(p)
+            self.scan_process  = None
+            self.apply_process = None
+            self.scan_active   = False
+            self.apply_active  = False
+            self.intervention  = None
+        for p in procs:
+            self._kill_proc(p)
+        return bool(procs)
 
-    def start_run(self):
+    # ── Scan ──────────────────────────────────────────────────────────────────
+    def start_scan(self):
         with self.lock:
-            self.run_id += 1
-            self.is_active = True
+            self.scan_run_id += 1
+            self.scan_active = True
+            self.stop_requested = False
+            run_id = self.scan_run_id
+        return run_id
+
+    def finish_scan(self, run_id):
+        with self.lock:
+            if run_id != self.scan_run_id:
+                return False
+            self.scan_active  = False
+            self.scan_process = None
+            return True
+
+    # ── Apply ─────────────────────────────────────────────────────────────────
+    def start_apply(self):
+        with self.lock:
+            self.apply_run_id += 1
+            self.apply_active = True
             self.stop_requested = False
             self.current_portal = None
             self.intervention = None
-            run_id = self.run_id
+            run_id = self.apply_run_id
         self.clear_logs()
         return run_id
 
-    def finish_run(self, run_id):
+    def finish_apply(self, run_id):
         with self.lock:
-            if run_id != self.run_id:
+            if run_id != self.apply_run_id:
                 return False
-            self.is_active = False
-            self.process = None
+            self.apply_active  = False
+            self.apply_process = None
             self.current_portal = None
-            self.intervention = None
+            self.intervention  = None
             return True
+
+    # ── Legado (usado por run_bot_thread) ─────────────────────────────────────
+    def start_run(self):
+        return self.start_apply()
+
+    def finish_run(self, run_id):
+        return self.finish_apply(run_id)
 
 state = BotState()
 
 _SESSIONS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'sessions')
-_KNOWN_PORTALS = ['chiletrabajos', 'laborum', 'getonyboard', 'computrabajo', 'linkedin', 'indeed']
+_KNOWN_PORTALS = ['chiletrabajos', 'laborum', 'getonyboard', 'computrabajo', 'linkedin']
+# Indeed excluido: bloqueado por Cloudflare Turnstile
 _PERSISTED_ENV_KEYS = {
     'USER_KEYWORDS',
     'USER_MAX_OFFERS',
-}
-_SENSITIVE_ENV_KEYS = {
+    'USER_CV_PATH',
     'USER_FULL_NAME',
     'USER_FIRST_NAME',
     'USER_LAST_NAME',
@@ -190,7 +289,6 @@ _SENSITIVE_ENV_KEYS = {
     'USER_CITY',
     'USER_LINKEDIN',
     'USER_PORTFOLIO',
-    'USER_CV_PATH',
     'USER_SALARY',
     'USER_YEARS_EXP',
     'USER_AVAILABILITY',
@@ -200,6 +298,12 @@ _SENSITIVE_ENV_KEYS = {
     'LABORUM_EMAIL',
     'LABORUM_PASSWORD',
 }
+# SECURITY: keys que NUNCA se devuelven al browser vía /api/config
+_SECRET_ENV_KEYS = {'LABORUM_PASSWORD', 'SECRET_KEY'}
+# Keys públicas = persistidas - secretas
+_PUBLIC_ENV_KEYS = _PERSISTED_ENV_KEYS - _SECRET_ENV_KEYS
+# Campos que se pasan al proceso del bot como env vars en tiempo de ejecución
+_SENSITIVE_ENV_KEYS = _PERSISTED_ENV_KEYS
 
 
 def update_env_values(env_path: str, updates: dict, remove_keys=None) -> None:
@@ -240,8 +344,8 @@ def update_env_values(env_path: str, updates: dict, remove_keys=None) -> None:
 
 def clean_form_value(value: str) -> str:
     value = str(value or '').strip()
-    for token in ("\\'", '\\"', "\\", "'", '"'):
-        value = value.replace(token, '')
+    # Solo quitar comillas al inicio/final — nunca tocar barras invertidas (rutas Windows)
+    value = value.strip("'\"")
     return re.sub(r'\s+', ' ', value).strip()
 
 
@@ -317,9 +421,181 @@ def run_bot_thread(portals, runtime_env=None):
 def index():
     return render_template('index.html')
 
+
+@app.route('/api/bot-state')
+def api_bot_state():
+    """Estado mínimo del bot para sincronización al reconectar el socket."""
+    scan_live  = state.scan_process  is not None and state.scan_process.poll()  is None
+    apply_live = state.apply_process is not None and state.apply_process.poll() is None
+    return jsonify({
+        "running":       state.is_active,
+        "scan_active":   state.scan_active,
+        "apply_active":  state.apply_active,
+        "process_active": scan_live or apply_live,
+    })
+
+
+def _resolve_portals(data: dict) -> str:
+    """Convierte el campo 'portals' (array) o 'portal' (string) en un string
+    separado por comas para pasarlo como --portal a main.py.
+    Si no se indica ninguno, retorna None (main.py usará _ALL_PORTALS).
+    SECURITY: valida cada nombre contra la whitelist de portales conocidos."""
+    _VALID = set(_KNOWN_PORTALS) | {'indeed'}
+    portals = data.get('portals')  # array del frontend
+    if portals and isinstance(portals, list) and portals:
+        safe = [p.strip().lower() for p in portals if p.strip().lower() in _VALID]
+        return ','.join(safe) if safe else None
+    single = data.get('portal', '').strip().lower()
+    return single if single in _VALID else None
+
+
+def _make_child_env(extra=None):
+    e = os.environ.copy()
+    e.update({'PYTHONUTF8': '1', 'PYTHONIOENCODING': 'utf-8', 'PYTHONLEGACYWINDOWSSTDIO': '0'})
+    if extra:
+        e.update({k: v for k, v in extra.items() if v})
+    return e
+
+def _stream_process(proc, on_stop_check, on_finish_log, finish_cb):
+    """Lee stdout del proceso línea a línea. Mata si stop_requested."""
+    for line in iter(proc.stdout.readline, ""):
+        if line:
+            state.add_log(line)
+        if on_stop_check():
+            state._kill_proc(proc)
+            break
+    proc.stdout.close()
+    proc.wait()
+    state.add_log(on_finish_log)
+    finish_cb()
+
+
+@app.route('/api/scan', methods=['POST'])
+def api_scan():
+    """Escanea ofertas sin postular — corre independiente del proceso de apply."""
+    if state.scan_active:
+        return jsonify({'ok': False, 'msg': 'Ya hay un scan en curso.'})
+    data    = request.json or {}
+    portals = _resolve_portals(data)
+    label   = portals or 'todos los portales'
+
+    def _run():
+        run_id = state.start_scan()
+        socketio.emit('bot_status', state.get_status() | {"status": "scan_started"}, namespace='/bot')
+        try:
+            cmd = [sys.executable, "-u", "main.py", "--scan"]
+            if portals:
+                cmd += ["--portal", portals]
+            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                    text=True, encoding='utf-8', errors='replace', bufsize=1,
+                                    env=_make_child_env())
+            state.set_scan_process(proc)
+            for line in iter(proc.stdout.readline, ""):
+                if line:
+                    state.add_log(line)
+                if state.stop_requested:
+                    state._kill_proc(proc)
+                    break
+            proc.stdout.close()
+            proc.wait()
+        finally:
+            state.add_log("\n[SCAN] Escaneo completado.\n")
+            if state.finish_scan(run_id):
+                socketio.emit('bot_status', state.get_status() | {"status": "scan_finished"}, namespace='/bot')
+
+    threading.Thread(target=_run, daemon=True).start()
+    return jsonify({'ok': True, 'msg': f'Scan iniciado para {label}'})
+
+
+@app.route('/api/postular', methods=['POST'])
+def api_postular():
+    """Postulación directa — recorre portales y aplica sin necesitar scan previo."""
+    if state.apply_active:
+        return jsonify({'ok': False, 'msg': 'Ya hay una postulación en curso.'})
+    data    = request.json or {}
+    portals = _resolve_portals(data)
+    label   = portals or 'todos los portales'
+    runtime_env = {}
+    if data.get('keywords'):
+        runtime_env['USER_KEYWORDS'] = str(data['keywords']).strip().strip("'\"")
+    if data.get('max_offers'):
+        runtime_env['USER_MAX_OFFERS'] = str(data['max_offers']).strip().strip("'\"")
+
+    def _run():
+        run_id = state.start_apply()
+        socketio.emit('bot_status', state.get_status() | {"status": "started"}, namespace='/bot')
+        try:
+            cmd = [sys.executable, "-u", "main.py", "--multi-keyword"]
+            if portals:
+                cmd += ["--portal", portals]
+            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                    text=True, encoding='utf-8', errors='replace', bufsize=1,
+                                    env=_make_child_env(runtime_env))
+            state.set_apply_process(proc)
+            for line in iter(proc.stdout.readline, ""):
+                if line:
+                    state.add_log(line)
+                if state.stop_requested:
+                    state._kill_proc(proc)
+                    break
+            proc.stdout.close()
+            proc.wait()
+        finally:
+            state.add_log("\n[POSTULAR] Postulación completada.\n")
+            if state.finish_apply(run_id):
+                socketio.emit('bot_status', state.get_status() | {"status": "finished"}, namespace='/bot')
+
+    threading.Thread(target=_run, daemon=True).start()
+    return jsonify({'ok': True, 'msg': f'Postulación iniciada para {label}'})
+
+
+@app.route('/api/apply_queue', methods=['POST'])
+def api_apply_queue():
+    """Aplica a ofertas en cola (scan previo). Independiente del scan."""
+    if state.apply_active:
+        return jsonify({'ok': False, 'msg': 'Ya hay una postulación en curso.'})
+    data    = request.json or {}
+    portals = _resolve_portals(data)
+    label   = portals or 'todos los portales'
+
+    def _run():
+        run_id = state.start_apply()
+        socketio.emit('bot_status', state.get_status() | {"status": "started"}, namespace='/bot')
+        try:
+            cmd = [sys.executable, "-u", "main.py", "--apply-queue"]
+            if portals:
+                cmd += ["--portal", portals]
+            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                    text=True, encoding='utf-8', errors='replace', bufsize=1,
+                                    env=_make_child_env())
+            state.set_apply_process(proc)
+            for line in iter(proc.stdout.readline, ""):
+                if line:
+                    state.add_log(line)
+                if state.stop_requested:
+                    state._kill_proc(proc)
+                    break
+            proc.stdout.close()
+            proc.wait()
+        finally:
+            state.add_log("\n[APPLY-QUEUE] Completado.\n")
+            if state.finish_apply(run_id):
+                socketio.emit('bot_status', state.get_status() | {"status": "finished"}, namespace='/bot')
+
+    threading.Thread(target=_run, daemon=True).start()
+    return jsonify({'ok': True, 'msg': f'Apply-queue iniciado para {label}'})
+
+
+@app.route('/api/keywords')
+def api_keywords():
+    """Devuelve KEYWORD_GROUPS desde config.py para que el dashboard los muestre como chips."""
+    from bot.config import KEYWORD_GROUPS
+    return jsonify(KEYWORD_GROUPS)
+
 @app.route('/api/config')
 def api_config():
-    """Devuelve las variables del .env como JSON para que el dashboard las cargue vía fetch."""
+    """Devuelve las variables del .env como JSON para que el dashboard las cargue vía fetch.
+    SECURITY: solo devuelve _PUBLIC_ENV_KEYS — nunca contraseñas ni SECRET_KEY."""
     env_data = {}
     if os.path.exists('.env'):
         with open('.env', 'r', encoding='utf-8') as f:
@@ -328,13 +604,13 @@ def api_config():
                 if '=' in line and not line.startswith('#'):
                     key, _, val = line.partition('=')
                     key = key.strip()
-                    if key in _PERSISTED_ENV_KEYS:
+                    if key in _PUBLIC_ENV_KEYS:
                         env_data[key] = val.strip()
     return jsonify(env_data)
 
 @app.route('/api/parse_cv', methods=['POST'])
 def api_parse_cv():
-    """Recibe un CV, extrae campos y borra el archivo temporal al terminar."""
+    """Recibe un CV, lo guarda en uploads/, extrae campos y actualiza USER_CV_PATH en .env."""
     tmp_path = None
     try:
         cv_file = request.files.get('cv_file')
@@ -345,22 +621,31 @@ def api_parse_cv():
         if ext not in ('.pdf', '.docx', '.doc'):
             return jsonify({"status": "error", "message": f"Formato no soportado: {ext}. Usa PDF o DOCX."})
 
-        with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
-            tmp_path = tmp.name
-            cv_file.save(tmp)
+        # Guardar permanentemente en uploads/ (el bot lo usa al postular)
+        os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
+        safe_name = "cv" + ext
+        permanent_path = os.path.abspath(os.path.join(app.config['UPLOAD_FOLDER'], safe_name))
+        cv_file.save(permanent_path)
 
+        # Parsear el CV desde la copia permanente
         from bot.cv_parser import parse_cv
-        fields = parse_cv(tmp_path)
+        fields = parse_cv(permanent_path)
 
-        return jsonify({"status": "success", "fields": fields, "filename": cv_file.filename})
+        # Persistir la ruta en .env para que el bot siempre la encuentre
+        env_path = os.path.abspath('.env')
+        if not os.path.exists(env_path):
+            open(env_path, 'w').close()
+        update_env_values(env_path, {'USER_CV_PATH': permanent_path})
+
+        return jsonify({
+            "status": "success",
+            "fields": fields,
+            "filename": cv_file.filename,
+            "cv_path": permanent_path,
+        })
     except Exception as e:
-        return jsonify({"status": "error", "message": str(e)})
-    finally:
-        if tmp_path and os.path.exists(tmp_path):
-            try:
-                os.remove(tmp_path)
-            except OSError:
-                pass
+        import logging as _log; _log.getLogger("applyjob").error("parse_cv error: %s", e)
+        return jsonify({"status": "error", "message": "Error al procesar el CV. Intenta de nuevo."})
 
 
 @app.route('/save_config', methods=['POST'])
@@ -373,7 +658,7 @@ def save_config():
             with open(env_path, 'w') as f: f.write("")
 
         updates = {}
-        
+
         if 'MAX_OFFERS' in data:
             updates['USER_MAX_OFFERS'] = clean_form_value(data.pop('MAX_OFFERS'))
 
@@ -381,11 +666,13 @@ def save_config():
             if key in _PERSISTED_ENV_KEYS and val.strip():
                 updates[key] = clean_form_value(val)
 
-        update_env_values(env_path, updates, remove_keys=_SENSITIVE_ENV_KEYS)
-        
-        return jsonify({"status": "success", "message": "Configuración operativa guardada. El CV y los datos personales no se guardan."})
+        # Guardar sin borrar ningún campo — todos se persisten en .env
+        update_env_values(env_path, updates)
+
+        return jsonify({"status": "success", "message": "Configuracion guardada correctamente."})
     except Exception as e:
-        return jsonify({"status": "error", "message": str(e)})
+        import logging as _log; _log.getLogger("applyjob").error("save_config error: %s", e)
+        return jsonify({"status": "error", "message": "Error al guardar configuración."})
 
 @app.route('/api/stats')
 def api_stats():
@@ -422,19 +709,404 @@ def api_stats():
                         "by_portal": {}, "by_status": {}, "error": str(e)})
 
 
-_PENDING_Q_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data', 'pending_questions.json')
+_RESTRICTIONS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data', 'portal_restrictions.json')
+
+@app.route('/api/portal-restrictions')
+def api_portal_restrictions():
+    """Devuelve el estado de restricciones por portal."""
+    try:
+        if not os.path.exists(_RESTRICTIONS_PATH):
+            return jsonify({})
+        with open(_RESTRICTIONS_PATH, encoding='utf-8') as f:
+            return jsonify(json.load(f))
+    except Exception as e:
+        return jsonify({"error": str(e)})
+
+@app.route('/api/portal-restrictions/clear', methods=['POST'])
+def api_clear_restriction():
+    """Limpia la restricción de un portal específico."""
+    portal = (request.json or {}).get('portal', '').strip().lower()
+    if not portal:
+        return jsonify({'ok': False, 'error': 'portal requerido'}), 400
+    try:
+        data = {}
+        if os.path.exists(_RESTRICTIONS_PATH):
+            with open(_RESTRICTIONS_PATH, encoding='utf-8') as f:
+                data = json.load(f)
+        if portal in data:
+            data[portal]['restricted'] = False
+            with open(_RESTRICTIONS_PATH, 'w', encoding='utf-8') as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+        return jsonify({'ok': True})
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e)}), 500
+
+
+@app.route('/api/recent')
+def api_recent():
+    """Devuelve las últimas N postulaciones desde la DB SQLite."""
+    try:
+        limit = min(int(request.args.get('limit', 30)), 500)  # SECURITY: cap máximo
+        from bot.state import get_recent
+        rows = get_recent(limit)
+        return jsonify(rows)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/db-stats')
+def api_db_stats():
+    """Estadísticas acumuladas de la DB (totales históricos)."""
+    try:
+        from bot.state import get_stats
+        return jsonify(get_stats())
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+_PENDING_Q_PATH   = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data', 'pending_questions.json')
+_QA_PATH          = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data', 'question_answers.json')
+_QA_CACHE_PATH    = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data', 'qa_cache.json')
+_QUICK_LINKS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data', 'quick_links.json')
+_PROFILE_KB_PATH  = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data', 'profile_kb.json')
+_ENV_PATH         = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.env')
+
+
+# ---------------------------------------------------------------------------
+# Quick Links API — ofertas de bodega/operario para postulación manual
+# ---------------------------------------------------------------------------
+
+@app.route('/api/quick-links')
+def api_quick_links():
+    """Devuelve los links rápidos de bodega pendientes (no descartados)."""
+    try:
+        if not os.path.exists(_QUICK_LINKS_PATH):
+            return jsonify([])
+        with open(_QUICK_LINKS_PATH, encoding='utf-8') as f:
+            links = json.load(f)
+        active = [l for l in links if not l.get('dismissed')]
+        return jsonify(active)
+    except Exception as e:
+        return jsonify([])
+
+
+@app.route('/api/quick-links/dismiss', methods=['POST'])
+def api_quick_links_dismiss():
+    """Marca un link como descartado (ya postulado o no interesa)."""
+    data = request.json or {}
+    url  = data.get('url', '').strip()
+    if not url:
+        return jsonify({'ok': False, 'error': 'url requerida'}), 400
+    try:
+        if not os.path.exists(_QUICK_LINKS_PATH):
+            return jsonify({'ok': True})
+        with open(_QUICK_LINKS_PATH, encoding='utf-8') as f:
+            links = json.load(f)
+        for l in links:
+            if l.get('url') == url:
+                l['dismissed'] = True
+        with open(_QUICK_LINKS_PATH, 'w', encoding='utf-8') as f:
+            json.dump(links, f, ensure_ascii=False, indent=2)
+        return jsonify({'ok': True})
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e)}), 500
+
+
+@app.route('/api/quick-links/clear', methods=['POST'])
+def api_quick_links_clear():
+    """Descarta todos los links activos."""
+    try:
+        if os.path.exists(_QUICK_LINKS_PATH):
+            with open(_QUICK_LINKS_PATH, encoding='utf-8') as f:
+                links = json.load(f)
+            for l in links:
+                l['dismissed'] = True
+            with open(_QUICK_LINKS_PATH, 'w', encoding='utf-8') as f:
+                json.dump(links, f, ensure_ascii=False, indent=2)
+        return jsonify({'ok': True})
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e)}), 500
+
+
+def _normalize_srv(text: str) -> str:
+    """Normaliza texto para comparaciones: minúsculas, sin tildes, sin espacios extra."""
+    import unicodedata as _ud
+    nfkd = _ud.normalize("NFKD", text.lower())
+    ascii_t = nfkd.encode("ascii", "ignore").decode("ascii")
+    return re.sub(r"\s+", " ", ascii_t).strip()
+
+
+def _load_merged_qa() -> dict:
+    """Carga y fusiona question_answers.json + qa_cache.json (normalizado)."""
+    result = {}
+    for path in (_QA_PATH, _QA_CACHE_PATH):
+        if not os.path.exists(path):
+            continue
+        try:
+            with open(path, encoding='utf-8') as f:
+                for k, v in json.load(f).items():
+                    if not k or k.startswith('_') or k.startswith('─') or not v:
+                        continue
+                    nk = _normalize_srv(k)
+                    if nk:
+                        result[nk] = v
+        except Exception:
+            pass
+    return result
+
+
+def _load_profile_kb_qa() -> dict:
+    """Carga los qa_overrides de profile_kb.json (todas las categorías)."""
+    result = {}
+    if not os.path.exists(_PROFILE_KB_PATH):
+        return result
+    try:
+        with open(_PROFILE_KB_PATH, encoding='utf-8') as f:
+            kb = json.load(f)
+        for category in kb.values():
+            for q, a in (category.get('qa_overrides') or {}).items():
+                nk = _normalize_srv(q)
+                if nk and a:
+                    result[nk] = a
+    except Exception:
+        pass
+    return result
+
+
+def _load_profile_env_qa() -> dict:
+    """
+    Genera respuestas básicas desde las variables USER_* del .env.
+    Cubre preguntas sobre nombre, email, teléfono, ciudad, salario, etc.
+    """
+    result: dict = {}
+    cfg: dict = {}
+
+    # Intentar leer .env
+    if os.path.exists(_ENV_PATH):
+        try:
+            with open(_ENV_PATH, encoding='utf-8') as f:
+                for line in f:
+                    line = line.strip()
+                    if '=' in line and not line.startswith('#'):
+                        k, _, v = line.partition('=')
+                        cfg[k.strip()] = v.strip().strip('"').strip("'")
+        except Exception:
+            pass
+
+    # También leer desde config actual de la app
+    try:
+        from bot.config import USER_PROFILE
+        cfg.update({k: str(v) for k, v in USER_PROFILE.items() if v})
+    except Exception:
+        pass
+
+    # Mapeo: palabras clave de pregunta → valor del perfil
+    name     = cfg.get('USER_FULL_NAME') or f"{cfg.get('USER_FIRST_NAME','')} {cfg.get('USER_LAST_NAME','')}".strip()
+    email    = cfg.get('USER_EMAIL', '')
+    phone    = cfg.get('USER_PHONE', cfg.get('USER_PHONE_NUMBER', ''))
+    city     = cfg.get('USER_CITY', 'Maipú, Santiago')
+    salary   = cfg.get('USER_SALARY', '850000')
+    avail    = cfg.get('USER_AVAILABILITY', 'Inmediata')
+    english  = cfg.get('USER_ENGLISH_LEVEL', 'Básico')
+    wmode    = cfg.get('USER_WORK_MODE', 'Presencial')
+    yexp     = cfg.get('USER_YEARS_EXP', '0')
+
+    mappings = []
+    if name:
+        mappings += [
+            ("nombre completo", name), ("your name", name),
+            ("nombre y apellido", name), ("tu nombre", name),
+        ]
+    if email:
+        mappings += [
+            ("correo electronico", email), ("email", email),
+            ("tu correo", email), ("email address", email),
+        ]
+    if phone:
+        mappings += [
+            ("telefono", phone), ("numero de telefono", phone),
+            ("celular", phone), ("phone number", phone),
+            ("numero celular", phone),
+        ]
+    if city:
+        mappings += [
+            ("ciudad de residencia", city), ("donde vives", city),
+            ("ciudad", city), ("ubicacion", city),
+        ]
+    if salary:
+        mappings += [
+            ("pretension salarial", salary), ("pretension de renta", salary),
+            ("renta esperada", salary), ("expectativa salarial", salary),
+            ("cuanto quieres ganar", salary),
+        ]
+    if avail:
+        mappings += [
+            ("disponibilidad", avail), ("cuando puedes empezar", avail),
+            ("fecha de incorporacion", avail), ("disponibilidad de incorporacion", avail),
+        ]
+    if english:
+        mappings += [
+            ("nivel de ingles", english), ("english level", english),
+            ("hablas ingles", english),
+        ]
+    if wmode:
+        mappings += [
+            ("modalidad de trabajo", wmode), ("modalidad preferida", wmode),
+            ("trabajo presencial o remoto", wmode),
+        ]
+    if yexp:
+        mappings += [
+            ("anos de experiencia", yexp), ("years of experience", yexp),
+            ("cuantos anos de experiencia tienes", yexp),
+        ]
+
+    for q, a in mappings:
+        nk = _normalize_srv(q)
+        if nk:
+            result[nk] = a
+
+    return result
+
+
+def _suggest_from_cache(norm: str) -> str:
+    """
+    Busca la mejor respuesta para una pregunta normalizada.
+    Jerarquía:
+      1. question_answers.json + qa_cache.json (exacto)
+      2. profile_kb.json qa_overrides
+      3. Variables USER_* del .env / config
+      4. Substring match en todos los anteriores
+      5. Word-overlap ≥ 60% en todos los anteriores
+    """
+    # Construir mapa unificado: QA principal > profile_kb > env
+    qa = _load_merged_qa()
+    kb_qa = _load_profile_kb_qa()
+    env_qa = _load_profile_env_qa()
+
+    # Fusionar (QA principal tiene prioridad)
+    combined: dict = {}
+    combined.update(env_qa)
+    combined.update(kb_qa)
+    combined.update(qa)  # máxima prioridad
+
+    # 1. Match exacto
+    if norm in combined:
+        return combined[norm]
+
+    # 2. Substring
+    for k, v in combined.items():
+        if len(k) >= 15 and k in norm:
+            return v
+        if len(norm) >= 15 and norm in k:
+            return v
+
+    # 3. Word-overlap ≥ 60%
+    _STOP = {"de","la","el","en","y","a","con","su","tu","un","una","es","se",
+             "si","no","para","que","por","al","del","lo","las","los","has",
+             "have","your","you","the","and","or","is","are","do","did"}
+    words_n = set(norm.split()) - _STOP
+    best_v, best_s = None, 0.0
+    for k, v in combined.items():
+        words_k = set(k.split()) - _STOP
+        if not words_n or not words_k:
+            continue
+        shared = words_n & words_k
+        score = len(shared) / max(len(words_n), len(words_k))
+        if score > best_s:
+            best_s, best_v = score, v
+    return best_v if best_s >= 0.55 else ""
+
+
+_SCAN_QUEUE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data', 'scan_queue.json')
+
+@app.route('/api/scan-queue')
+def api_scan_queue():
+    """Devuelve cantidad y primeras entradas de la cola de ofertas pendientes."""
+    try:
+        if not os.path.exists(_SCAN_QUEUE_PATH):
+            return jsonify({"count": 0, "items": []})
+        with open(_SCAN_QUEUE_PATH, encoding='utf-8') as f:
+            queue = json.load(f)
+        items = [{"url": e.get("url",""), "title": e.get("title",""), "portal": e.get("portal","")} for e in queue[:10]]
+        return jsonify({"count": len(queue), "items": items})
+    except Exception as e:
+        return jsonify({"count": 0, "items": [], "error": str(e)})
+
 
 @app.route('/api/pending-questions')
 def api_pending_questions():
-    """Devuelve la lista de preguntas pendientes de respuesta del usuario."""
+    """Devuelve la lista de preguntas pendientes de respuesta del usuario.
+    Incluye 'suggested_answer' si hay coincidencia en qa_cache."""
     try:
         if not os.path.exists(_PENDING_Q_PATH):
             return jsonify([])
         with open(_PENDING_Q_PATH, encoding='utf-8') as f:
             data = json.load(f)
+        # Enriquecer con sugerencia del cache para preguntas sin respuesta
+        for entry in data:
+            if not entry.get('answered') and not entry.get('answer'):
+                norm = entry.get('norm', '')
+                if norm:
+                    entry['suggested_answer'] = _suggest_from_cache(norm)
         return jsonify(data)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/pending-questions/auto-fill', methods=['POST'])
+def api_auto_fill_questions():
+    """
+    Auto-rellena preguntas pendientes usando (en orden de prioridad):
+      1. question_answers.json + qa_cache.json
+      2. profile_kb.json qa_overrides
+      3. Variables USER_* del .env / config
+
+    Retorna detalle de cuántas se llenaron y desde qué fuente.
+    """
+    try:
+        if not os.path.exists(_PENDING_Q_PATH):
+            return jsonify({"filled": 0, "remaining": 0, "details": []})
+        with open(_PENDING_Q_PATH, encoding='utf-8') as f:
+            pending = json.load(f)
+
+        # Cargar QA principal para persistir nuevas respuestas
+        qa: dict = {}
+        if os.path.exists(_QA_PATH):
+            try:
+                with open(_QA_PATH, encoding='utf-8') as f:
+                    qa = json.load(f)
+            except Exception:
+                pass
+
+        filled = 0
+        details = []
+        for entry in pending:
+            if entry.get('answered'):
+                continue
+            norm = entry.get('norm', '')
+            if not norm:
+                continue
+            suggestion = _suggest_from_cache(norm)
+            if suggestion:
+                entry['answer']   = suggestion
+                entry['answered'] = True
+                entry['auto_answered'] = True   # marcar como auto-respondido
+                filled += 1
+                qa[norm] = suggestion           # aprender para futuros runs
+                details.append({
+                    "label": entry.get('label', norm)[:60],
+                    "answer": suggestion[:80],
+                })
+
+        os.makedirs(os.path.dirname(_PENDING_Q_PATH), exist_ok=True)
+        with open(_PENDING_Q_PATH, 'w', encoding='utf-8') as f:
+            json.dump(pending, f, ensure_ascii=False, indent=2)
+        with open(_QA_PATH, 'w', encoding='utf-8') as f:
+            json.dump(qa, f, ensure_ascii=False, indent=2)
+
+        remaining = sum(1 for e in pending if not e.get('answered'))
+        return jsonify({"ok": True, "filled": filled, "remaining": remaining, "details": details})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
 
 @app.route('/api/pending-questions/answer', methods=['POST'])
 def api_answer_question():
@@ -466,6 +1138,59 @@ def api_answer_question():
         with open(_PENDING_Q_PATH, 'w', encoding='utf-8') as f:
             json.dump(existing, f, ensure_ascii=False, indent=2)
 
+        # Persistir también en question_answers.json para auto-fill en futuros runs
+        qa: dict = {}
+        if os.path.exists(_QA_PATH):
+            try:
+                with open(_QA_PATH, encoding='utf-8') as f:
+                    qa = json.load(f)
+            except Exception:
+                pass
+        qa[norm] = answer
+        with open(_QA_PATH, 'w', encoding='utf-8') as f:
+            json.dump(qa, f, ensure_ascii=False, indent=2)
+
+        return jsonify({"ok": True})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route('/api/save-qa', methods=['POST'])
+def api_save_qa():
+    """Guarda directamente una respuesta en question_answers.json (sin necesitar pending list)."""
+    try:
+        payload = request.get_json(force=True)
+        norm    = (payload.get('norm') or '').strip().lower()[:200]
+        answer  = (payload.get('answer') or '').strip()
+        if not norm or not answer:
+            return jsonify({"ok": False, "error": "norm y answer requeridos"}), 400
+
+        qa: dict = {}
+        if os.path.exists(_QA_PATH):
+            try:
+                with open(_QA_PATH, encoding='utf-8') as f:
+                    qa = json.load(f)
+            except Exception:
+                pass
+        qa[norm] = answer
+        os.makedirs(os.path.dirname(_QA_PATH), exist_ok=True)
+        with open(_QA_PATH, 'w', encoding='utf-8') as f:
+            json.dump(qa, f, ensure_ascii=False, indent=2)
+
+        # También marcar como respondida en pending si existe
+        if os.path.exists(_PENDING_Q_PATH):
+            try:
+                with open(_PENDING_Q_PATH, encoding='utf-8') as f:
+                    pending = json.load(f)
+                for entry in pending:
+                    if entry.get('norm') == norm:
+                        entry['answered'] = True
+                        entry['answer']   = answer
+                with open(_PENDING_Q_PATH, 'w', encoding='utf-8') as f:
+                    json.dump(pending, f, ensure_ascii=False, indent=2)
+            except Exception:
+                pass
+
         return jsonify({"ok": True})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
@@ -479,33 +1204,60 @@ def handle_connect():
 
 @socketio.on('start_master', namespace='/bot')
 def handle_start(data):
-    print(f"[DEBUG] Solicitud de inicio recibida: {data}")
-    status = state.get_status()
-    if not status["running"]:
-        portals = [p for p in data.get('portals', []) if p in _KNOWN_PORTALS]
-        if not portals:
-            emit('bot_status', state.get_status() | {"status": "idle"})
-            return
-        runtime_env = {
-            key: clean_form_value(value)
-            for key, value in (data.get('profile') or {}).items()
-            if key in _SENSITIVE_ENV_KEYS and clean_form_value(value)
-        }
-        if data.get('keywords'):
-            runtime_env['USER_KEYWORDS'] = clean_form_value(data.get('keywords'))
-        if data.get('max_offers'):
-            runtime_env['USER_MAX_OFFERS'] = clean_form_value(data.get('max_offers'))
-        print(f"[DEBUG] Lanzando hilo para portales: {portals}")
-        socketio.start_background_task(run_bot_thread, portals, runtime_env)
-        socketio.emit('bot_status', {"status": "starting", "running": True, "stats": state.stats}, namespace='/bot')
-    else:
-        print("[DEBUG] El bot ya está en ejecución; se ignora la solicitud.")
+    """Botón Postular → postulación directa independiente (no necesita scan previo)."""
+    print(f"[DEBUG] Solicitud postular recibida: {data}")
+    if state.apply_active:
+        emit('bot_status', state.get_status() | {"status": "already_running"})
+        return
+    portals = [p for p in data.get('portals', []) if p in _KNOWN_PORTALS]
+    if not portals:
+        emit('bot_status', state.get_status() | {"status": "idle"})
+        return
+    runtime_env = {
+        key: clean_form_value(value)
+        for key, value in (data.get('profile') or {}).items()
+        if key in _SENSITIVE_ENV_KEYS and clean_form_value(value)
+    }
+    if data.get('keywords'):
+        runtime_env['USER_KEYWORDS'] = clean_form_value(data.get('keywords'))
+    if data.get('max_offers'):
+        runtime_env['USER_MAX_OFFERS'] = clean_form_value(data.get('max_offers'))
+
+    def _run():
+        run_id = state.start_apply()
+        socketio.emit('bot_status', state.get_status() | {"status": "started"}, namespace='/bot')
+        try:
+            cmd = [sys.executable, "-u", "main.py", "--multi-keyword",
+                   "--portal", ",".join(portals)]
+            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                    text=True, encoding='utf-8', errors='replace', bufsize=1,
+                                    env=_make_child_env(runtime_env))
+            state.set_apply_process(proc)
+            for line in iter(proc.stdout.readline, ""):
+                if line:
+                    state.add_log(line)
+                if state.stop_requested:
+                    state._kill_proc(proc)
+                    break
+            proc.stdout.close()
+            proc.wait()
+        finally:
+            state.add_log("\n[POSTULAR] Postulación completada.\n")
+            if state.finish_apply(run_id):
+                socketio.emit('bot_status', state.get_status() | {"status": "finished"}, namespace='/bot')
+
+    threading.Thread(target=_run, daemon=True).start()
+    socketio.emit('bot_status', state.get_status() | {"status": "starting"}, namespace='/bot')
 
 @socketio.on('stop_master', namespace='/bot')
 def handle_stop():
-    state.stop_process()
+    killed = state.stop_process()
     state.add_log("\n[SISTEMA] Deteniendo ejecución a solicitud del usuario.\n")
-    socketio.emit('bot_status', state.get_status() | {"status": "stopped"}, namespace='/bot')
+    # Pequeña pausa para que los procesos hijos terminen antes de notificar al frontend
+    def _emit_stopped():
+        time.sleep(1.2)
+        socketio.emit('bot_status', state.get_status() | {"status": "stopped"}, namespace='/bot')
+    threading.Thread(target=_emit_stopped, daemon=True).start()
 
 if __name__ == '__main__':
     port = 5000

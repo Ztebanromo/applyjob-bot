@@ -2,25 +2,31 @@
 Portal específico de LinkedIn Easy Apply.
 
 Flujo real de LinkedIn:
-  1. Página de búsqueda → lista de jobs en panel izquierdo
-  2. Click en card → panel derecho muestra detalles (no navega)
-  3. Click "Easy Apply" → modal multi-step se abre
-  4. Cada step: fill form → Next → hasta Submit application
+  1. Página de búsqueda -> lista de jobs en panel izquierdo
+  2. Click en card -> panel derecho muestra detalles (no navega)
+  3. Click "Easy Apply" -> modal multi-step se abre
+  4. Cada step: fill form -> Next -> hasta Submit application
   5. Detectar: step counter, preguntas de screening, dropdowns
 
 Casos especiales manejados:
-  - Jobs sin Easy Apply (solo "Apply") → skip
-  - Modal con >6 pasos → skip (demasiado complejo)
-  - CAPTCHA / "Verify you're human" → pausa y screenshot
-  - "Already applied" banner → skip
+  - Jobs sin Easy Apply (solo "Apply") -> skip
+  - Modal con >6 pasos -> skip (demasiado complejo)
+  - CAPTCHA / "Verify you're human" -> pausa y screenshot
+  - "Already applied" banner -> skip
 """
-import re  # BUG FIX: import a nivel de módulo, no dentro de función
+import re
+import random
 import logging
 from playwright.sync_api import Page, TimeoutError as PlaywrightTimeout
 
 from .base import BasePortal
-from ..stealth_utils import human_delay, human_click, take_error_screenshot, micro_delay
+from ..stealth_utils import (
+    human_delay, human_click, take_error_screenshot, micro_delay,
+    portal_action_delay, reading_pause, pre_form_pause,
+    scroll_to_and_pause, human_type_field, human_click_element,
+)
 from ..form_filler import fill_form
+from ..config import schedule_ok, experience_ok, practica_ok, topic_ok
 
 log = logging.getLogger("applyjob.linkedin")
 
@@ -55,6 +61,11 @@ SEL = {
 
 MAX_MODAL_STEPS = 6
 
+# Máximo de postulaciones LinkedIn por sesión de bot
+# (para reducir la huella de automatización y evitar checkpoint)
+# Bajado a 3 — la cuenta ya recibió restricción por automatización.
+LINKEDIN_MAX_PER_SESSION = 3
+
 # Valores que indican respuesta afirmativa en dropdowns de screening
 YES_VALUES = {"yes", "si", "sí", "true", "1", "authorized", "yes, i am authorized",
               "i am authorized", "sí, estoy autorizado"}
@@ -65,6 +76,10 @@ NO_VALUES = {"no", "false", "0", "not authorized", "no estoy autorizado",
 
 
 class LinkedInPortal(BasePortal):
+
+    def __init__(self, config: dict, profile: dict, dry_run: bool = False):
+        super().__init__(config, profile, dry_run)
+        self._session_applied = 0  # contador anti-bloqueo
 
     def _dismiss_auth_popup(self, page: Page) -> None:
         """
@@ -124,15 +139,36 @@ class LinkedInPortal(BasePortal):
 
         cards = page.query_selector_all(SEL["job_card"])
         job_ids = []
+        skipped_schedule = 0
+        skipped_exp = 0
         for card in cards:
             try:
                 job_id = (card.get_attribute("data-job-id")
                           or card.get_attribute("data-occludable-job-id"))
-                if job_id and job_id not in job_ids:
-                    job_ids.append(job_id)
+                if not job_id or job_id in job_ids:
+                    continue
+
+                card_text = ""
+                try:
+                    card_text = (card.text_content() or "")[:500]
+                except Exception:
+                    pass
+
+                if not schedule_ok(card_text):
+                    log.info("  [linkedin] Descartado (horario): %s", card_text[:80].strip().replace("\n", " "))
+                    skipped_schedule += 1
+                    continue
+                if not experience_ok(card_text):
+                    log.info("  [linkedin] Descartado (senior/exp): %s", card_text[:80].strip().replace("\n", " "))
+                    skipped_exp += 1
+                    continue
+
+                job_ids.append(job_id)
             except Exception as exc:
                 log.debug("Error leyendo job_id de card: %s", exc)
                 continue
+        if skipped_schedule or skipped_exp:
+            log.info("  [linkedin] %d horario + %d senior descartados", skipped_schedule, skipped_exp)
         return job_ids
 
     def get_job_url(self, page: Page, job_id: str) -> str:
@@ -175,7 +211,7 @@ class LinkedInPortal(BasePortal):
             except Exception:
                 return f"job_{job_id}"
 
-        # ── Intento 1: li por atributo ──
+        # -- Intento 1: li por atributo --
         try:
             card = page.wait_for_selector(card_sel, timeout=5_000)
             card.scroll_into_view_if_needed()
@@ -186,7 +222,7 @@ class LinkedInPortal(BasePortal):
         except PlaywrightTimeout:
             pass  # card virtualizada — intentar por link
 
-        # ── Intento 2: link href ──
+        # -- Intento 2: link href --
         try:
             link = page.wait_for_selector(link_sel, timeout=4_000)
             link.scroll_into_view_if_needed()
@@ -345,7 +381,7 @@ class LinkedInPortal(BasePortal):
                 const isVisible = b => !b.disabled && b.offsetParent !== null && b.getBoundingClientRect().width > 0;
                 const getText   = b => (b.textContent || '').trim().toLowerCase() + '|' + (b.getAttribute('aria-label') || '').toLowerCase();
 
-                // ── Prioridad 1: botón primario en el FOOTER del modal ──
+                // -- Prioridad 1: botón primario en el FOOTER del modal --
                 // Este es el botón de acción principal (Enviar / Siguiente / Revisar).
                 // Es más confiable que buscar por texto porque siempre está en el footer.
                 const footer = modal.querySelector(
@@ -364,7 +400,7 @@ class LinkedInPortal(BasePortal):
                     }
                 }
 
-                // ── Prioridad 2: cualquier botón visible con texto enviar/submit ──
+                // -- Prioridad 2: cualquier botón visible con texto enviar/submit --
                 const btns = Array.from(modal.querySelectorAll('button')).filter(isVisible);
 
                 let target = btns.find(b => {
@@ -376,7 +412,7 @@ class LinkedInPortal(BasePortal):
                     return {found: true, text: target.textContent.trim(), isSubmit: true};
                 }
 
-                // ── Prioridad 3: revisar / review ──
+                // -- Prioridad 3: revisar / review --
                 target = btns.find(b => {
                     const t = getText(b);
                     return t.includes('revisar') || t.includes('review');
@@ -386,7 +422,7 @@ class LinkedInPortal(BasePortal):
                     return {found: true, text: target.textContent.trim(), isSubmit: false};
                 }
 
-                // ── Prioridad 4: siguiente / next / continue ──
+                // -- Prioridad 4: siguiente / next / continue --
                 target = btns.find(b => {
                     const t = getText(b);
                     return t.includes('siguiente') || t.includes('next') ||
@@ -397,7 +433,7 @@ class LinkedInPortal(BasePortal):
                     return {found: true, text: target.textContent.trim(), isSubmit: false};
                 }
 
-                // ── Prioridad 5: cualquier artdeco-button--primary fuera del footer ──
+                // -- Prioridad 5: cualquier artdeco-button--primary fuera del footer --
                 target = btns.find(b => b.classList.contains('artdeco-button--primary'));
                 if (target) {
                     const txt = getText(target);
@@ -418,7 +454,7 @@ class LinkedInPortal(BasePortal):
             btn_text = (result.get("text") or "").strip()
             is_submit = result.get("isSubmit", False)
             log.info("  _advance_modal: '%s' (submit=%s)", btn_text[:40], is_submit)
-            human_delay(2.0, 3.5)
+            portal_action_delay("linkedin")   # pausa tras click: 1.8–4.0s
             return not is_submit   # False = modal cerrado (enviado), True = sigue abierto
 
         log.warning("  _advance_modal: sin botón. Botones presentes: %s",
@@ -492,7 +528,7 @@ class LinkedInPortal(BasePortal):
             except PlaywrightTimeout:
                 return False
 
-        # ── Intento 1: JS click en el botón del panel derecho (mitad derecha) ──
+        # -- Intento 1: JS click en el botón del panel derecho (mitad derecha) --
         # Busca el botón "Solicitud sencilla" posicionado en la mitad derecha
         # del viewport para evitar clicar elementos del panel izquierdo.
         try:
@@ -528,7 +564,7 @@ class LinkedInPortal(BasePortal):
         except Exception:
             pass
 
-        # ── Intento 2: Playwright locator con texto visible ──
+        # -- Intento 2: Playwright locator con texto visible --
         try:
             loc = page.get_by_role("button", name="Solicitud sencilla").first
             loc.scroll_into_view_if_needed()
@@ -540,7 +576,7 @@ class LinkedInPortal(BasePortal):
         except Exception:
             pass
 
-        # ── Intento 3: focus + Enter por teclado (bypasa pointer-events) ──
+        # -- Intento 3: focus + Enter por teclado (bypasa pointer-events) --
         try:
             btn = page.query_selector(SEL["easy_apply_btn"])
             if btn:
@@ -569,19 +605,39 @@ class LinkedInPortal(BasePortal):
             status: 'applied' | 'skipped_*' | 'error: ...'
             title:  título del job o '' si no se pudo extraer
         """
-        # ── Sin navegación: permanecemos en la search page todo el tiempo ──
+        # ── Límite de sesión ─────────────────────────────────────────────────
+        if self._session_applied >= LINKEDIN_MAX_PER_SESSION:
+            log.info("  [linkedin] Límite de sesión alcanzado (%d) — pausando LinkedIn.",
+                     LINKEDIN_MAX_PER_SESSION)
+            print(f"\n🛑  LinkedIn: límite de {LINKEDIN_MAX_PER_SESSION} postulaciones/sesión"
+                  " alcanzado. Continuando con otros portales.")
+            return "error: linkedin_blocked", ""
+
+        # ── Detectar checkpoint / bloqueo ANTES de cualquier acción ─────────
+        cur = page.url
+        _BLOCK_SIGNALS = ("/checkpoint", "/authwall", "/uas/", "/challenge")
+        if any(x in cur for x in _BLOCK_SIGNALS):
+            log.warning("  [linkedin] BLOQUEADO por LinkedIn — checkpoint detectado: %s", cur[:80])
+            print("\n⚠️  LinkedIn detectó automatización. Acepta manualmente en el navegador"
+                  " y espera a que el bot reanude (o detén LinkedIn por hoy).")
+            return "error: linkedin_blocked", ""
+
+        # -- Sin navegación: permanecemos en la search page todo el tiempo --
         # Si por alguna razón salimos de la búsqueda, volvemos.
         if "linkedin.com/jobs/search" not in page.url:
             try:
                 page.goto(self.config["url_busqueda"],
                           wait_until="domcontentloaded", timeout=20_000)
-                human_delay(2.0, 3.0)
+                human_delay(3.0, 5.0)
             except PlaywrightTimeout:
                 return "error: card_not_loaded", ""
 
-        # Detectar redirect a login / authwall
+        # Verificar de nuevo tras redirigir
         cur = page.url
-        if any(x in cur for x in ("/login", "/checkpoint", "/authwall", "/uas/", "/signup")):
+        if any(x in cur for x in ("/login", *_BLOCK_SIGNALS, "/signup")):
+            if "/checkpoint" in cur or "/challenge" in cur:
+                log.warning("  [linkedin] BLOQUEADO tras redirección: %s", cur[:80])
+                return "error: linkedin_blocked", ""
             log.warning("  Redirigido a auth: %s", cur)
             return "error: login_required", ""
 
@@ -596,10 +652,9 @@ class LinkedInPortal(BasePortal):
             try:
                 el = page.wait_for_selector(sel, timeout=4_000)
                 if el:
-                    el.scroll_into_view_if_needed()
-                    micro_delay()
-                    el.click()
-                    human_delay(1.5, 2.5)
+                    scroll_to_and_pause(page, el, "linkedin")   # scroll natural al elemento
+                    human_click_element(page, el, "linkedin")   # hover + click con offset
+                    portal_action_delay("linkedin")             # pausa calibrada LinkedIn
                     card_clicked = True
                     break
             except PlaywrightTimeout:
@@ -623,18 +678,18 @@ class LinkedInPortal(BasePortal):
                 }}
             """)
             if clicked:
-                human_delay(1.5, 2.5)
+                portal_action_delay("linkedin")
                 card_clicked = True
 
         if not card_clicked:
-            # ── Fallback final: navegar vía currentJobId URL param ──
+            # -- Fallback final: navegar vía currentJobId URL param --
             # LinkedIn virtualiza cards fuera del viewport — si ningún selector
             # encuentra el elemento, forzamos la carga del job vía URL param.
             try:
                 search_base = self.config["url_busqueda"]
                 job_url = f"{search_base}&currentJobId={job_id}"
                 page.goto(job_url, wait_until="domcontentloaded", timeout=20_000)
-                human_delay(2.0, 3.0)
+                portal_action_delay("linkedin")
                 # Verificar que cargó el job correcto
                 page.wait_for_function(
                     f"() => window.location.href.includes('{job_id}')",
@@ -654,7 +709,7 @@ class LinkedInPortal(BasePortal):
                 timeout=6_000,
             )
         except Exception:
-            # URL no cambió → el click no registró correctamente.
+            # URL no cambió -> el click no registró correctamente.
             # Intento forzado: click en el link href directamente
             try:
                 link = page.query_selector(f"a[href*='/jobs/view/{job_id}']")
@@ -682,12 +737,45 @@ class LinkedInPortal(BasePortal):
 
         log.info("  [LinkedIn] %s", title)
 
+        # Simular lectura del título + descripción antes de aplicar
+        # Un humano lee la oferta antes de decidir si postula
+        reading_pause(len(title) * 6 + 180, "linkedin")
+
+        # Filtros de horario y experiencia en descripción completa
+        try:
+            desc_text = page.evaluate("""
+                () => {
+                    const d = document.querySelector(
+                        '.jobs-description-content__text, #job-details, ' +
+                        '[class*="description__text"], .jobs-description'
+                    );
+                    return d ? d.innerText : '';
+                }
+            """) or ""
+            full_text = title + " " + desc_text
+            if not practica_ok(full_text):
+                log.info("  [linkedin] Descartada (práctica): '%s'", title)
+                return "skipped_practica", title
+            if not schedule_ok(full_text):
+                log.info("  [linkedin] Descartada (horario): '%s'", title)
+                print(f"  [FILTRO] Descartada por turno incompatible: {title}")
+                return "skipped_schedule", title
+            if not experience_ok(full_text):
+                log.info("  [linkedin] Descartada (senior/experiencia): '%s'", title)
+                print(f"  [FILTRO] Descartada por nivel/experiencia: {title}")
+                return "skipped_experience", title
+            if not topic_ok(full_text):
+                log.info("  [linkedin] Descartada (fuera de rubro): '%s'", title)
+                return "skipped_topic", title
+        except Exception:
+            pass
+
         if self._is_already_applied(page):
-            log.info("  → ya postulado, skip")
+            log.info("  -> ya postulado, skip")
             return "skipped_already_applied", title
 
         if not self._has_easy_apply(page):
-            log.info("  → sin Easy Apply, skip")
+            log.info("  -> sin Easy Apply, skip")
             return "skipped_no_easy_apply", title
 
         # Abrir modal con estrategia multinivel (evita scaffold-layout)
@@ -725,18 +813,29 @@ class LinkedInPortal(BasePortal):
                 self._close_modal_safely(page)
                 return f"skipped_complex_{total_steps}_steps", title
 
+            # Simular que el usuario "lee" el paso del formulario antes de rellenar
+            pre_form_pause("linkedin")
+            # Scroll suave dentro del modal (comportamiento natural)
+            try:
+                modal_el = page.query_selector(SEL["modal"])
+                if modal_el:
+                    page.mouse.wheel(0, random.randint(80, 200))
+            except Exception:
+                pass
+
             self._fill_modal_step(page)
-            human_delay(1.0, 2.0)
+            portal_action_delay("linkedin")    # pausa calibrada para LinkedIn tras rellenar
 
             modal_still_open = self._advance_modal(page)
             if not modal_still_open:
-                log.info("  ✓ Aplicación enviada")
-                human_delay(1.0, 2.0)
+                log.info("  [OK] Aplicación enviada")
+                self._session_applied += 1
+                portal_action_delay("linkedin")   # pausa post-envío natural
                 self._dismiss_post_apply_dialog(page)
                 return "applied", title
 
             if not page.query_selector(SEL["modal"]):
-                human_delay(1.0, 2.0)
+                portal_action_delay("linkedin")
                 self._dismiss_post_apply_dialog(page)
                 return "applied", title
 

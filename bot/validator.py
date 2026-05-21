@@ -79,7 +79,7 @@ def validate_profile(profile: dict) -> list[str]:
         if not value or value in PLACEHOLDER_VALUES:
             errors.append(
                 f"Campo obligatorio '{field}' no configurado "
-                f"(valor actual: '{value}'). Edita bot/config.py → USER_PROFILE."
+                f"(valor actual: '{value}'). Edita bot/config.py -> USER_PROFILE."
             )
 
     # Advertencias para campos opcionales con valores de ejemplo
@@ -87,22 +87,22 @@ def validate_profile(profile: dict) -> list[str]:
     for field in optional_fields:
         value = str(profile.get(field, ""))
         if value in PLACEHOLDER_VALUES and field != "cv_path":
-            warnings.append(f"  ⚠  '{field}' tiene valor de ejemplo — considera completarlo")
+            warnings.append(f"  [!]  '{field}' tiene valor de ejemplo — considera completarlo")
 
     # Validar cv_path si está configurado y no es placeholder
     cv_path = profile.get("cv_path", "")
     if cv_path and cv_path not in PLACEHOLDER_VALUES:
         if not Path(cv_path).exists():
             warnings.append(
-                f"  ⚠  cv_path apunta a un archivo que no existe: '{cv_path}'\n"
+                f"  [!]  cv_path apunta a un archivo que no existe: '{cv_path}'\n"
                 f"     El bot funcionará pero no podrá subir tu CV."
             )
     elif not cv_path or cv_path in PLACEHOLDER_VALUES:
-        warnings.append("  ⚠  cv_path no configurado — el bot no subirá CV automáticamente")
+        warnings.append("  [!]  cv_path no configurado — el bot no subirá CV automáticamente")
 
     if errors:
         raise ConfigError(
-            "USER_PROFILE incompleto:\n" + "\n".join(f"  ✗ {e}" for e in errors)
+            "USER_PROFILE incompleto:\n" + "\n".join(f"  [X] {e}" for e in errors)
         )
 
     return warnings
@@ -139,14 +139,14 @@ def validate_portal_config(portal_name: str, config: dict) -> list[str]:
     max_o = config.get("max_offers_per_run", 0)
     if max_o > 50:
         warnings.append(
-            f"  ⚠  max_offers_per_run={max_o} es muy alto. "
+            f"  [!]  max_offers_per_run={max_o} es muy alto. "
             f"LinkedIn puede bloquear ante >10-15 postulaciones por hora."
         )
 
     if errors:
         raise ConfigError(
             f"Configuración inválida para portal '{portal_name}':\n"
-            + "\n".join(f"  ✗ {e}" for e in errors)
+            + "\n".join(f"  [X] {e}" for e in errors)
         )
 
     return warnings
@@ -181,4 +181,4 @@ def run_startup_validation(portal_name: str, profile: dict, config: dict) -> Non
         for w in all_warnings:
             log.warning(w)
     else:
-        log.info("✓ Configuración válida")
+        log.info("[OK] Configuración válida")

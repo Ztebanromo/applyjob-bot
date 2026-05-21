@@ -19,31 +19,33 @@ DASH_KEYWORDS = CLEAN_KEYWORDS.replace("  ", " ").replace(" ", "-")
 # Perfil del usuario — se usa para autocompletar formularios
 # ---------------------------------------------------------------------------
 USER_PROFILE = {
-    "full_name":     os.getenv("USER_FULL_NAME", "Ignacio Romo"),
-    "first_name":    os.getenv("USER_FIRST_NAME", "Ignacio"),
-    "last_name":     os.getenv("USER_LAST_NAME", "Romo"),
-    "email":         os.getenv("USER_EMAIL", "ygnacio1698@gmail.com"),
-    "phone":         os.getenv("USER_PHONE", "+56 9 3420 0859"),
-    "phone_number":  os.getenv("USER_PHONE_NUMBER", "934200859"),
-    "country_code":  os.getenv("USER_COUNTRY_CODE", "+56"),
-    "country":       os.getenv("USER_COUNTRY", "Chile"),
-    "city":          os.getenv("USER_CITY", "Maipú, Región Metropolitana de Santiago, Chile"),
-    "linkedin":      os.getenv("USER_LINKEDIN", "https://www.linkedin.com/in/ignacio-romo-dev"),
-    "portfolio":     os.getenv("USER_PORTFOLIO", "https://github.com/Ztebanromo"),
-    "cv_path":       os.getenv("USER_CV_PATH", "C:/Users/ygnac/OneDrive/Documentos/cv-ignacio-romo.pdf"),
-    "salary":        os.getenv("USER_SALARY", "850000"),
-    "years_exp":     os.getenv("USER_YEARS_EXP", "0"),
-    "cover_letter":  os.getenv("USER_COVER_LETTER", (
-        "Soy Analista Programador egresado de INACAP con 4 años de exposición directa a sistemas empresariales "
-        "(SAP modulo WM, WMS, terminales RF) en empresas de alta demanda como STL Internacional, Natura y Ripley. "
-        "Cuento con conocimientos en Python, SQL y desarrollo web. Orientado a automatización e integridad de datos, "
-        "busco mi primera oportunidad formal en TI para aportar desde el primer día."
-    )),
-    "availability":  os.getenv("USER_AVAILABILITY", "Inmediata"),
-    "english_level": os.getenv("USER_ENGLISH_LEVEL", "Básico técnico"),
-    "work_mode":     os.getenv("USER_WORK_MODE", "Sí"),
-    "laborum_email": os.getenv("LABORUM_EMAIL", os.getenv("USER_EMAIL")),
+    # ── Datos personales — vienen del .env o del wizard (--setup / subir CV) ──
+    # NO hay valores hardcodeados. Configura tu .env antes de correr el bot.
+    "full_name":        os.getenv("USER_FULL_NAME", ""),
+    "first_name":       os.getenv("USER_FIRST_NAME", ""),
+    "last_name":        os.getenv("USER_LAST_NAME", ""),
+    "email":            os.getenv("USER_EMAIL", ""),
+    "phone":            os.getenv("USER_PHONE", ""),
+    "phone_number":     os.getenv("USER_PHONE_NUMBER", ""),
+    "country_code":     os.getenv("USER_COUNTRY_CODE", "+56"),
+    "country":          os.getenv("USER_COUNTRY", "Chile"),
+    "city":             os.getenv("USER_CITY", ""),
+    "linkedin":         os.getenv("USER_LINKEDIN", ""),
+    "portfolio":        os.getenv("USER_PORTFOLIO", ""),
+    "cv_path":          os.getenv("USER_CV_PATH", ""),
+    "salary":           os.getenv("USER_SALARY", ""),
+    "years_exp":        os.getenv("USER_YEARS_EXP", "0"),
+    "cover_letter":     os.getenv("USER_COVER_LETTER", ""),
+    "availability":     os.getenv("USER_AVAILABILITY", "Inmediata"),
+    "english_level":    os.getenv("USER_ENGLISH_LEVEL", ""),
+    "work_mode":        os.getenv("USER_WORK_MODE", "Sí"),
+    "laborum_email":    os.getenv("LABORUM_EMAIL", os.getenv("USER_EMAIL", "")),
     "laborum_password": os.getenv("LABORUM_PASSWORD", ""),
+    # Campos de screening — también desde .env
+    "education":        os.getenv("USER_EDUCATION", ""),
+    "contact_info":     os.getenv("USER_CONTACT_INFO", ""),
+    "excel_level":      os.getenv("USER_EXCEL_LEVEL", ""),
+    "bodega_exp":       os.getenv("USER_BODEGA_EXP", ""),
 }
 
 # ---------------------------------------------------------------------------
@@ -52,7 +54,7 @@ USER_PROFILE = {
 SITE_CONFIG = {
     "linkedin": {
         "url_busqueda": (
-            f"https://www.linkedin.com/jobs/search/?keywords={ENCODED_KEYWORDS}&location=Chile&f_AL=true&f_E=2%2C3"
+            f"https://www.linkedin.com/jobs/search/?keywords={ENCODED_KEYWORDS}&location=Santiago%2C+Regi%C3%B3n+Metropolitana%2C+Chile&f_AL=true&f_E=2%2C3"
         ),
         "selector_oferta":          "li[data-occludable-job-id]",
         "selector_boton_aplicar":   "button.jobs-apply-button",
@@ -63,16 +65,16 @@ SITE_CONFIG = {
         "requires_login":           True,
     },
     "indeed": {
-        # ── STANDBY ─────────────────────────────────────────────────────────
+        # -- STANDBY ---------------------------------------------------------
         # Indeed usa Cloudflare Turnstile que detecta Playwright Chromium
         # en ~3 segundos. Requiere Chrome real con CDP (iniciar_bot.bat).
         # Pendiente: migrar a patchright / camoufox para bypass de CF.
         # Cambiar INDEED_ENABLED=true en .env cuando esté listo.
         "enabled": os.getenv("INDEED_ENABLED", "false").lower() == "true",
-        # ────────────────────────────────────────────────────────────────────
+        # --------------------------------------------------------------------
         "url_busqueda": (
             f"https://cl.indeed.com/jobs?q={ENCODED_KEYWORDS}"
-            f"&l=Maip%C3%BA%2C+Regi%C3%B3n+Metropolitana"
+            f"&l=Santiago%2C+Regi%C3%B3n+Metropolitana"
             f"&radius=25&explvl=entry_level&sort=date"
         ),
         "selector_oferta":           "div.job_seen_beacon",
@@ -95,7 +97,7 @@ SITE_CONFIG = {
         "selector_titulo_oferta":    "h1.title_offer, h1[class*='title'], h1",
         "tipo_postulacion":          "directa",
         "max_offers_per_run":        20,
-        "requires_login":            False,
+        "requires_login":            True,
     },
     "getonyboard": {
         # GetOnBoard usa URLs tipo slug: /jobs-{keyword}
@@ -125,12 +127,13 @@ SITE_CONFIG = {
         "selector_titulo_oferta":    "h1.job-title, h1[class*='title'], h1",
         "tipo_postulacion":          "directa",
         "max_offers_per_run":        20,
-        "requires_login":            False,
+        "requires_login":            True,
     },
     "laborum": {
         # Laborum usa API interna (/api/avisos/searchV2) para extraer ofertas.
-        # La URL de búsqueda solo sirve para inicializar la sesión en el navegador.
-        "url_busqueda": "https://www.laborum.cl/busqueda",
+        # La URL solo sirve para inicializar cookies de sesión — NO usar /busqueda?q=
+        # ya que Laborum redirige esa ruta a 404. Usar la home directamente.
+        "url_busqueda": "https://www.laborum.cl",
         "selector_oferta":           "a[href*='/empleos/'][class*='sc-']",
         "selector_ubicacion":        "span[class*='location'], span[class*='Location'], p[class*='location']",
         "selector_boton_aplicar":    "button:has-text('Postularme'), button:has-text('Postular'), button:has-text('Postulación rápida')",
@@ -142,33 +145,48 @@ SITE_CONFIG = {
     },
 }
 
-# ---------------------------------------------------------------------------
-# Filtro de horario — solo AM / Lunes a Viernes
-# ---------------------------------------------------------------------------
-# Palabras que indican turno incompatible → oferta descartada
-SCHEDULE_BLACKLIST = frozenset({
-    "turno noche", "nocturno", "nocturna", "nocturnos", "nocturnas",
-    "turno rotativo", "turnos rotativos", "turno rotativo",
-    "rotativo", "rotativos", "rotativa", "rotativas",
-    "fines de semana", "fin de semana",
-    "sábados y domingos", "sabados y domingos",
-    "sábado y domingo",  "sabado y domingo",
-    "sábados", "domingos",
-    "24x7", "24/7",
-    "guardia nocturna", "guardia noche",
-    "turno tarde-noche", "tarde-noche",
-    "turno noche a mañana",
-    "vespertino", "vespertina",
-    "turno c", "turno d",        # nombres comunes de turnos noche en Chile
-})
+# Respetar USER_MAX_OFFERS del .env como límite global de postulaciones por búsqueda
+_env_max = os.getenv("USER_MAX_OFFERS", "")
+if _env_max.strip().isdigit():
+    _global_max = int(_env_max.strip())
+    for _p in SITE_CONFIG.values():
+        _p["max_offers_per_run"] = min(_p.get("max_offers_per_run", 10), _global_max)
 
-# Palabras que CONFIRMAN turno AM / L-V (oferta prioritaria, nunca se filtra)
+# ---------------------------------------------------------------------------
+# Filtro de horario — SOLO AM / Lunes a Viernes
+# ---------------------------------------------------------------------------
+# Señales que CONFIRMAN turno AM/L-V -> nunca descartar
 SCHEDULE_WHITELIST = frozenset({
     "lunes a viernes", "lunes-viernes", "l a v", "l-v",
     "horario am", "turno am", "turno mañana", "turno diurno",
     "jornada diurna", "horario diurno",
-    "08:00", "08:30", "09:00",   # inicio de turno AM típico
-    "jornada completa",           # generalmente L-V en oficina
+    "08:00", "08:30", "09:00",         # hora de inicio AM típica
+    "horario de oficina", "horario normal",
+})
+
+# Señales que indican turno incompatible -> oferta descartada
+SCHEDULE_BLACKLIST = frozenset({
+    # Noche
+    "turno noche", "nocturno", "nocturna", "nocturnos", "nocturnas",
+    "guardia nocturna", "guardia noche", "turno noche a mañana",
+    # Tarde / PM (excluir explícitamente turnos vespertinos)
+    "turno tarde", "jornada tarde", "horario tarde",
+    "turno pm", "horario pm",
+    "turno tarde-noche", "tarde-noche",
+    "vespertino", "vespertina",
+    # Turnos rotativos
+    "turno rotativo", "turnos rotativos", "rotativo", "rotativos",
+    "rotativa", "rotativas", "turno variable", "turnos variables",
+    "turno cambiante", "turno split",
+    # Fines de semana
+    "fines de semana", "fin de semana",
+    "sábados y domingos", "sabados y domingos",
+    "sábado y domingo", "sabado y domingo",
+    "sábados", "domingos",
+    # 24/7
+    "24x7", "24/7",
+    # Códigos de turnos nocturnos Chile
+    "turno c", "turno d",
 })
 
 
@@ -190,45 +208,80 @@ def schedule_ok(text: str) -> bool:
     for phrase in SCHEDULE_BLACKLIST:
         if phrase in low:
             return False
-    return True   # sin señales → incluir
+    return True   # sin señales -> incluir
 
 
 # ---------------------------------------------------------------------------
-# Prioridad geográfica — comunas cercanas a Maipú
+# Prioridad geográfica — Santiago RM (Maipú + Pudahuel primeras)
 # ---------------------------------------------------------------------------
-# Tier 1 · < 5 km — adyacentes directos
+
+# Tier 1 · score 10 · Maipú + Pudahuel + adyacentes inmediatos (< 5 km)
 _LOC_T1 = frozenset({
-    "maipú", "maipu", "cerrillos", "pudahuel", "lo prado", "bustos",
+    "maipú", "maipu",
+    "pudahuel",
+    "cerrillos",
+    "lo prado",
+    "bustos",
 })
-# Tier 2 · 5-20 km — bien conectados por metro / Alameda
+
+# Tier 2 · score 7 · Comunas anexas accesibles por metro/Alameda (5-15 km)
 _LOC_T2 = frozenset({
     "estación central", "estacion central",
-    "pedro aguirre cerda", "san miguel", "lo espejo", "la cisterna",
-    "cerro navia", "quinta normal", "santiago", "santiago centro",
-    "san bernardo", "calera de tango", "padre hurtado",
-    "peñaflor", "penalflor", "talagante", "el monte",
+    "pedro aguirre cerda",
+    "san miguel",
+    "lo espejo",
+    "la cisterna",
+    "cerro navia",
+    "quinta normal",
+    "santiago centro",
 })
-# Tier R · Remoto — sin traslado, siempre bienvenido
+
+# Tier R · score 9 · Remoto / Híbrido — sin traslado, siempre bienvenido
 _LOC_REMOTE = frozenset({
     "remoto", "teletrabajo", "remote", "home office", "homeoffice",
     "trabajo desde casa", "trabajo a distancia", "híbrido", "hibrido",
 })
-# Tier 4 · Lejos o mal conectados — al final de la cola
-_LOC_FAR = frozenset({
-    "vitacura", "las condes", "lo barnechea", "la reina",
+
+# Tier 3 · score 4 · Dentro de Santiago RM pero lejos de Maipú (15-40 km)
+# Accesibles por metro pero con traslado largo — se incluyen al final de la cola
+_LOC_DISTANT_RM = frozenset({
+    # Sur RM periférico (metro o bus frecuente)
+    "san bernardo", "calera de tango", "padre hurtado",
+    "peñaflor", "penalflor", "talagante", "el monte",
+    "buin", "paine",
+    # Oriente / nororiente — accesibles por Línea 1, 4 o 5
+    "las condes", "lo barnechea", "la reina", "vitacura",
+    "providencia", "ñuñoa", "nunoa",
+    # Norte — Línea 2 o 3 (accesibles con trasbordo)
     "huechuraba", "recoleta", "independencia", "conchalí", "conchali",
-    "quilicura", "renca", "la florida", "puente alto", "la pintana",
+    "quilicura", "renca",
+    # Sur / suroriente — Línea 5 o 4
+    "la florida", "puente alto",
     "san joaquín", "san joaquin", "macul", "peñalolén", "penalolen",
-    "la granja", "el bosque", "ñuñoa", "nunoa", "providencia",
-    "til til", "colina", "lampa", "melipilla", "buin", "paine",
+    "la granja", "el bosque",
+})
+
+# Tier FAR · score 2 · Fuera del Gran Santiago o sin transporte directo → RECHAZADAS
+_LOC_FAR = frozenset({
+    # Fuera del Gran Santiago
+    "til til", "colina", "lampa", "melipilla",
+    # Comunas sin metro y muy alejadas
+    "la pintana", "san ramón", "san ramon",
+    # Regiones fuera de Santiago RM
+    "valparaíso", "valparaiso", "viña del mar", "concepción", "concepcion",
+    "antofagasta", "iquique", "temuco", "puerto montt",
 })
 
 
 def location_score(text: str) -> int:
     """
-    Retorna 0-10 según proximidad a Maipú.
-    10 = adyacente, 9 = remoto, 7 = cercanía media, 5 = neutro/RM, 2 = lejos.
-    Se llama con el texto completo del card de oferta.
+    Retorna score según proximidad a Maipú dentro de Santiago RM.
+      10 = Maipú / Pudahuel / adyacentes (< 5 km)
+       9 = Remoto / Híbrido
+       7 = Comunas anexas accesibles por metro (5-15 km)
+       5 = Santiago genérico / sin info -> neutro
+       4 = Dentro de RM pero lejos (15-40 km) -> incluido al final
+       2 = Comunas lejanas o mal conectadas -> RECHAZADAS en engine.py
     """
     if not text:
         return 5
@@ -242,13 +295,255 @@ def location_score(text: str) -> int:
     for place in _LOC_T2:
         if place in low:
             return 7
+    for place in _LOC_DISTANT_RM:
+        if place in low:
+            return 4
     for place in _LOC_FAR:
         if place in low:
             return 2
-    # RM genérico / Santiago sin especificar comuna → neutro
+    # Santiago genérico o RM sin especificar -> neutro
     if any(k in low for k in ("metropolitana", "región", "rm", "santiago")):
         return 5
-    return 5   # sin info → neutro
+    return 5   # sin info -> neutro
+
+
+# ---------------------------------------------------------------------------
+# Filtro de experiencia — rechaza ofertas senior o que exigen años de experiencia
+# ---------------------------------------------------------------------------
+# Palabras que CONFIRMAN junior / 0-1 año -> nunca filtrar
+_EXP_WHITELIST = frozenset({
+    # Nivel explícito
+    "junior", "jr.", " jr ", "trainee", "practicante", "práctica", "practica",
+    "egresado", "recién titulado", "recien titulado", "recién egresado", "recien egresado",
+    # Sin experiencia
+    "sin experiencia", "no se requiere experiencia", "no experience",
+    "sin exp requerida", "sin exp", "0 años de experiencia",
+    "primer empleo", "primera experiencia",
+    # Hasta 1 año — aceptable según criterio del usuario
+    "entry level", "entry-level",
+    "0 a 1 año", "0 a 1 años", "hasta 1 año", "hasta un año",
+    "1 año de experiencia", "un año de experiencia",
+    "1 a 2 años",   # el mínimo es 1 -> aplica con 1 año
+    "deseable experiencia",  # no obligatoria
+    "no excluyente",         # experiencia "no excluyente" = sin exp OK
+})
+
+# Substrings largos que indican nivel senior/directivo (seguros — no aparecen en jr)
+_SENIOR_SUBSTRINGS = frozenset({
+    "senior", "semi senior", "semi-senior", "semisenior",
+    "tech lead", "líder técnico", "lider tecnico",
+    "arquitecto de software", "architect",
+    "jefe de proyecto", "jefe de área", "jefe de area",
+    "gerente", "director de", "director de tecnología",
+    "manager", "head of", "vp de",
+    "con experiencia comprobada", "experiencia comprobable",
+})
+
+# Abreviaciones cortas — requieren word-boundary para no dar falsos positivos
+_SENIOR_WORDS_EXACT = frozenset({"sr", "ssr", "lead", "cto", "cio", "cpo"})
+
+# Patrones de años de experiencia que SUPERAN lo aceptable
+import re as _re
+_EXP_YEARS_PATTERN = _re.compile(
+    # "3 años de experiencia" / "2+ años de experiencia" / "5 o más años"
+    r'\b([2-9]|\d{2,})\s*(?:\+|o más|más de)?\s*años?\s*(?:de\s+)?experiencia'
+    r'|'
+    # "5+ años" / "3+ años" — el + solo ya implica experiencia requerida
+    r'\b([2-9]|\d{2,})\s*\+\s*años?',
+    _re.IGNORECASE,
+)
+
+
+def experience_ok(text: str) -> bool:
+    """
+    Retorna False si la oferta claramente requiere experiencia senior o años > 1.
+    Retorna True si es junior/sin experiencia, o si no hay señal clara (beneficio de la duda).
+
+    Reglas (en orden):
+      1. Si hay palabra de whitelist (junior, sin experiencia…) -> True siempre.
+      2. Si hay patrón "2+ años de experiencia" -> False.
+      3. Si hay substring senior/directivo -> False.
+      4. Si hay abreviación exacta (sr, ssr, lead…) con word-boundary -> False.
+      5. Sin señales -> True (beneficio de la duda).
+    """
+    if not text:
+        return True
+    low = text.lower()
+
+    # 1. Whitelist: junior/sin-experiencia confirma -> nunca rechazar
+    for phrase in _EXP_WHITELIST:
+        if phrase in low:
+            return True
+
+    # 2. Patrón de años excesivos
+    if _EXP_YEARS_PATTERN.search(text):
+        return False
+
+    # 3. Substrings senior largos
+    for w in _SENIOR_SUBSTRINGS:
+        if w in low:
+            return False
+
+    # 4. Abreviaciones cortas con word-boundary
+    for w in _SENIOR_WORDS_EXACT:
+        if _re.search(r'\b' + _re.escape(w) + r'\b', low):
+            return False
+
+    return True  # sin señales -> incluir
+
+
+# Patrones de practica/pasantia — si aparecen en titulo/card, saltar oferta
+_PRACTICA_SUBSTRINGS = [
+    # formas con "practicante/s"
+    "practicante", "practicantes",
+    # formas con "practica" como sustantivo
+    "practica profesional", "practicas profesionales",
+    "practica curricular", "practicas curriculares",
+    "practica laboral", "periodo de practica",
+    "alumno en practica", "alumno(a) en practica", "alumno/a en practica",
+    "estudiante en practica",
+    # pasantia
+    "pasantia", "pasante", "pasantes",
+    # ingles
+    "internship", "intern ",
+]
+
+
+def practica_ok(text: str) -> bool:
+    """
+    Retorna False si la oferta es claramente una practica/pasantia.
+    Retorna True si no hay senales de practica (incluir).
+
+    El bot nunca debe postular a practicas, solo a empleos reales.
+    """
+    if not text:
+        return True
+    low = text.lower()
+    # Normalizar: quitar tildes basicas para comparar
+    low = (low.replace("a", "a").replace("e", "e")
+              .replace("i", "i").replace("o", "o").replace("u", "u")
+              .replace("\xe1", "a").replace("\xe9", "e").replace("\xed", "i")
+              .replace("\xf3", "o").replace("\xfa", "u"))
+    for phrase in _PRACTICA_SUBSTRINGS:
+        if phrase in low:
+            return False
+    return True
+
+
+# Categorias/rubros que NO son IT — el bot solo busca trabajo IT/bodega
+_OFF_TOPIC_SUBSTRINGS = [
+    # RRHH / Recursos Humanos
+    "rrhh", "recursos humanos", "recursos humano",
+    "reclutamiento", "seleccion de personal", "selección de personal",
+    "remuneraciones", "payroll", "gestion de personas",
+    "jefe de rrhh", "analista de rrhh", "asistente de rrhh",
+    "asistente rrhh", "coordinador de rrhh", "coordinadora de rrhh",
+    "depto rrhh", "departamento rrhh",
+    "bienestar laboral", "clima organizacional",
+    # Contabilidad / Finanzas operativas
+    "contabilidad", "contador", "contadora", "contable",
+    "auditor", "auditoria", "finanzas corporativas", "tesorero",
+    "facturacion", "facturación", "cobranza", "cuentas por pagar",
+    "cuentas por cobrar", "conciliacion bancaria", "impuestos",
+    "tributario", "tributaria", "balance", "estados financieros",
+    # Administración general (no IT)
+    "asistente administrativo", "asistente administrativa",
+    "asistente de gerencia", "asistente ejecutivo", "asistente ejecutiva",
+    "secretaria", "secretario ejecutivo", "recepcionista",
+    "asistente legal", "asistente juridico",
+    # Ventas / Comercial
+    "ejecutivo de ventas", "ejecutiva de ventas",
+    "vendedor", "vendedora", "asesor comercial", "asesora comercial",
+    "ejecutivo comercial", "ejecutiva comercial",
+    "agente de ventas", "promotor de ventas",
+    # Marketing y publicidad
+    "marketing", "community manager", "redes sociales", "social media",
+    "publicidad", "diseñador grafico", "disenador grafico", "contenido digital",
+    "paid media", "seo ", "sem ", "e-commerce manager",
+    # Salud
+    "enfermera", "enfermero", "tecnico en enfermeria", "auxiliar de enfermeria",
+    "kinesiologo", "medico", "dentista", "farmaceutico", "nutricionista",
+    "psicologo", "psicologa", "terapeuta", "fonoaudiologo",
+    # Educacion
+    "profesor", "profesora", "docente", "educador", "educadora", "pedagogia",
+    # Construccion / Arquitectura
+    "arquitecto", "arquitecta", "construccion civil", "ingeniero civil",
+    "maestro mayor", "capataz", "jefe de obra",
+    # Derecho
+    "abogado", "abogada", "derecho laboral", "paralegal", "notario",
+    # Comunicaciones / Medios
+    "periodista", "comunicaciones", "locutor", "redactor",
+    # Gastronomia
+    "gastronomia", "chef ", "cocinero", "cocinera", "cocina",
+    "garzón", "garzon", "bartender", "barista",
+    # Transporte (excluir choferes, no bodega logística)
+    "chofer de camion", "chofer camion", "conductor de camion",
+    "taxista", "uber", "delivery conductor",
+]
+
+
+def topic_ok(text: str) -> bool:
+    """
+    Retorna False si la oferta es de un rubro ajeno a IT/bodega.
+    Retorna True si no hay senales de rubro no-IT (incluir).
+    """
+    if not text:
+        return True
+    low = (text.lower()
+           .replace("\xe1", "a").replace("\xe9", "e").replace("\xed", "i")
+           .replace("\xf3", "o").replace("\xfa", "u").replace("\xf1", "n"))
+    for phrase in _OFF_TOPIC_SUBSTRINGS:
+        if phrase in low:
+            return False
+    return True
+
+
+# Palabras que confirman que la oferta es del área IT/tech
+_IT_SIGNALS = frozenset({
+    # Roles
+    "desarrollador", "developer", "programador", "ingeniero de software",
+    "analista programador", "analista de sistemas", "analista ti",
+    "analista de datos", "analista bi", "analista sap", "analista erp",
+    "analista funcional",
+    "soporte tecnico", "soporte ti", "help desk", "mesa de ayuda",
+    "tecnico informatica", "tecnico en informatica", "tecnico ti",
+    "qa ", "tester", "quality assurance",
+    "devops", "sre", "cloud",
+    "egresado informatica", "egresado ti", "egresado sistemas",
+    # Tecnologías en el título
+    "python", "java ", "javascript", "sql", "php", "react",
+    "angular", "node", ".net", "c#", "html", "css",
+    "backend", "frontend", "fullstack", "full stack",
+    "software", "sistemas", "informatica", "informatico",
+    "ti ", " ti,", "(ti)", "tecnologia", "tecnologias",
+    "web ", "app ", "mobile", "base de datos",
+    "git", "linux", "docker", "aws", "azure",
+    "erp", "sap", "wms",
+})
+
+
+def topic_ok_it(text: str) -> bool:
+    """
+    Versión estricta para scan: exige que el card/título contenga al menos
+    una señal IT. Usa en run_scan_pass para evitar colar cargos genéricos
+    como 'Asistente' o 'Analista' sin contexto tecnológico.
+
+    Retorna True si hay señal IT, False si el texto es genérico/sin contexto IT.
+    Si text está vacío, se beneficia la duda (True).
+    """
+    if not text:
+        return True
+    # Primero pasar por el filtro de exclusión estándar
+    if not topic_ok(text):
+        return False
+    low = (text.lower()
+           .replace("\xe1", "a").replace("\xe9", "e").replace("\xed", "i")
+           .replace("\xf3", "o").replace("\xfa", "u").replace("\xf1", "n"))
+    for signal in _IT_SIGNALS:
+        if signal in low:
+            return True
+    # Sin señal IT confirmada -> rechazar en modo scan estricto
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -256,28 +551,112 @@ def location_score(text: str) -> int:
 # Cada grupo lanza una búsqueda independiente con su propio perfil de respuesta
 # Definido DESPUÉS de SITE_CONFIG para que build_config_for_keyword pueda referenciarlo
 # ---------------------------------------------------------------------------
-KEYWORD_GROUPS = [
-    {"label": "IT",     "keyword": "desarrollador junior",        "mode": "it"},
-    {"label": "IT",     "keyword": "analista programador junior",  "mode": "it"},
-    {"label": "IT",     "keyword": "python junior",               "mode": "it"},
-    {"label": "IT",     "keyword": "soporte tecnico junior",      "mode": "it"},
-    {"label": "Bodega", "keyword": "operario bodega",             "mode": "bodega"},
-    {"label": "Bodega", "keyword": "auxiliar bodega",             "mode": "bodega"},
-    {"label": "Bodega", "keyword": "auxiliar logistica",          "mode": "bodega"},
-]
+# ---------------------------------------------------------------------------
+# Generador de combinaciones — base × modificador de experiencia
+# "sin experiencia" se añade siempre en la URL via build_config_for_keyword
+# ---------------------------------------------------------------------------
+def _gen_it(label: str, bases: list, mods=("junior", "trainee", "sin experiencia"), scan=True):
+    rows = []
+    for base in bases:
+        for mod in mods:
+            rows.append({"label": label, "keyword": f"{base} {mod}", "mode": "it", "scan": scan})
+    return rows
+
+def _gen_bodega(bases: list):
+    rows = []
+    for base in bases:
+        rows.append({"label": "Bodega", "keyword": f"{base} sin experiencia", "mode": "bodega", "scan": False})
+    return rows
+
+KEYWORD_GROUPS = (
+    # ── Desarrollo general ────────────────────────────────────────────────────
+    _gen_it("Desarrollo", [
+        "desarrollador", "programador", "developer",
+        "ingeniero de software", "software developer",
+    ]) +
+    # ── Stack / Lenguajes ─────────────────────────────────────────────────────
+    _gen_it("Stack", [
+        "python", "javascript", "sql",
+        "desarrollador web", "desarrollador backend",
+        "desarrollador frontend", "desarrollador fullstack",
+        "desarrollador react", "desarrollador node",
+    ]) +
+    # ── Analista ─────────────────────────────────────────────────────────────
+    _gen_it("Analista", [
+        "analista programador", "analista de sistemas",
+        "analista funcional", "analista SAP", "analista ERP",
+        "ingeniero en sistemas",
+    ]) +
+    # ── Datos / BI ────────────────────────────────────────────────────────────
+    _gen_it("Datos", [
+        "analista de datos", "analista BI", "data analyst",
+        "analista de informacion",
+    ], mods=("junior", "trainee")) +
+    # ── Soporte / Helpdesk ────────────────────────────────────────────────────
+    _gen_it("Soporte", [
+        "soporte tecnico", "soporte TI", "help desk",
+        "mesa de ayuda", "tecnico informatica",
+    ]) +
+    # ── QA / Testing ─────────────────────────────────────────────────────────
+    _gen_it("QA", [
+        "QA", "tester", "quality assurance",
+    ], mods=("junior", "trainee")) +
+    # ── Egresados — el modificador ES la identidad ────────────────────────────
+    [
+        {"label": "Egresado", "keyword": "egresado informatica",          "mode": "it", "scan": True},
+        {"label": "Egresado", "keyword": "egresado TI",                   "mode": "it", "scan": True},
+        {"label": "Egresado", "keyword": "egresado analista programador", "mode": "it", "scan": True},
+        {"label": "Egresado", "keyword": "recien egresado sistemas",      "mode": "it", "scan": True},
+        {"label": "Egresado", "keyword": "recien egresado informatica",   "mode": "it", "scan": True},
+    ] +
+    # ── Bodega / Logística ────────────────────────────────────────────────────
+    _gen_bodega([
+        "operario bodega", "operario de bodega", "auxiliar bodega", "auxiliar logistica",
+        "bodeguero", "operario logistica", "picker",
+    ])
+)
 
 
 # ---------------------------------------------------------------------------
-# GetOnBoard — mapa keyword → slug URL
+# GetOnBoard — mapa keyword -> slug URL
 # GetOnBoard ignora el parámetro ?q= (SPA client-side). Las búsquedas reales
 # usan URLs tipo /jobs-{slug} que sí devuelven resultados filtrados por el portal.
 # Probado: cada slug devuelve ~100 ofertas reales del sector.
 # ---------------------------------------------------------------------------
 _GOB_SLUG_MAP: dict[str, str] = {
-    "desarrollador junior":        "jobs-desarrollador-junior",
-    "analista programador junior": "jobs-analista-programador",
-    "python junior":               "jobs-python-developer-junior",
-    "soporte tecnico junior":      "jobs-soporte-tecnico-junior",
+    # Desarrollo / Programación
+    "desarrollador junior":           "jobs-desarrollador-junior",
+    "developer junior":               "jobs-developer-junior",
+    "programador junior":             "jobs-programador-junior",
+    "analista programador junior":    "jobs-analista-programador",
+    "analista de sistemas junior":    "jobs-analista-sistemas",
+    "ingeniero en sistemas junior":   "jobs-ingeniero-sistemas",
+    # Stack / Tecnología
+    "python junior":                  "jobs-python-developer-junior",
+    "sql junior":                     "jobs-sql-junior",
+    "desarrollador web junior":       "jobs-desarrollador-web-junior",
+    "desarrollador backend junior":   "jobs-backend-developer-junior",
+    "desarrollador fullstack junior": "jobs-fullstack-developer-junior",
+    "javascript junior":              "jobs-javascript-developer-junior",
+    # Soporte / Helpdesk
+    "soporte tecnico junior":         "jobs-soporte-tecnico-junior",
+    "soporte ti junior":              "jobs-soporte-ti",
+    "help desk junior":               "jobs-help-desk",
+    "mesa de ayuda junior":           "jobs-mesa-de-ayuda",
+    "tecnico informatica junior":     "jobs-tecnico-informatica",
+    # Datos / BI
+    "analista de datos junior":       "jobs-analista-datos",
+    "analista bi junior":             "jobs-analista-bi",
+    # Especialidades
+    "analista sap junior":            "jobs-analista-sap",
+    "analista erp junior":            "jobs-analista-erp",
+    "analista funcional junior":      "jobs-analista-funcional",
+    # QA / Testing
+    "qa junior":                      "jobs-qa-junior",
+    "tester junior":                  "jobs-tester-junior",
+    # Egresados / Entrada
+    "egresado informatica":           "jobs-desarrollador-junior",
+    "egresado ti":                    "jobs-desarrollador-junior",
 }
 
 def _gob_slug_url(keyword: str) -> str:
@@ -316,19 +695,20 @@ def build_config_for_keyword(portal_key: str, keyword: str) -> dict:
     exp_ct_query       = "sin+experiencia"  if is_bodega else "junior+sin+experiencia"
 
     url_map = {
-        "indeed":        f"https://cl.indeed.com/jobs?q={kw_encoded}{exp_indeed}&l=Maip%C3%BA%2C+Regi%C3%B3n+Metropolitana&radius=25&explvl=entry_level&sort=date",
+        "indeed":        f"https://cl.indeed.com/jobs?q={kw_encoded}{exp_indeed}&l=Santiago%2C+Regi%C3%B3n+Metropolitana&radius=25&explvl=entry_level&sort=date",
         "computrabajo":  f"https://cl.computrabajo.com/trabajo-de-{kw_dash}{exp_suffix_ct}",
-        # Laborum: URL secundaria — el portal usa la API interna directamente.
-        # Solo necesita llegar a laborum.cl con sesión válida.
-        "laborum":       f"https://www.laborum.cl/busqueda?q={kw_encoded}",
+        # Laborum: solo necesita llegar a laborum.cl con sesión válida.
+        # /busqueda?q= devuelve 404 — usar la home siempre.
+        "laborum":       "https://www.laborum.cl",
         # ChileTrabajos: URL de búsqueda directa por keyword
         "chiletrabajos": f"https://www.chiletrabajos.cl/empleos?q={kw_encoded}&experiencia=sin-experiencia",
         # GetOnBoard: usa URLs tipo slug (/jobs-{slug}), no soporta ?q= ni seniority en URL.
         # El mapa cubre exactamente los keywords IT del KEYWORD_GROUPS.
         # El filtro de seniority se aplica en el bot (getonyboard.py) leyendo el texto del card.
         "getonyboard":   _gob_slug_url(keyword),
-        "linkedin":      f"https://www.linkedin.com/jobs/search/?keywords={kw_encoded}&location=Chile&f_AL=true&f_E=2%2C3",
+        "linkedin":      f"https://www.linkedin.com/jobs/search/?keywords={kw_encoded}&location=Santiago%2C+Regi%C3%B3n+Metropolitana%2C+Chile&f_AL=true&f_E=2%2C3",
     }
     if portal_key in url_map:
         config["url_busqueda"] = url_map[portal_key]
+    config["_keyword"] = keyword
     return config

@@ -2,10 +2,10 @@
 Portal específico para Indeed Chile.
 
 Flujo real de cl.indeed.com:
-  1. Página de búsqueda → lista de tarjetas de trabajo
-  2. Click en tarjeta → panel derecho muestra detalles (no navega a nueva página)
-  3. Si es "Solicitud sencilla de Indeed" → botón indeedApplyButton → overlay de aplicación
-  4. Si es "Aplicar en el sitio" → link externo → se registra como external_skipped
+  1. Página de búsqueda -> lista de tarjetas de trabajo
+  2. Click en tarjeta -> panel derecho muestra detalles (no navega a nueva página)
+  3. Si es "Solicitud sencilla de Indeed" -> botón indeedApplyButton -> overlay de aplicación
+  4. Si es "Aplicar en el sitio" -> link externo -> se registra como external_skipped
   5. Paginación: a[data-testid='pagination-page-next']
 
 Observaciones:
@@ -22,11 +22,11 @@ from playwright.sync_api import Page, TimeoutError as PlaywrightTimeout
 from .base import BasePortal
 from ..stealth_utils import human_delay, micro_delay, take_error_screenshot
 from ..form_filler import fill_form
-from ..config import schedule_ok
+from ..config import schedule_ok, experience_ok, practica_ok, topic_ok
 
 log = logging.getLogger("applyjob.indeed")
 
-# ── Selectores ──────────────────────────────────────────────────────────────
+# -- Selectores --------------------------------------------------------------
 SEL = {
     # Cards de oferta en la lista de búsqueda
     "card":              "div.job_seen_beacon",
@@ -214,6 +214,13 @@ class IndeedPortal(BasePortal):
                         skipped_schedule += 1
                         continue
 
+                    # Filtro de experiencia: descartar senior / 2+ años
+                    if not experience_ok(card_text):
+                        log.info("  [indeed] Descartado (senior/exp): %s",
+                                 card_text[:80].strip().replace("\n", " "))
+                        skipped_schedule += 1
+                        continue
+
                     seen.add(jk)
                     keys.append(jk)
                 except Exception as exc:
@@ -242,7 +249,7 @@ class IndeedPortal(BasePortal):
         """
         title = "unknown"
 
-        # ── 1. Click en la tarjeta ─────────────────────────────────────────
+        # -- 1. Click en la tarjeta -----------------------------------------
         # Retorna (clicked, used_direct_navigation)
         clicked, used_direct = self._click_card_robust(page, offer_id)
         if not clicked:
@@ -250,10 +257,10 @@ class IndeedPortal(BasePortal):
 
         human_delay(2.0, 3.5)
 
-        # ── 2. Esperar contenido ───────────────────────────────────────────
+        # -- 2. Esperar contenido -------------------------------------------
         # Si usamos Capa 3 (navegación directa a /viewjob), la página es
         # standalone: no hay panel lateral, el contenido está en la página completa.
-        # Los selectores del panel lateral no existen ahí → usar selectores standalone.
+        # Los selectores del panel lateral no existen ahí -> usar selectores standalone.
         if used_direct:
             panel_loaded = self._wait_for_standalone(page)
             if not panel_loaded:
@@ -294,7 +301,7 @@ class IndeedPortal(BasePortal):
 
         log.debug("  [indeed] Panel cargado | título: %s", title)
 
-        # ── 2b. Filtro de horario en descripción completa ──────────────────
+        # -- 2b. Filtro de horario en descripción completa ------------------
         try:
             desc_text = page.evaluate(
                 "() => {"
@@ -306,12 +313,22 @@ class IndeedPortal(BasePortal):
             desc_text = ""
 
         full_text = title + " " + desc_text
+        if not practica_ok(full_text):
+            log.info("  [indeed] Descartada (práctica/pasantía): '%s'", title)
+            return "skipped_practica", title
         if not schedule_ok(full_text):
             log.info("  [indeed] Oferta descartada por horario: '%s'", title)
             print(f"  [FILTRO] Descartada por turno incompatible: {title}")
             return "skipped_schedule", title
+        if not experience_ok(full_text):
+            log.info("  [indeed] Oferta descartada (senior/experiencia): '%s'", title)
+            print(f"  [FILTRO] Descartada por nivel/experiencia: {title}")
+            return "skipped_experience", title
+        if not topic_ok(full_text):
+            log.info("  [indeed] Descartada (fuera de rubro IT/bodega): '%s'", title)
+            return "skipped_topic", title
 
-        # ── 3. Detectar tipo de aplicación ────────────────────────────────
+        # -- 3. Detectar tipo de aplicación --------------------------------
         # Primero verificar si el Easy Apply está dentro de un iframe
         easy_btn = self._find_easy_apply_in_iframe(page)
         if easy_btn == "iframe_applied":
@@ -389,9 +406,9 @@ class IndeedPortal(BasePortal):
                 pass
             return "error: no_apply_button", title
 
-    # ────────────────────────────────────────────────────────────────────────
+    # ------------------------------------------------------------------------
     # Helpers privados
-    # ────────────────────────────────────────────────────────────────────────
+    # ------------------------------------------------------------------------
 
     def _click_card_robust(self, page: Page, jk: str) -> tuple[bool, bool]:
         """
@@ -400,7 +417,7 @@ class IndeedPortal(BasePortal):
 
         Indeed elimina del DOM los cards que salen del viewport (virtual list).
         Estrategia de 3 capas:
-          1. Scroll al top del contenedor → re-query → click JS (sin scroll_into_view).
+          1. Scroll al top del contenedor -> re-query -> click JS (sin scroll_into_view).
           2. Scroll progresivo 400px × 6 buscando el card en el DOM.
           3. Volver a la URL de búsqueda y reintentar desde cero.
           NO navegamos a /viewjob directamente porque esa URL dispara Cloudflare
@@ -414,7 +431,7 @@ class IndeedPortal(BasePortal):
         except Exception:
             listing_url = ""
 
-        # ── Capa 1: scroll al inicio del contenedor y re-query ─────────────
+        # -- Capa 1: scroll al inicio del contenedor y re-query -------------
         try:
             page.evaluate(f"""
                 () => {{
@@ -444,7 +461,7 @@ class IndeedPortal(BasePortal):
                 except Exception:
                     pass
 
-        # ── Capa 2: scroll progresivo buscando el card ─────────────────────
+        # -- Capa 2: scroll progresivo buscando el card ---------------------
         log.debug("  [indeed] Card jk=%s no visible — scroll progresivo", jk)
         for step in range(8):
             try:
@@ -472,7 +489,7 @@ class IndeedPortal(BasePortal):
             except Exception:
                 break
 
-        # ── Capa 3: volver a la listing URL y reintentar ────────────────────
+        # -- Capa 3: volver a la listing URL y reintentar --------------------
         # Más seguro que navegar a /viewjob directamente (evita Cloudflare).
         if listing_url and "indeed.com" in listing_url:
             log.warning("  [indeed] Card jk=%s no hallado — recargando página de búsqueda", jk)
@@ -625,14 +642,14 @@ class IndeedPortal(BasePortal):
         Espera a que el panel de detalle de Indeed esté visible.
 
         Estrategia de 3 niveles:
-        1. URL: Indeed agrega `vjk=<jk>` cuando el panel abre → señal más confiable.
+        1. URL: Indeed agrega `vjk=<jk>` cuando el panel abre -> señal más confiable.
         2. Selectores CSS conocidos del panel.
         3. JS: buscar cualquier elemento con texto sustancial de descripción.
         """
         # Nivel 1: detectar cambio de URL (vjk parameter)
         try:
             page.wait_for_url("*vjk=*", timeout=6_000)
-            # URL cambió → panel está cargando, esperar un poco
+            # URL cambió -> panel está cargando, esperar un poco
             human_delay(0.8, 1.5)
         except PlaywrightTimeout:
             pass  # No todas las versiones de Indeed usan vjk en la URL
@@ -731,7 +748,7 @@ class IndeedPortal(BasePortal):
 
             # Verificar si ya mostró confirmación
             if self._check_success(page):
-                log.info("  [indeed] ✓ Aplicación enviada (step %d)", step)
+                log.info("  [indeed] [OK] Aplicación enviada (step %d)", step)
                 return "applied", title
 
         # Verificación final de éxito

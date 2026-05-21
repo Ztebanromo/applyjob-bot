@@ -15,7 +15,22 @@ Uso en cualquier módulo:
 """
 import logging
 import logging.handlers
+import sys
+import io
 from pathlib import Path
+
+# Forzar UTF-8 en la consola (solo si el buffer no esta ya cerrado/detached)
+def _rewrap_utf8(stream):
+    try:
+        buf = getattr(stream, "buffer", None)
+        if buf is None or getattr(buf, "closed", False):
+            return stream
+        return io.TextIOWrapper(buf, encoding="utf-8", errors="replace", line_buffering=True)
+    except Exception:
+        return stream
+
+sys.stdout = _rewrap_utf8(sys.stdout)
+sys.stderr = _rewrap_utf8(sys.stderr)
 
 LOGS_DIR = Path(__file__).parent.parent / "logs"
 
@@ -41,12 +56,12 @@ def configure_logging(level: int = logging.INFO) -> None:
     root = logging.getLogger("applyjob")
     root.setLevel(logging.DEBUG)        # captura todo; los handlers filtran
 
-    # ── Handler de consola ────────────────────────────────────────────────────
-    console = logging.StreamHandler()
+    # -- Handler de consola ----------------------------------------------------
+    console = logging.StreamHandler(sys.stdout)
     console.setLevel(level)
     console.setFormatter(logging.Formatter(FMT_CONSOLE, datefmt=DATE_SHORT))
 
-    # ── Handler de archivo con rotación diaria ───────────────────────────────
+    # -- Handler de archivo con rotación diaria -------------------------------
     log_file = LOGS_DIR / "applyjob.log"
     file_handler = logging.handlers.TimedRotatingFileHandler(
         filename   = str(log_file),

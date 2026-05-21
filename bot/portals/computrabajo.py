@@ -2,13 +2,13 @@
 Portal Computrabajo Chile (computrabajo.cl).
 
 Flujo real de Computrabajo:
-  1. Página de búsqueda → lista de ofertas (article.box_offer)
-  2. Click en oferta → navega a página de detalle del empleo
-  3. En detalle → botón "Postularme" o "Postular"
-     a. Click → puede abrir formulario interno (nombre, email, CV, carta)
+  1. Página de búsqueda -> lista de ofertas (article.box_offer)
+  2. Click en oferta -> navega a página de detalle del empleo
+  3. En detalle -> botón "Postularme" o "Postular"
+     a. Click -> puede abrir formulario interno (nombre, email, CV, carta)
      b. O redirige al ATS externo del empleador
-  4. Si hay formulario interno → fill_form() + submit
-  5. Si es externo → registrar como external_apply
+  4. Si hay formulario interno -> fill_form() + submit
+  5. Si es externo -> registrar como external_apply
 
 Observaciones:
   - Computrabajo no requiere cuenta para ver ofertas, pero SÍ para postular.
@@ -26,11 +26,11 @@ from playwright.sync_api import Page, TimeoutError as PlaywrightTimeout
 from .base import BasePortal
 from ..stealth_utils import human_delay, micro_delay, take_error_screenshot
 from ..form_filler import fill_form
-from ..config import schedule_ok
+from ..config import schedule_ok, experience_ok, practica_ok, topic_ok
 
 log = logging.getLogger("applyjob.computrabajo")
 
-# ── Selectores ───────────────────────────────────────────────────────────────
+# -- Selectores ---------------------------------------------------------------
 SEL = {
     # Cards de oferta en el listado de búsqueda
     # article.box_offer puede tener clases extra: "sel", "outstanding"
@@ -133,8 +133,8 @@ class ComputrabajoPortal(BasePortal):
       1. Primera oferta: detectar si hay sesión; si no, esperar login manual.
       2. Extraer URLs del listado con get_offer_urls().
       3. Para cada oferta: navegar, detectar tipo (interna/externa), postular.
-      4. Formularios internos → fill_form() + submit.
-      5. Postulaciones externas → registrar como external_apply.
+      4. Formularios internos -> fill_form() + submit.
+      5. Postulaciones externas -> registrar como external_apply.
     """
 
     _login_done: bool = False  # flag de sesión — solo pide login una vez por run
@@ -234,14 +234,22 @@ class ComputrabajoPortal(BasePortal):
                     except Exception:
                         pass
 
-                    # Filtro de horario en el card (título + snippet visible)
+                    # Texto completo del card para filtros
                     card_text = ""
                     try:
                         card_text = (card.text_content() or "")[:500]
                     except Exception:
                         pass
+
+                    # Filtro 1: horario (lunes a viernes AM — no noche/finde)
                     if not schedule_ok(card_text):
-                        log.info("  [ct] Descartado por horario: %s", card_text[:80].strip())
+                        log.info("  [ct] Descartado (horario): %s", card_text[:80].strip())
+                        continue
+
+                    # Filtro 2: experiencia (solo junior / sin experiencia)
+                    check_text = (title + " " + card_text).strip()
+                    if not experience_ok(check_text):
+                        log.info("  [ct] Descartado (senior/exp): %s", (title or card_text[:60]).strip())
                         continue
 
                     # Si no hay título o es de TI, incluir
@@ -286,12 +294,12 @@ class ComputrabajoPortal(BasePortal):
         title = "unknown"
 
         try:
-            # ── 1. Navegar a la oferta ────────────────────────────────────
+            # -- 1. Navegar a la oferta ------------------------------------
             log.debug("  [ct] Navegando a: %s", offer_url[:70])
             page.goto(offer_url, wait_until="domcontentloaded", timeout=DETAIL_TIMEOUT)
             human_delay(2.0, 3.5)
 
-            # ── 2. Extraer título ─────────────────────────────────────────
+            # -- 2. Extraer título -----------------------------------------
             try:
                 for sel in SEL["job_title"].split(","):
                     el = page.query_selector(sel.strip())
@@ -304,7 +312,33 @@ class ComputrabajoPortal(BasePortal):
 
             log.debug("  [ct] Título: %s", title)
 
-            # ── 3. Buscar botón de postulación ────────────────────────────
+            # -- 2b. Filtros sobre descripción real -------------------------
+            try:
+                desc_text = page.evaluate(
+                    "() => {"
+                    "  const d = document.querySelector("
+                    "    'div.offer_description, div[class*=\"description\"],"
+                    "     section.offer_description, article');"
+                    "  return d ? d.innerText : document.body?.innerText?.slice(0,1000) || '';"
+                    "}"
+                ) or ""
+                full_text = title + " " + desc_text
+                if not practica_ok(full_text):
+                    log.info("  [ct] Descartada (práctica/pasantía): '%s'", title)
+                    return "skipped_practica", title
+                if not schedule_ok(full_text):
+                    log.info("  [ct] Descartada (horario): '%s'", title)
+                    return "skipped_schedule", title
+                if not experience_ok(full_text):
+                    log.info("  [ct] Descartada (senior/experiencia): '%s'", title)
+                    return "skipped_experience", title
+                if not topic_ok(full_text):
+                    log.info("  [ct] Descartada (fuera de rubro IT/bodega): '%s'", title)
+                    return "skipped_topic", title
+            except Exception:
+                pass
+
+            # -- 3. Buscar botón de postulación ----------------------------
             apply_btn = self._find_visible(page, SEL["apply_btn"])
             if not apply_btn:
                 # Intentar scroll hacia abajo — el botón puede estar off-screen
@@ -317,7 +351,7 @@ class ComputrabajoPortal(BasePortal):
                 take_error_screenshot(page, "computrabajo", "no_apply_btn")
                 return "error: no_apply_button", title
 
-            # ── 4. Click en postular ──────────────────────────────────────
+            # -- 4. Click en postular --------------------------------------
             if self.dry_run:
                 log.info("  [ct] dry_run — no se hace click en Postular")
                 return "dry_run", title
@@ -331,7 +365,7 @@ class ComputrabajoPortal(BasePortal):
                 log.warning("  [ct] Click en botón falló: %s", exc)
                 return f"error: click_apply {exc}", title
 
-            # ── 5. Detectar resultado del click ───────────────────────────
+            # -- 5. Detectar resultado del click ---------------------------
 
             # 5a. ¿Redirigió al login de Computrabajo?
             if "login" in page.url.lower() or "account" in page.url.lower() or "secure.computrabajo" in page.url:
@@ -357,7 +391,7 @@ class ComputrabajoPortal(BasePortal):
 
             # 5b. ¿Ya mostró éxito directo?
             if self._check_success(page):
-                log.info("  [ct] ✓ Postulación exitosa directa")
+                log.info("  [ct] [OK] Postulación exitosa directa")
                 return "applied", title
 
             current_url = page.url
@@ -394,7 +428,7 @@ class ComputrabajoPortal(BasePortal):
                 pass
             return f"error: {type(exc).__name__}", title
 
-    # ── Helpers privados ─────────────────────────────────────────────────────
+    # -- Helpers privados -----------------------------------------------------
 
     def _fill_candidato_form(self, page: Page, title: str) -> tuple[str, str]:
         """
@@ -406,7 +440,7 @@ class ComputrabajoPortal(BasePortal):
 
         # Verificar éxito inmediato (postapply puede confirmar al instante)
         if self._check_success(page):
-            log.info("  [ct] ✓ Postulación enviada (postapply inmediato)")
+            log.info("  [ct] [OK] Postulación enviada (postapply inmediato)")
             return "applied", title
 
         # Rellenar con form_filler genérico
@@ -451,7 +485,7 @@ class ComputrabajoPortal(BasePortal):
         # Verificar éxito post-submit
         human_delay(1.5, 2.5)
         if self._check_success(page):
-            log.info("  [ct] ✓ Postulación confirmada en candidato form")
+            log.info("  [ct] [OK] Postulación confirmada en candidato form")
             return "applied", title
 
         # Sin confirmación visual pero el formulario se procesó
@@ -547,7 +581,7 @@ class ComputrabajoPortal(BasePortal):
                 break
 
             if self._check_success(page):
-                log.info("  [ct] ✓ Formulario enviado exitosamente (paso %d)", step + 1)
+                log.info("  [ct] [OK] Formulario enviado exitosamente (paso %d)", step + 1)
                 return "applied", title
 
         # Verificación final

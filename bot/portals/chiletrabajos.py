@@ -2,12 +2,12 @@
 Portal ChileTrabajos (chiletrabajos.cl).
 
 Flujo real:
-  1. Búsqueda en /empleos?q=... → lista de div.job-item (30 por página)
-  2. Cada card tiene a.font-weight-bold[href*='/trabajo/'] → URL de detalle
-  3. En detalle → a.postular[href*='/trabajo/postular/{id}']
-  4. Click en Postular → puede redirigir a:
+  1. Búsqueda en /empleos?q=... -> lista de div.job-item (30 por página)
+  2. Cada card tiene a.font-weight-bold[href*='/trabajo/'] -> URL de detalle
+  3. En detalle -> a.postular[href*='/trabajo/postular/{id}']
+  4. Click en Postular -> puede redirigir a:
      a. Formulario interno de chiletrabajos (/trabajo/postular/{id})
-     b. Login si no hay sesión → esperar login manual
+     b. Login si no hay sesión -> esperar login manual
      c. ATS externo del empleador
   5. Paginación: a[rel='next']
 
@@ -26,7 +26,7 @@ from playwright.sync_api import Page, TimeoutError as PlaywrightTimeout
 from .base import BasePortal
 from ..stealth_utils import human_delay, micro_delay, take_error_screenshot
 from ..form_filler import fill_form
-from ..config import schedule_ok
+from ..config import schedule_ok, experience_ok, practica_ok, topic_ok
 
 log = logging.getLogger("applyjob.chiletrabajos")
 
@@ -136,11 +136,11 @@ class ChileTrabajosPortal(BasePortal):
     def _title_ok(self, title: str) -> bool:
         """
         True si el puesto debe ser postulado:
-        - Es tech (o no tiene título → se incluye por si acaso)
+        - Es tech (o no tiene título -> se incluye por si acaso)
         - NO es senior/directivo
         """
         if not title:
-            return True   # sin título → incluir por defecto
+            return True   # sin título -> incluir por defecto
         return self._title_is_tech(title) and not self._title_is_senior(title)
 
     def _wait_for_login(self, page: Page, timeout_s: int = 300) -> bool:
@@ -220,8 +220,14 @@ class ChileTrabajosPortal(BasePortal):
                         card_text = (card.text_content() or "")[:500]
                     except Exception:
                         pass
+                    # Filtro 1: horario (lunes a viernes AM)
                     if not schedule_ok(card_text):
-                        log.info("  [ct2] Descartado por horario: %s", card_text[:80].strip())
+                        log.info("  [ct2] Descartado (horario): %s", card_text[:80].strip())
+                        continue
+
+                    # Filtro 2: experiencia (solo junior / sin experiencia)
+                    if not experience_ok(title + " " + card_text):
+                        log.info("  [ct2] Descartado (senior/exp): %s", title[:60])
                         continue
 
                     if self._title_ok(title):
@@ -246,11 +252,11 @@ class ChileTrabajosPortal(BasePortal):
         title = "unknown"
 
         try:
-            # ── 1. Navegar al detalle ─────────────────────────────────────
+            # -- 1. Navegar al detalle -------------------------------------
             page.goto(offer_url, wait_until="domcontentloaded", timeout=DETAIL_TIMEOUT)
             human_delay(0.8, 1.5)
 
-            # ── 2. Extraer título ─────────────────────────────────────────
+            # -- 2. Extraer título -----------------------------------------
             try:
                 for sel in SEL["job_title"].split(","):
                     el = page.query_selector(sel.strip())
@@ -261,7 +267,33 @@ class ChileTrabajosPortal(BasePortal):
             except Exception:
                 pass
 
-            # ── 3. Buscar botón Postular ──────────────────────────────────
+            # -- 2b. Filtros sobre descripción real -------------------------
+            try:
+                desc_text = page.evaluate(
+                    "() => {"
+                    "  const d = document.querySelector("
+                    "    'div.job-description, div[class*=\"description\"],"
+                    "     section.description, article');"
+                    "  return d ? d.innerText : document.body?.innerText?.slice(0,1000) || '';"
+                    "}"
+                ) or ""
+                full_text = title + " " + desc_text
+                if not practica_ok(full_text):
+                    log.info("  [ct2] Descartada (práctica/pasantía): '%s'", title)
+                    return "skipped_practica", title
+                if not schedule_ok(full_text):
+                    log.info("  [ct2] Descartada (horario): '%s'", title)
+                    return "skipped_schedule", title
+                if not experience_ok(full_text):
+                    log.info("  [ct2] Descartada (senior/experiencia): '%s'", title)
+                    return "skipped_experience", title
+                if not topic_ok(full_text):
+                    log.info("  [ct2] Descartada (fuera de rubro IT/bodega): '%s'", title)
+                    return "skipped_topic", title
+            except Exception:
+                pass
+
+            # -- 3. Buscar botón Postular ----------------------------------
             apply_btn = self._find_visible(page, SEL["apply_btn"])
             if not apply_btn:
                 page.evaluate("window.scrollTo(0, 400)")
@@ -273,12 +305,12 @@ class ChileTrabajosPortal(BasePortal):
                 take_error_screenshot(page, "chiletrabajos", "no_apply_btn")
                 return "error: no_apply_button", title
 
-            # ── 4. Dry-run ────────────────────────────────────────────────
+            # -- 4. Dry-run ------------------------------------------------
             if self.dry_run:
                 log.info("  [ct2] dry_run — no se hace click en Postular")
                 return "dry_run", title
 
-            # ── 5. Click en Postular ──────────────────────────────────────
+            # -- 5. Click en Postular --------------------------------------
             try:
                 apply_btn.scroll_into_view_if_needed()
                 micro_delay()
@@ -289,7 +321,7 @@ class ChileTrabajosPortal(BasePortal):
 
             current_url = page.url
 
-            # ── 6. Detectar resultado ─────────────────────────────────────
+            # -- 6. Detectar resultado -------------------------------------
 
             # Login requerido
             if "login" in current_url.lower() or "iniciar" in current_url.lower():
@@ -299,7 +331,7 @@ class ChileTrabajosPortal(BasePortal):
                         return "skipped_login_required", title
                     # Reintentar desde la URL de postulación directa
                     postular_url = offer_url.replace("/trabajo/", "/trabajo/postular/")
-                    # Extraer ID del slug: /trabajo/slug-123456 → /trabajo/postular/123456
+                    # Extraer ID del slug: /trabajo/slug-123456 -> /trabajo/postular/123456
                     m = re.search(r'-(\d+)$', offer_url.rstrip('/'))
                     if m:
                         postular_url = f"{BASE_URL}/trabajo/postular/{m.group(1)}"
@@ -312,7 +344,7 @@ class ChileTrabajosPortal(BasePortal):
 
             # Éxito directo
             if self._check_success(page):
-                log.info("  [ct2] ✓ Postulación exitosa directa")
+                log.info("  [ct2] [OK] Postulación exitosa directa")
                 return "applied", title
 
             # Formulario interno de chiletrabajos
@@ -378,7 +410,7 @@ class ChileTrabajosPortal(BasePortal):
                 continue
 
         if self._check_success(page):
-            log.info("  [ct2] ✓ Formulario enviado")
+            log.info("  [ct2] [OK] Formulario enviado")
             return "applied", title
 
         log.info("  [ct2] Formulario procesado (sin confirmación visual)")

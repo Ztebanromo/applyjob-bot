@@ -13,38 +13,24 @@ data/
 logs/
 errors/
 
-# Variables de entorno
+# Variables de entorno — NUNCA subir
 .env
+.env.*
+*.env
 
-# Python
-__pycache__/
-*.py[cod]
-*.pyo
-*.egg-info/
-dist/
-build/
-.eggs/
+# Documentos personales / informes — no subir
+docs/
+*.docx
+*.doc
+*.pdf
 
-# IDE
-.vscode/
-.idea/
-# Entorno virtual
-.venv/
-venv/
-env/
+# Markdown internos — no subir al repo
+PROFESOR_MENTOR.md
+ROADMAP.md
+TROUBLESHOOTING.md
 
-# Sesiones de browser (contienen cookies/tokens)
-sessions/
-
-# Base de datos local
-data/
-
-# Logs y errores
-logs/
-errors/
-
-# Variables de entorno
-.env
+# Scripts de lanzamiento personal (.bat tienen rutas locales)
+*.bat
 
 # Python
 __pycache__/
@@ -69,7 +55,8 @@ Thumbs.db
 *.png
 scratch/
 research/
-docs/archive/
-docs/legacy/
 uploads/
 indeed_cookies.json
+server.log
+server_err.log
+logsserver.log

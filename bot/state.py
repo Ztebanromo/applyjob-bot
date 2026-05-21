@@ -73,15 +73,15 @@ def already_applied(url: str) -> bool:
     Retorna True solo si la oferta fue ENVIADA realmente.
 
     Status que bloquean re-intento:
-      - 'applied'                  → enviado con éxito
-      - 'skipped_already_applied'  → LinkedIn mismo dice "ya postulaste"
+      - 'applied'                  -> enviado con éxito
+      - 'skipped_already_applied'  -> LinkedIn mismo dice "ya postulaste"
 
     Status que permiten re-intento (no bloquean):
-      - 'dry_run'            → nunca se envió, solo simulación
-      - 'error: *'           → falló, vale la pena reintentar
-      - 'skipped_no_easy_apply'   → puede aparecer Easy Apply en otro run
-      - 'skipped_complex_*'       → modal muy largo, puede cambiar
-      - 'skipped_captcha'         → CAPTCHA temporal
+      - 'dry_run'            -> nunca se envió, solo simulación
+      - 'error: *'           -> falló, vale la pena reintentar
+      - 'skipped_no_easy_apply'   -> puede aparecer Easy Apply en otro run
+      - 'skipped_complex_*'       -> modal muy largo, puede cambiar
+      - 'skipped_captcha'         -> CAPTCHA temporal
 
     Args:
         url: URL canónica de la oferta
@@ -93,7 +93,10 @@ def already_applied(url: str) -> bool:
         row = con.execute(
             """SELECT id FROM applications
                WHERE url = ?
-                 AND status IN ('applied', 'skipped_already_applied')""",
+                 AND (
+                     status IN ('applied', 'skipped_already_applied')
+                     OR status LIKE 'external%'
+                 )""",
             (url,),
         ).fetchone()
         return row is not None
@@ -126,7 +129,7 @@ def save_application(url: str, portal: str, title: str, status: str) -> None:
             (url, portal, title, status, now),
         )
         con.commit()
-    log.debug("Guardado: %s → %s", url[:60], status)
+    log.debug("Guardado: %s -> %s", url[:60], status)
 
 
 # ---------------------------------------------------------------------------
@@ -260,7 +263,7 @@ def print_stats() -> None:
     for portal, statuses in stats["by_portal"].items():
         print(f"\n  {portal}")
         for status, cnt in statuses.items():
-            bar = "█" * min(cnt, 20)
+            bar = "#" * min(cnt, 20)
             print(f"    {status:<28} {cnt:>3}  {bar}")
     recent = get_recent(5)
     if recent:

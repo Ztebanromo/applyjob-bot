@@ -107,5 +107,5 @@ def run_setup_wizard():
         for k, v in new_env.items():
             f.write(f"{k}={v}\n")
 
-    print(f"\n✓ Configuración guardada en {env_path}")
+    print(f"\n[OK] Configuración guardada en {env_path}")
     print("Ahora puedes correr el bot con: python main.py --portal linkedin\n")

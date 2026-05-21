@@ -20,14 +20,6 @@ Notas:
 import argparse
 import sys
 import io
-import asyncio
-
-# Parche para evitar conflictos de asyncio en Windows (necesario para Playwright Sync)
-if sys.platform == 'win32':
-    try:
-        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-    except:
-        pass
 
 # Forzar UTF-8 en stdout/stderr para evitar UnicodeEncodeError en terminales Windows (cp1252)
 if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
@@ -36,7 +28,7 @@ if sys.stderr.encoding and sys.stderr.encoding.lower() != "utf-8":
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 
 from bot.config import SITE_CONFIG
-from bot.engine import run_bot, run_bot_multi_keywords
+from bot.engine import run_bot, run_bot_multi_keywords, run_scan_pass, run_apply_queue
 from bot.logger import configure_logging
 
 
@@ -124,7 +116,11 @@ Ejemplos:
     parser.add_argument("--run-all", action="store_true",
         help="Ejecuta el bot secuencialmente en todos los portales configurados")
     parser.add_argument("--multi-keyword", action="store_true",
-        help="Búsqueda atómica: lanza una búsqueda separada por cada keyword del KEYWORD_GROUPS")
+        help="Busqueda atomica: lanza una busqueda separada por cada keyword del KEYWORD_GROUPS")
+    parser.add_argument("--scan", action="store_true",
+        help="Pasada 1: escanea ofertas y recolecta preguntas SIN postular. Usa con --portal.")
+    parser.add_argument("--apply-queue", action="store_true",
+        help="Pasada 2: aplica a ofertas en cola con preguntas ya respondidas. Usa con --portal.")
 
     args = parser.parse_args()
 
@@ -144,6 +140,27 @@ Ejemplos:
 
     if args.purge:
         run_purge(args.days)
+        sys.exit(0)
+
+    # Indeed excluido: bloqueado por Cloudflare Turnstile (requiere Chrome real + CDP)
+    _ALL_PORTALS = ["laborum", "computrabajo", "chiletrabajos", "getonyboard", "linkedin"]
+
+    if args.scan:
+        portals = _ALL_PORTALS if not args.portal else [p.strip() for p in args.portal.split(",") if p.strip()]
+        for p in portals:
+            print(f"\n{'='*50}")
+            print(f"[SCAN] Portal: {p.upper()}")
+            print(f"{'='*50}")
+            run_scan_pass(p, headless=args.headless)
+        sys.exit(0)
+
+    if args.apply_queue:
+        portals = _ALL_PORTALS if not args.portal else [p.strip() for p in args.portal.split(",") if p.strip()]
+        for p in portals:
+            print(f"\n{'='*50}")
+            print(f"[APPLY-QUEUE] Portal: {p.upper()}")
+            print(f"{'='*50}")
+            run_apply_queue(p, headless=args.headless)
         sys.exit(0)
 
     # Sobrescribir límites si hay variable de entorno (para el Dashboard)
@@ -176,42 +193,48 @@ Ejemplos:
 
     if portal_list:
         print(f"\n[SISTEMA] Iniciando ejecución para: {', '.join(portal_list).upper()}\n")
-        from playwright.sync_api import sync_playwright
-        
-        with sync_playwright() as pw:
-            total_global = 0
+        total_global = 0
+
+        if args.multi_keyword:
+            # multi-keyword: cada portal abre su propio sync_playwright internamente
             for portal in portal_list:
                 if portal not in SITE_CONFIG:
                     print(f"Error: portal '{portal}' no encontrado. Saltando.")
                     continue
-                
                 print(f"\n[PORTAL_ACTIVO] PORTAL: {portal}")
-                print(f"--- Procesando portal: {portal.upper()} ---")
                 try:
                     if args.max is not None:
                         SITE_CONFIG[portal]["max_offers_per_run"] = args.max
-                    
-                    if args.multi_keyword:
-                        # run_bot_multi_keywords no fue actualizado para recibir pw aún,
-                        # pero run_bot_multi_keywords ya es eficiente por sí mismo.
-                        # Para máxima velocidad, lo ideal sería que también recibiera pw.
-                        run_bot_multi_keywords(
-                            portal_name = portal,
-                            dry_run     = args.dry_run,
-                            headless    = args.headless,
-                        )
-                    else:
+                    run_bot_multi_keywords(
+                        portal_name = portal,
+                        dry_run     = args.dry_run,
+                        headless    = args.headless,
+                    )
+                except Exception as e:
+                    print(f"Error crítico en portal {portal}: {e}")
+        else:
+            # modo normal: un solo sync_playwright compartido entre portales
+            from playwright.sync_api import sync_playwright
+            with sync_playwright() as pw:
+                for portal in portal_list:
+                    if portal not in SITE_CONFIG:
+                        print(f"Error: portal '{portal}' no encontrado. Saltando.")
+                        continue
+                    print(f"\n[PORTAL_ACTIVO] PORTAL: {portal}")
+                    try:
+                        if args.max is not None:
+                            SITE_CONFIG[portal]["max_offers_per_run"] = args.max
                         applied = run_bot(
                             portal_name = portal,
                             dry_run     = args.dry_run,
                             headless    = args.headless,
-                            pw          = pw
+                            pw          = pw,
                         )
                         total_global += (applied or 0)
-                except Exception as e:
-                    print(f"Error crítico en portal {portal}: {e}")
-            
-            print(f"\n[SISTEMA] Ejecución finalizada. Total global: {total_global}\n")
+                    except Exception as e:
+                        print(f"Error crítico en portal {portal}: {e}")
+
+        print(f"\n[SISTEMA] Ejecución finalizada. Total global: {total_global}\n")
         sys.stdout.flush()
         sys.exit(0)
 

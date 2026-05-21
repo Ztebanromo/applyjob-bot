@@ -2,7 +2,7 @@
 Motor principal de postulación.
 
 Responsabilidades:
-  - Orquestar el flujo completo: navegación → deduplicación → postulación → logging
+  - Orquestar el flujo completo: navegación -> deduplicación -> postulación -> logging
   - Aplicar rate limiting por portal para evitar detección
   - Reintentar ante errores transitorios (red, timeout)
   - Delegar a portales específicos (LinkedInPortal) o al motor genérico
@@ -10,38 +10,35 @@ Responsabilidades:
 
 Flujo de alto nivel:
     run_bot(portal)
-        └── validar configuración
-        └── abrir browser con sesión persistente
-        └── navegar a url_busqueda
-        └── por cada página:
-                └── extraer offer_ids / offer_urls
-                └── por cada oferta:
-                        └── skip si ya en DB (deduplicación)
-                        └── rate_limiter.acquire()  ← bloquea si excede límite/hora
-                        └── with_retry(apply)       ← reintenta ante error de red
-                        └── save_application()
-                        └── _csv_log()
-                └── paginar si hay siguiente página
+        L-- validar configuración
+        L-- abrir browser con sesión persistente
+        L-- navegar a url_busqueda
+        L-- por cada página:
+                L-- extraer offer_ids / offer_urls
+                L-- por cada oferta:
+                        L-- skip si ya en DB (deduplicación)
+                        L-- rate_limiter.acquire()  <- bloquea si excede límite/hora
+                        L-- with_retry(apply)       <- reintenta ante error de red
+                        L-- save_application()
+                        L-- _csv_log()
+                L-- paginar si hay siguiente página
 """
 import csv
 import datetime
+import json
 import logging
 import os
 import random
+import shutil
 import socket
 import sys
 import time
-import asyncio
 from pathlib import Path
 
-# ── Parche de compatibilidad para Playwright Sync en Windows ──────────────────
-# Evita el error "Playwright Sync API inside the asyncio loop" al ejecutar desde el dashboard.
-if sys.platform == 'win32':
-    try:
-        # Forzar política de Selector para evitar conflictos con Proactor/Asyncio
-        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-    except:
-        pass
+# El bot corre como subproceso separado (subprocess.Popen desde gui_server.py),
+# por lo que no hay bucle asyncio activo al arrancar. ProactorEventLoop (default
+# en Windows) es necesario para que Playwright pueda lanzar Chromium vía
+# create_subprocess_exec. No se cambia la política.
 
 log = logging.getLogger("applyjob.engine")
 
@@ -84,18 +81,20 @@ def _try_cdp_connect(pw, port: int = None):
         # Usar el contexto existente del usuario (ya logueado)
         ctx  = browser.contexts[0] if browser.contexts else browser.new_context()
         page = ctx.new_page()
-        log.info("✓ CDP conectado al Chrome del usuario (puerto %d)", port)
+        log.info("[OK] CDP conectado al Chrome del usuario (puerto %d)", port)
         print(f"[CDP] Conectado al Chrome del usuario — sin perfil separado.")
         return browser, ctx, page
     except Exception as exc:
         log.debug("CDP no disponible (%s) — usando perfil separado.", exc)
         return None
 
-from .config import SITE_CONFIG, USER_PROFILE, location_score, schedule_ok
+from .config import SITE_CONFIG, USER_PROFILE, location_score, schedule_ok, experience_ok, practica_ok, topic_ok, topic_ok_it
 from .state import already_applied, save_application
 from .stealth_utils import (
     apply_stealth, human_delay, human_scroll, human_click,
     take_error_screenshot, random_user_agent, random_viewport,
+    portal_action_delay, reading_pause, pre_form_pause,
+    scroll_to_and_pause, human_type_field, human_click_element,
 )
 from .form_filler import fill_form
 from .retry import with_retry, get_rate_limiter
@@ -103,11 +102,162 @@ from .validator import run_startup_validation
 
 # log = logging.getLogger("applyjob.engine") (movido arriba)
 
-BASE_DIR     = Path(__file__).parent.parent
-SESSIONS_DIR = BASE_DIR / "sessions"
-LOGS_DIR     = BASE_DIR / "logs"
+BASE_DIR        = Path(__file__).parent.parent
+SESSIONS_DIR    = BASE_DIR / "sessions"
+LOGS_DIR        = BASE_DIR / "logs"
+SCAN_QUEUE_PATH = BASE_DIR / "data" / "scan_queue.json"
+QUICK_LINKS_PATH = BASE_DIR / "data" / "quick_links.json"
 LOGS_DIR.mkdir(exist_ok=True)
 SESSIONS_DIR.mkdir(exist_ok=True)
+
+# ---------------------------------------------------------------------------
+# Gestión de sesiones — solo se persisten si hubo al menos 1 postulación
+# ---------------------------------------------------------------------------
+
+def _discard_session(session_dir: str, portal_name: str) -> None:
+    """Elimina el directorio de sesión (cookies, storage). Llamar cuando applied == 0."""
+    try:
+        if os.path.exists(session_dir):
+            shutil.rmtree(session_dir, ignore_errors=True)
+            print(f"[SESSION] ⚠ Sin postulaciones en {portal_name.upper()} — sesión descartada (privacidad).")
+    except Exception as exc:
+        log.debug("_discard_session error: %s", exc)
+
+def _maybe_keep_session(session_dir: str, portal_name: str, applied: int) -> None:
+    """Persiste la sesión solo si applied >= 1, de lo contrario la descarta."""
+    if applied >= 1:
+        print(f"[SESSION] ✅ Sesión guardada para {portal_name.upper()} ({applied} postulaciones).")
+    else:
+        _discard_session(session_dir, portal_name)
+
+
+# ---------------------------------------------------------------------------
+# Quick Links — todas las ofertas que pasan filtros, listas para postulación manual
+# ---------------------------------------------------------------------------
+
+def _save_quick_link(url: str, title: str, portal: str) -> None:
+    """Guarda un link rápido en quick_links.json (sin duplicados)."""
+    try:
+        QUICK_LINKS_PATH.parent.mkdir(exist_ok=True)
+        links: list = []
+        if QUICK_LINKS_PATH.exists():
+            try:
+                links = json.load(open(QUICK_LINKS_PATH, encoding="utf-8"))
+            except Exception:
+                links = []
+        # Deduplicar por URL
+        if any(e.get("url") == url for e in links):
+            return
+        links.insert(0, {
+            "url":       url,
+            "title":     title,
+            "portal":    portal,
+            "saved_at":  _datetime_now(),
+            "dismissed": False,
+        })
+        # Mantener máximo 100 links
+        links = links[:100]
+        with open(QUICK_LINKS_PATH, "w", encoding="utf-8") as f:
+            json.dump(links, f, ensure_ascii=False, indent=2)
+        log.info("  [quick-link] Guardado: %s | %s", portal, title[:60])
+    except Exception as exc:
+        log.debug("_save_quick_link error: %s", exc)
+
+
+# ---------------------------------------------------------------------------
+# Scan queue helpers — cola de ofertas pendientes de responder y aplicar
+# ---------------------------------------------------------------------------
+
+def _datetime_now() -> str:
+    from datetime import datetime
+    return datetime.now().isoformat(timespec="seconds")
+
+
+def _load_scan_queue() -> list:
+    if not SCAN_QUEUE_PATH.exists():
+        return []
+    try:
+        return json.load(open(SCAN_QUEUE_PATH, encoding="utf-8"))
+    except Exception:
+        return []
+
+
+def _save_to_scan_queue(url: str, title: str, portal: str,
+                        unanswered: list) -> None:
+    existing_queue = _load_scan_queue()
+    # Preservar failure_count si ya existía la entrada
+    old_entry = next((e for e in existing_queue if e.get("url") == url), None)
+    failure_count = old_entry.get("failure_count", 0) if old_entry else 0
+    queue = [e for e in existing_queue if e.get("url") != url]
+    queue.append({
+        "url":           url,
+        "title":         title,
+        "portal":        portal,
+        "unanswered":    unanswered,
+        "scanned_at":    _datetime_now(),
+        "failure_count": failure_count,
+    })
+    SCAN_QUEUE_PATH.parent.mkdir(exist_ok=True)
+    with open(SCAN_QUEUE_PATH, "w", encoding="utf-8") as f:
+        json.dump(queue, f, ensure_ascii=False, indent=2)
+
+
+def _remove_from_scan_queue(url: str) -> None:
+    queue = [e for e in _load_scan_queue() if e.get("url") != url]
+    with open(SCAN_QUEUE_PATH, "w", encoding="utf-8") as f:
+        json.dump(queue, f, ensure_ascii=False, indent=2)
+
+
+def _increment_scan_queue_failure(url: str, max_failures: int = 2) -> bool:
+    """
+    Incrementa el contador de fallos de una entrada.
+    Si alcanza max_failures → la elimina de la cola automáticamente.
+    Retorna True si fue eliminada, False si solo se incrementó.
+    """
+    queue = _load_scan_queue()
+    entry = next((e for e in queue if e.get("url") == url), None)
+    if not entry:
+        return False
+    entry["failure_count"] = entry.get("failure_count", 0) + 1
+    count = entry["failure_count"]
+    if count >= max_failures:
+        queue = [e for e in queue if e.get("url") != url]
+        log.info("[PRUNE] Eliminada de cola tras %d fallos: %s", max_failures, url[:60])
+        with open(SCAN_QUEUE_PATH, "w", encoding="utf-8") as f:
+            json.dump(queue, f, ensure_ascii=False, indent=2)
+        return True
+    # Solo actualizar contador
+    with open(SCAN_QUEUE_PATH, "w", encoding="utf-8") as f:
+        json.dump(queue, f, ensure_ascii=False, indent=2)
+    return False
+
+
+def _prune_scan_queue(max_age_days: int = 5) -> int:
+    """
+    Elimina entradas de scan_queue más antiguas que max_age_days.
+    Las ofertas vencen rápido — después de 5 días casi siempre están cerradas.
+    Retorna la cantidad de entradas eliminadas.
+    """
+    import datetime as _dt
+    queue = _load_scan_queue()
+    cutoff = _dt.datetime.now() - _dt.timedelta(days=max_age_days)
+    fresh   = []
+    pruned  = 0
+    for entry in queue:
+        try:
+            scanned = _dt.datetime.fromisoformat(entry.get("scanned_at", ""))
+            if scanned < cutoff:
+                pruned += 1
+                log.info("[PRUNE] Expirada (>%dd): '%s'", max_age_days, entry.get("title", "")[:55])
+                continue
+        except Exception:
+            pass  # Si no hay fecha → conservar
+        fresh.append(entry)
+    if pruned:
+        with open(SCAN_QUEUE_PATH, "w", encoding="utf-8") as f:
+            json.dump(fresh, f, ensure_ascii=False, indent=2)
+        log.info("[PRUNE] %d entradas antiguas eliminadas de scan_queue.", pruned)
+    return pruned
 
 
 # ---------------------------------------------------------------------------
@@ -150,7 +300,7 @@ def _apply_directa(page: Page, config: dict, profile: dict, job_title: str = "")
     Estrategia para postulación directa: un click al botón y submit en la misma página.
 
     Flujo:
-        click(selector_boton_aplicar) → fill_form() → click(submit)
+        click(selector_boton_aplicar) -> fill_form() -> click(submit)
 
     Args:
         page      : página de Playwright activa
@@ -165,7 +315,16 @@ def _apply_directa(page: Page, config: dict, profile: dict, job_title: str = "")
     try:
         human_click(page, btn_sel)
         human_delay(1.2, 2.5)
-        fill_form(page, profile, job_title=job_title)
+        form_result = fill_form(page, profile, job_title=job_title)
+
+        # Si quedaron preguntas sin respuesta -> NO enviar, saltar oferta
+        if form_result.get("unanswered", 0) > 0:
+            labels = form_result.get("unanswered_labels", [])
+            log.warning("  [SKIP] Oferta saltada — %d pregunta(s) sin respuesta: %s",
+                        len(labels), ", ".join(labels[:3]))
+            print(f"  [SKIP] Postulacion cancelada — preguntas sin respuesta: {', '.join(labels[:3])}")
+            return "skipped: preguntas_sin_respuesta"
+
         for submit_sel in [
             "button[type='submit']", "input[type='submit']",
             "button:has-text('Enviar')", "button:has-text('Submit')",
@@ -190,7 +349,7 @@ def _apply_modal(page: Page, config: dict, profile: dict, job_title: str = "") -
     se llena dentro del modal y se avanza paso a paso.
 
     Flujo:
-        click(selector_boton_aplicar) → esperar modal → fill_form() × N pasos → submit
+        click(selector_boton_aplicar) -> esperar modal -> fill_form() × N pasos -> submit
 
     Args:
         page      : página activa
@@ -205,7 +364,16 @@ def _apply_modal(page: Page, config: dict, profile: dict, job_title: str = "") -
     try:
         human_click(page, btn_sel)
         human_delay(1.2, 2.5)
-        fill_form(page, profile, job_title=job_title)
+        form_result = fill_form(page, profile, job_title=job_title)
+
+        # Si quedaron preguntas sin respuesta en el primer paso -> cancelar
+        if form_result.get("unanswered", 0) > 0:
+            labels = form_result.get("unanswered_labels", [])
+            log.warning("  [SKIP] Oferta saltada — %d pregunta(s) sin respuesta: %s",
+                        len(labels), ", ".join(labels[:3]))
+            print(f"  [SKIP] Postulacion cancelada — preguntas sin respuesta: {', '.join(labels[:3])}")
+            return "skipped: preguntas_sin_respuesta"
+
         for _ in range(5):
             advanced = False
             for next_sel in [
@@ -220,47 +388,146 @@ def _apply_modal(page: Page, config: dict, profile: dict, job_title: str = "") -
                     if btn and btn.is_visible():
                         btn.click()
                         human_delay(1.0, 2.0)
-                        fill_form(page, profile, job_title=job_title)
+                        step_result = fill_form(page, profile, job_title=job_title)
+                        # Si en un paso intermedio hay preguntas sin respuesta -> cancelar
+                        if step_result.get("unanswered", 0) > 0:
+                            labels = step_result.get("unanswered_labels", [])
+                            log.warning("  [SKIP] Paso intermedio con preguntas sin respuesta: %s",
+                                        ", ".join(labels[:3]))
+                            print(f"  [SKIP] Postulacion cancelada en paso intermedio: {', '.join(labels[:3])}")
+                            return "skipped: preguntas_sin_respuesta"
                         advanced = True
                         break
                 except Exception as exc:
-                    log.debug("Botón '%s' no disponible: %s", next_sel, exc)
+                    log.debug("Boton '%s' no disponible: %s", next_sel, exc)
                     continue
             if not advanced:
                 break
         return "applied"
     except Exception as exc:
-        log.warning("_apply_modal falló: %s", exc)
+        log.warning("_apply_modal fallo: %s", exc)
         return f"error: {exc}"
 
 
-def _apply_externa(page: Page, config: dict) -> str:
+def _apply_externa(page: Page, config: dict, profile: dict = None) -> str:
     """
-    Estrategia para postulación externa: click abre una nueva pestaña
-    en un sitio de terceros. Se registra la URL y se cierra la pestaña.
+    Estrategia para postulación externa: el botón puede abrir nueva pestaña
+    o navegar en la misma página hacia el formulario externo.
 
-    No se intenta rellenar formularios externos (muy variable y riesgoso).
-
-    Args:
-        page  : página activa
-        config: SITE_CONFIG del portal
+    Flujo:
+      1. Si el botón tiene target="_blank" → expect_page (15 s)
+      2. Si falla o no hay target → click normal + esperar navegación (20 s)
+      3. En cualquier caso, intentar fill_form en la página resultante
+      4. Volver a la página original
 
     Returns:
-        "external: <url>" | "error_externa: <mensaje>"
+        "applied" | "external: <url>" | "error_externa: <mensaje>"
     """
     btn_sel = config["selector_boton_aplicar"]
+    original_url = page.url
     try:
-        with page.context.expect_page() as new_page_info:
-            human_click(page, btn_sel)
-        new_page = new_page_info.value
-        new_page.wait_for_load_state("domcontentloaded")
-        external_url = new_page.url
-        new_page.close()
-        log.debug("Redirección externa: %s", external_url)
-        return f"external: {external_url}"
+        btn = page.query_selector(btn_sel)
+        if not btn or not btn.is_visible():
+            return "skipped: no_button"
+
+        target = (btn.get_attribute("target") or "").strip()
+        opens_tab = target == "_blank"
+
+        if opens_tab:
+            # Intento con nueva pestaña (timeout reducido a 12 s)
+            try:
+                with page.context.expect_page(timeout=12_000) as np_info:
+                    btn.click()
+                new_page = np_info.value
+                new_page.wait_for_load_state("domcontentloaded", timeout=15_000)
+                external_url = new_page.url
+                log.debug("Externa nueva pestaña: %s", external_url)
+                # Intentar llenar formulario si hay campos
+                if profile:
+                    try:
+                        fill_form(new_page, profile)
+                    except Exception:
+                        pass
+                new_page.close()
+                return f"external: {external_url}"
+            except Exception as tab_exc:
+                log.debug("expect_page falló (%s) — intentando misma pestaña", tab_exc)
+
+        # Navegar en la misma página
+        btn.click()
+        try:
+            page.wait_for_load_state("domcontentloaded", timeout=20_000)
+        except Exception:
+            pass
+        human_delay(0.8, 1.5)
+        nav_url = page.url
+
+        # Si navegó a una nueva URL, intentar llenar formulario
+        if nav_url != original_url:
+            log.debug("Externa misma pestaña: %s", nav_url)
+            # Detectar si navegó a login/authwall → no es una aplicación real
+            _login_redirects = ["/login", "/authwall", "/signin", "/uas/", "/checkpoint"]
+            if any(p in nav_url.lower() for p in _login_redirects):
+                log.info("_apply_externa: redirigido a login: %s", nav_url[:60])
+                try:
+                    page.goto(original_url, wait_until="domcontentloaded", timeout=15_000)
+                except Exception:
+                    pass
+                return "skipped: login_required"
+            if profile:
+                try:
+                    fill_form(page, profile)
+                except Exception:
+                    pass
+            # Volver a la página original
+            try:
+                page.go_back(wait_until="domcontentloaded", timeout=10_000)
+            except Exception:
+                try:
+                    page.goto(original_url, wait_until="domcontentloaded", timeout=15_000)
+                except Exception:
+                    pass
+            return f"external: {nav_url}"
+
+        # Sin navegación — verificar si apareció un modal/overlay tras el click
+        try:
+            for modal_sel in [
+                "div[role='dialog']", "[class*='modal'][style*='display']",
+                "[class*='overlay']", "iframe[src*='apply']",
+                "form[action*='apply']",
+            ]:
+                el = page.query_selector(modal_sel)
+                if el and el.is_visible():
+                    log.info("_apply_externa: modal detectado tras click (sin navegación)")
+                    return "skipped: apply_via_modal"
+        except Exception:
+            pass
+
+        # Intentar botón alternativo (a veces el selector principal no es el real)
+        _ALT_BTN_SELS = [
+            "a[href*='apply']:visible", "a[href*='postular']:visible",
+            "button:has-text('Postular')", "button:has-text('Apply Now')",
+            "a:has-text('Aplicar')", "a:has-text('Postular ahora')",
+        ]
+        for alt_sel in _ALT_BTN_SELS:
+            try:
+                alt_btn = page.query_selector(alt_sel)
+                if alt_btn and alt_btn.is_visible():
+                    alt_href = alt_btn.get_attribute("href") or ""
+                    if alt_href and alt_href not in (original_url, "#", "javascript:void(0)"):
+                        if not alt_href.startswith("http"):
+                            base = "/".join(original_url.split("/")[:3])
+                            alt_href = base + alt_href
+                        log.info("_apply_externa: URL alternativa encontrada: %s", alt_href[:60])
+                        return f"external: {alt_href}"
+            except Exception:
+                continue
+
+        log.info("_apply_externa: sin navegación ni modal en %s", original_url[:60])
+        return "skipped: no_navigation"
     except Exception as exc:
         log.warning("_apply_externa falló: %s", exc)
-        return f"error_externa: {exc}"
+        return f"error_externa: {str(exc)[:80]}"
 
 
 # ---------------------------------------------------------------------------
@@ -292,6 +559,20 @@ def _process_offer_generic(
 
         with_retry(_navigate, attempts=2, delay=3.0, portal=portal)
         human_delay(1.0, 2.0)
+
+        # Detectar página de error (404, oferta eliminada, expirada)
+        cur_url = page.url
+        page_text = (page.text_content("body") or "").lower()
+        _error_signals = [
+            "/404", "404", "no encontramos", "no encontrada", "not found",
+            "página no existe", "oferta no disponible", "oferta eliminada",
+            "this job is no longer", "ya no está disponible", "expiró",
+        ]
+        if any(s in cur_url.lower() or s in page_text for s in _error_signals):
+            log.warning("  [SKIP] Oferta no disponible (404/eliminada): %s", offer_url)
+            print(f"  [FILTRO] Oferta eliminada o expirada — saltando: {offer_url}")
+            return title, "skipped: oferta_eliminada"
+
         human_scroll(page, steps=1)
 
         title_sel = config.get("selector_titulo_oferta")
@@ -300,6 +581,16 @@ def _process_offer_generic(
                 title = (page.text_content(title_sel, timeout=3_000) or "").strip()[:80]
             except Exception as exc:
                 log.debug("No se pudo leer título con '%s': %s", title_sel, exc)
+
+        # Segundo chequeo usando el titulo real (practica + rubro no-IT)
+        if not practica_ok(title) or not practica_ok(page_text[:300]):
+            log.info("  [FILTRO/PRACTICA] Oferta descartada por practica en titulo: '%s'", title)
+            print(f"  [FILTRO] Practica/pasantia detectada en pagina — saltando: {title}")
+            return title, "skipped: practica"
+        if not topic_ok(title):
+            log.info("  [FILTRO/TOPIC] Oferta descartada por rubro no-IT en titulo: '%s'", title)
+            print(f"  [FILTRO] Rubro no-IT detectado en pagina — saltando: {title}")
+            return title, "skipped: rubro_no_it"
 
         if dry_run:
             log.info("  [dry_run] Llenando formulario para verificación visual...")
@@ -323,7 +614,7 @@ def _process_offer_generic(
         elif tipo == "modal":
             status = _apply_modal(page, config, profile, job_title=title)
         elif tipo == "externa":
-            status = _apply_externa(page, config)
+            status = _apply_externa(page, config, profile=profile)
         else:
             status = f"unknown_type:{tipo}"
 
@@ -347,13 +638,13 @@ _LOGIN_SIGNALS = {
         "button[data-tracking-control-name='guest_homepage-basic_sign-in-button']",
         ".sign-in-form",
         "#session_key",
-        "a[href*='/login']",
+        # NO incluir "a[href*='/login']" — aparece en footer incluso logueado
     ],
     "laborum": [
         "#ingresarNavBar",
         "button:has-text('Ingresar')",
         "input#email",
-        "a[href*='/login']",
+        # NOTA: NO incluir "a[href*='/login']" — aparece en footer incluso estando logueado
     ],
     "indeed": [
         "a[href*='/account/login']",
@@ -362,10 +653,48 @@ _LOGIN_SIGNALS = {
         "div.desktop-sign-in-button",
         "a[data-gnav-element-name='SignIn']",
     ],
+    "chiletrabajos": [
+        "a:has-text('Ingresa a tu cuenta')",
+        "a[href*='/login']",
+        "a[href*='/ingresar']",
+        "button:has-text('Ingresar')",
+        "input[name='email']",
+        "input[type='password']",
+    ],
+    "computrabajo": [
+        # Solo señales de login que NO aparecen en footer cuando logueado
+        "input[name='email'][placeholder*='mail']",
+        "input[type='password']",
+        "form[action*='login']",
+        "form[action*='iniciar']",
+    ],
 }
 
 # Selectores que confirman que ya hay sesión activa
 _LOGGED_IN_SIGNALS = {
+    "chiletrabajos": [
+        # Avatar / menú del usuario logueado en el header
+        "a[href*='/candidato/perfil']",
+        "a[href*='/mi-cuenta']",
+        "a[href*='/postulaciones']",
+        "a:has-text('Mi cuenta')",
+        "a:has-text('Mis postulaciones')",
+        "a:has-text('Mi perfil')",
+        "div.user-menu, ul.user-menu",
+        "span.username, span[class*='username']",
+        # El botón "Ingresa a tu cuenta" DESAPARECE cuando hay sesión
+        # — se verifica por ausencia en _is_logged_in con lógica extra
+    ],
+    "computrabajo": [
+        # Nav del usuario logueado — visible en candidato.cl.computrabajo.com
+        "a:has-text('Mi área')",
+        "a:has-text('Mi currículum')",
+        "a:has-text('Mis postulaciones')",
+        "a:has-text('Mis alertas')",
+        "a[href*='/candidato/']",
+        "a[href*='/mis-postulaciones']",
+        "a[href*='/mi-curriculum']",
+    ],
     "linkedin": [
         ".global-nav__me-photo",
         "img.global-nav__me-photo",
@@ -373,10 +702,23 @@ _LOGGED_IN_SIGNALS = {
         ".feed-identity-module",
     ],
     "laborum": [
+        # Selectores robustos para estado logueado en Laborum
         "[data-testid='header-user-menu']",
         "button:has-text('Mi Perfil')",
         "a[href*='/postulante/']",
         "img[class*='Avatar']",
+        # Elementos visibles en el dashboard tras login
+        "a:has-text('Ir a mis postulaciones')",
+        "a:has-text('Ir a mi CV')",
+        "a[href*='/postulante/cv']",
+        "a[href*='/postulante/perfil']",
+        "a[href*='/mi-perfil']",
+        "[class*='userMenu']",
+        "[class*='UserMenu']",
+        "[class*='user-menu']",
+        # Avatar genérico en nav (círculo del usuario top-right)
+        "nav img[src*='avatar'], nav img[src*='profile'], nav img[src*='user']",
+        "header [class*='avatar'], header [class*='Avatar']",
     ],
     "indeed": [
         "a[data-gnav-element-name='Account']",
@@ -390,17 +732,19 @@ _LOGGED_IN_SIGNALS = {
 
 # URLs de login por portal
 _LOGIN_URLS = {
-    "linkedin": "https://www.linkedin.com/login",
-    "laborum":  "https://www.laborum.cl/login",
-    "indeed":   "https://cl.indeed.com/account/login",
+    "linkedin":      "https://www.linkedin.com/login",
+    "laborum":       "https://www.laborum.cl/login",
+    "indeed":        "https://cl.indeed.com/account/login",
+    "chiletrabajos": "https://www.chiletrabajos.cl/candidato/login",
+    "computrabajo":  "https://cl.computrabajo.com/candidato/login",
 }
 
 
 def _wait_for_login_if_needed(page, portal_name: str, config: dict) -> None:
     """
-    1. Si hay Cloudflare → espera a que el usuario lo resuelva (imprime [CAPTCHA]).
-    2. Si hay pantalla de login → espera a que el usuario inicie sesión ([LOGIN_REQUERIDO]).
-    3. Si ya hay sesión activa → retorna inmediatamente.
+    1. Si hay Cloudflare -> espera a que el usuario lo resuelva (imprime [CAPTCHA]).
+    2. Si hay pantalla de login -> espera a que el usuario inicie sesión ([LOGIN_REQUERIDO]).
+    3. Si ya hay sesión activa -> retorna inmediatamente.
     """
     if not config.get("requires_login"):
         return
@@ -425,13 +769,15 @@ def _wait_for_login_if_needed(page, portal_name: str, config: dict) -> None:
             return False
 
     def _is_logged_in() -> bool:
+        # 1. Selectores positivos de sesión activa
         for sel in session_sels:
             try:
-                if page.query_selector(sel):
+                el = page.query_selector(sel)
+                if el and el.is_visible():
                     return True
             except Exception:
                 pass
-        # Indeed: URL de jobs sin muro de login
+        # 2. Indeed: URL de jobs sin muro de login
         if portal_name == "indeed":
             try:
                 cur = page.url
@@ -439,6 +785,94 @@ def _wait_for_login_if_needed(page, portal_name: str, config: dict) -> None:
                         and "login" not in cur and "authwall" not in cur
                         and "cf_chl" not in cur):
                     return True
+            except Exception:
+                pass
+        # 3. Laborum: lógica combinada más robusta
+        if portal_name == "laborum":
+            try:
+                cur = page.url
+                # URL de área privada → siempre logueado
+                if any(x in cur for x in ("/postulante/", "/mis-postulaciones", "/mi-perfil")):
+                    return True
+                # URL laborum.cl fuera del login con ausencia de botón Ingresar VISIBLE
+                if "laborum.cl" in cur and "login" not in cur:
+                    ingresar = page.query_selector("#ingresarNavBar")
+                    if ingresar and ingresar.is_visible():
+                        return False   # botón Ingresar visible → no logueado
+                    # Verificar también texto del botón header
+                    btn_ingresar = page.query_selector("button:has-text('Ingresar')")
+                    if btn_ingresar and btn_ingresar.is_visible():
+                        # Solo cuenta si está en el header/nav (no en footer)
+                        try:
+                            in_nav = page.evaluate(
+                                "el => el.closest('nav,header') !== null",
+                                btn_ingresar
+                            )
+                            if in_nav:
+                                return False
+                        except Exception:
+                            pass
+                    # Sin botón Ingresar visible en header → asumir logueado
+                    return True
+            except Exception:
+                pass
+        # 4. LinkedIn: URL feed o mynetwork → logueado
+        if portal_name == "linkedin":
+            try:
+                cur = page.url
+                if any(x in cur for x in ("/feed", "/mynetwork", "/jobs", "/in/")):
+                    return True
+            except Exception:
+                pass
+        # 5. ChileTrabajos: detectar por presencia de nav del candidato logueado
+        if portal_name == "chiletrabajos":
+            try:
+                cur = page.url
+                if "chiletrabajos.cl" in cur and "login" not in cur and "ingresar" not in cur:
+                    # Primero: señales POSITIVAS de sesión activa
+                    for pos_sel in [
+                        "a:has-text('Mis postulaciones')",
+                        "a:has-text('Mi cuenta')",
+                        "a:has-text('Mi perfil')",
+                        "a[href*='/postulaciones']",
+                        "a[href*='/candidato/']",
+                        "a[href*='/mi-cuenta']",
+                    ]:
+                        try:
+                            el = page.query_selector(pos_sel)
+                            if el and el.is_visible():
+                                return True
+                        except Exception:
+                            pass
+                    # Señal NEGATIVA: botón de ingreso todavía visible → no logueado
+                    btn = page.query_selector("a:has-text('Ingresa a tu cuenta')")
+                    if btn and btn.is_visible():
+                        return False
+                    # Sin señales claras → asumir logueado (evitar falsos negativos)
+                    return True
+            except Exception:
+                pass
+        # 6. Computrabajo: detectar por presencia de nav del área privada
+        # OJO: el dominio es computrabajo.com (no .cl) — cl. es subdomain
+        if portal_name == "computrabajo":
+            try:
+                cur = page.url
+                if "computrabajo.com" in cur and "login" not in cur and "iniciar-sesion" not in cur:
+                    # Señales POSITIVAS: nav del candidato logueado
+                    for pos_sel in [
+                        "a:has-text('Mi área')",
+                        "a:has-text('Mi currículum')",
+                        "a:has-text('Mis postulaciones')",
+                        "a[href*='/candidato/']",
+                    ]:
+                        try:
+                            el = page.query_selector(pos_sel)
+                            if el and el.is_visible():
+                                return True
+                        except Exception:
+                            pass
+                    # Si ninguna señal positiva → no logueado
+                    return False
             except Exception:
                 pass
         return False
@@ -458,7 +892,7 @@ def _wait_for_login_if_needed(page, portal_name: str, config: dict) -> None:
             return True
         return False
 
-    # ── Paso 1: resolver Cloudflare si está presente ──────────────────────────
+    # -- Paso 1: resolver Cloudflare si está presente --------------------------
     if _is_cloudflare():
         print(f"\n[CAPTCHA] Cloudflare detectado en {portal_name.upper()}. Resuelve el desafio en el navegador.")
         log.warning("Cloudflare detectado — esperando resolución manual (max 3 min)...")
@@ -468,7 +902,7 @@ def _wait_for_login_if_needed(page, portal_name: str, config: dict) -> None:
             time.sleep(2)
             if not _is_cloudflare():
                 log.info("Cloudflare resuelto. Continuando.")
-                print(f"\n[SESIÓN_INICIADA] Cloudflare resuelto en {portal_name.upper()}.")
+                print(f"\n[SESION_INICIADA] Cloudflare resuelto en {portal_name.upper()}.")
                 human_delay(2.0, 3.0)
                 break
             if time.time() - last_cf_log > 20:
@@ -478,32 +912,41 @@ def _wait_for_login_if_needed(page, portal_name: str, config: dict) -> None:
             log.error("Tiempo agotado esperando Cloudflare.")
             return
 
-    # ── Paso 2: verificar si ya hay sesión activa ─────────────────────────────
+    # -- Paso 2: esperar a que la página termine de cargar antes de verificar ---
+    # Portales con requires_login necesitan que el DOM esté completo para
+    # detectar correctamente si el botón de login o el avatar del usuario aparece.
+    _PORTALS_FORCE_LOGIN = ("indeed", "laborum", "linkedin", "chiletrabajos", "computrabajo")
+    try:
+        page.wait_for_load_state("domcontentloaded", timeout=5_000)
+        page.wait_for_function("() => document.readyState === 'complete'", timeout=5_000)
+    except Exception:
+        pass
+
+    # -- Paso 3: verificar si ya hay sesión activa -----------------------------
     if _is_logged_in():
         log.info("Sesión activa confirmada en %s.", portal_name)
         return
 
-    # ── Paso 3: verificar si realmente necesita login ─────────────────────────
-    # Solo forzar login si hay señales explícitas O es indeed/laborum/linkedin
+    # -- Paso 4: verificar si realmente necesita login -------------------------
+    # Forzar verificación profunda en portales que siempre requieren cuenta
     needs = _needs_login()
-    if not needs and portal_name not in ("indeed", "laborum", "linkedin"):
+    if not needs and portal_name not in _PORTALS_FORCE_LOGIN:
         return
     if not needs:
-        # Para indeed/laborum: esperar un poco más antes de forzar login
-        # (la página puede estar cargando aún) - USAR WAIT INTELIGENTE
+        # Esperar un poco más — la página puede seguir cargando elementos del header
         try:
-            page.wait_for_function("() => document.readyState === 'complete'", timeout=2000)
-        except:
+            page.wait_for_timeout(1500)
+        except Exception:
             pass
-            
+
         if _is_logged_in():
             return
         if not _needs_login():
-            # Si no hay señales claras de login y no hay CF → continuar igual
+            # Sin señales claras de login y sin CF -> continuar igual
             log.info("Sin señales claras de login en %s — continuando.", portal_name)
             return
 
-    # ── Hay que hacer login ───────────────────────────────────────────────────
+    # -- Hay que hacer login ---------------------------------------------------
     log.warning("LOGIN REQUERIDO en %s", portal_name)
     print(f"\n[LOGIN_REQUERIDO] {portal_name.upper()} — Inicia sesión en el navegador abierto.")
 
@@ -532,41 +975,59 @@ def _wait_for_login_if_needed(page, portal_name: str, config: dict) -> None:
             except Exception as exc:
                 log.warning("Fallo auto-login Laborum: %s", exc)
 
-    # Esperar hasta 20 minutos a que el usuario inicie sesión
-    deadline = time.time() + 1200
-    last_log = 0
+    # Esperar hasta 10 minutos a que el usuario inicie sesión
+    deadline  = time.time() + 600
+    last_log  = 0
+    prev_url  = page.url   # para detectar transición de URL login → no-login
 
     while time.time() < deadline:
         current_time = time.time()
-        if current_time - last_log > 15:
-            print(f"\n[LOGIN_REQUERIDO] Esperando login en {portal_name.upper()}. Inicia sesión en el navegador abierto.")
+        if current_time - last_log > 20:
+            print(f"\n[LOGIN_REQUERIDO] Esperando login en {portal_name.upper()}. "
+                  "Inicia sesión en el navegador abierto.")
             last_log = current_time
-            
+
         time.sleep(3)
         try:
-            if _is_logged_in():
-                log.info("Sesión detectada. Continuando...")
-                print(f"\n[SESIÓN_INICIADA] Login detectado en {portal_name.upper()}. Continuando automáticamente.")
-                page.goto(config["url_busqueda"], wait_until="domcontentloaded", timeout=30_000)
-                human_delay(2.0, 3.0)
-                return
             cur = page.url
-            indeed_ok = (portal_name == "indeed" and
-                         any(k in cur for k in ("/jobs", "/myjobs", "/resume", "/account")) and
-                         "login" not in cur and "authwall" not in cur)
-            generic_ok = "/feed" in cur or "/profile" in cur
-            if indeed_ok or generic_ok:
-                log.info("Login detectado por URL. Continuando...")
-                print(f"\n[SESIÓN_INICIADA] Login detectado en {portal_name.upper()}. Continuando automáticamente.")
-                if config["url_busqueda"] not in cur:
+
+            # ── Detección por transición de URL (más rápida que selectores) ──
+            # Si el bot estaba en la página de login y ahora NO lo está → logueado
+            login_keywords = ("login", "authwall", "signin", "checkpoint", "uas/login")
+            was_on_login = any(k in prev_url.lower() for k in login_keywords)
+            now_off_login = not any(k in cur.lower() for k in login_keywords)
+            if was_on_login and now_off_login and portal_name.split(".")[0] in cur.lower().replace("www.", ""):
+                # Pequeña pausa para que React termine de hidratarse
+                time.sleep(2.5)
+                log.info("Transición URL login→no-login detectada. Asumiendo sesión activa.")
+                print(f"\n[SESION_INICIADA] Login detectado en {portal_name.upper()} (cambio de URL).")
+                try:
                     page.goto(config["url_busqueda"], wait_until="domcontentloaded", timeout=30_000)
+                except Exception:
+                    pass
                 human_delay(2.0, 3.0)
                 return
+
+            prev_url = cur
+
+            # ── Detección por selectores ─────────────────────────────────────
+            if _is_logged_in():
+                log.info("Sesión detectada por selector. Continuando...")
+                print(f"\n[SESION_INICIADA] Login detectado en {portal_name.upper()}. Continuando.")
+                try:
+                    if config["url_busqueda"] not in cur:
+                        page.goto(config["url_busqueda"], wait_until="domcontentloaded", timeout=30_000)
+                except Exception:
+                    pass
+                human_delay(2.0, 3.0)
+                return
+
         except Exception as exc:
             log.debug("Error verificando login: %s", exc)
 
-    log.error("Tiempo de espera agotado (20 min). Cerrando.")
-    print(f"\n[FALLO] Tiempo de espera agotado en {portal_name.upper()}.")
+    log.error("Tiempo de espera agotado (10 min). Abortando portal.")
+    print(f"\n[FALLO] Tiempo de espera agotado en {portal_name.upper()}. "
+          "Usa Detener y vuelve a intentarlo cuando tengas sesión abierta.")
     raise TimeoutError("Login no completado en el tiempo límite")
 
 
@@ -578,12 +1039,38 @@ def _run_keyword_loop(
     page, browser, portal_name: str, config: dict, profile: dict,
     max_offers: int, dry_run: bool, rate_limiter, portal_handler,
     using_cdp: bool = False,
+    session_verified: bool = False,
 ) -> int:
     """
     Navega a config['url_busqueda'], extrae ofertas y postula.
     Reutilizable en run_bot (keyword única) y run_bot_multi_keywords (browser compartido).
     Retorna el número de postulaciones completadas.
+    session_verified=True indica que el login ya fue verificado en esta ejecución
+    (evita navegar a la home en cada keyword del loop multi-keyword).
     """
+    # -- Pre-flight: verificar sesión en la HOME antes de ir a búsqueda -------
+    # Solo corre UNA VEZ por portal (session_verified=False en la primera keyword).
+    # Para portales que requieren login, navegar primero a la home permite que
+    # las cookies carguen correctamente y que _wait_for_login_if_needed detecte
+    # el estado real de sesión antes de entrar al listado de ofertas.
+    _HOME_URLS = {
+        # Ir directo al área del candidato — ya tiene señales de sesión claras
+        "chiletrabajos": "https://www.chiletrabajos.cl",
+        "computrabajo":  "https://candidato.cl.computrabajo.com",
+        "laborum":       "https://www.laborum.cl",
+        "indeed":        "https://cl.indeed.com",
+    }
+    if not session_verified and config.get("requires_login") and portal_name in _HOME_URLS:
+        home_url = _HOME_URLS[portal_name]
+        log.info("[PRE-FLIGHT] Verificando sesión en home de %s: %s", portal_name, home_url)
+        print(f"\n[PRE-FLIGHT] Verificando sesión en {portal_name.upper()} antes de buscar...")
+        try:
+            page.goto(home_url, wait_until="domcontentloaded", timeout=20_000)
+            human_delay(1.5, 2.5)
+            _wait_for_login_if_needed(page, portal_name, config)
+        except Exception as pf_err:
+            log.warning("[PRE-FLIGHT] Error verificando sesión en home: %s", pf_err)
+
     log.info("Navegando a: %s", config["url_busqueda"])
     try:
         with_retry(
@@ -595,6 +1082,7 @@ def _run_keyword_loop(
         return 0
 
     human_delay(1.5, 2.5)
+    # Segunda verificación sobre la URL de búsqueda (puede redirigir a login)
     _wait_for_login_if_needed(page, portal_name, config)
 
     applied  = 0
@@ -643,7 +1131,7 @@ def _run_keyword_loop(
 
         human_delay(0.8, 1.5)
 
-        # ── Portal específico ─────────────────────────────────────────────────
+        # -- Portal específico -------------------------------------------------
         if portal_handler:
             current_listing_url = page.url
             print(f"  [BUSCANDO] Buscando ofertas en {portal_name.upper()}...")
@@ -683,7 +1171,7 @@ def _run_keyword_loop(
                 take_error_screenshot(page, portal_name, "no_offers")
                 break
 
-            log.info("  ✓ Ofertas encontradas: %d", len(offer_ids))
+            log.info("  [OK] Ofertas encontradas: %d", len(offer_ids))
 
             for offer_id in offer_ids:
                 if applied >= max_offers:
@@ -722,12 +1210,23 @@ def _run_keyword_loop(
 
                 if status == "applied":
                     print(f"  [ÉXITO] Postulación completada para: {title or offer_id}")
+                elif status == "error: linkedin_blocked":
+                    print(f"\n⛔  LinkedIn bloqueó el bot. Deteniendo LinkedIn por esta sesión.")
+                    log.warning("LinkedIn bloqueado — abortando loop de LinkedIn.")
+                    save_application(offer_url, portal_name, title, status)
+                    _csv_log(portal_name, offer_url, title, status)
+                    return applied  # ← salir INMEDIATAMENTE del loop
                 elif status.startswith("error"):
                     print(f"  [FALLO] Error en {title or offer_id}: {status}")
 
-                log.info("  ✓ [%s] %s → %s (Tiempo: %.1fs)", portal_name, title or offer_id, status, elapsed)
+                log.info("  [OK] [%s] %s -> %s (Tiempo: %.1fs)", portal_name, title or offer_id, status, elapsed)
                 save_application(offer_url, portal_name, title, status)
                 _csv_log(portal_name, offer_url, title, status)
+
+                # Guardar como quick link (todos los que pasan filtros)
+                if title and title != "unknown":
+                    _save_quick_link(offer_url, title, portal_name)
+
                 applied += 1
 
                 print(f"  [PROGRESO] Aplicadas {applied}/{max_offers} en {portal_name.upper()}")
@@ -736,9 +1235,16 @@ def _run_keyword_loop(
                 if status in _RATE_COUNTED:
                     rate_limiter.acquire(portal_name)
 
-                human_delay(1.0, 2.0)
+                # LinkedIn necesita delays más largos para evitar detección
+                if portal_name == "linkedin":
+                    import random as _rnd
+                    _delay = _rnd.uniform(8.0, 15.0)
+                    log.debug("  [linkedin] Pausa anti-bot: %.1fs", _delay)
+                    time.sleep(_delay)
+                else:
+                    human_delay(1.0, 2.0)
 
-        # ── Motor genérico ────────────────────────────────────────────────────
+        # -- Motor genérico ----------------------------------------------------
         else:
             elements = page.query_selector_all(config["selector_oferta"])
             if not elements:
@@ -749,11 +1255,15 @@ def _run_keyword_loop(
             log.info("Ofertas en página: %d", len(elements))
             print(f"  [BUSCANDO] Detectadas {len(elements)} ofertas en página {page_num}")
 
-            # ── Extraer URLs + score por ubicación (prioridad Maipú) ─────────────
+            # -- Extraer URLs + score por ubicación (Santiago RM — Maipú primeras) --
             loc_sel = config.get("selector_ubicacion")
             scored: list[tuple[int, str]] = []   # (score, url)
 
-            skipped_sched = 0
+            skipped_sched    = 0
+            skipped_geo      = 0
+            skipped_exp      = 0
+            skipped_practica = 0
+            skipped_topic    = 0
             for el in elements:
                 try:
                     href = el.get_attribute("href")
@@ -773,11 +1283,32 @@ def _run_keyword_loop(
                     except Exception:
                         pass
 
-                    # ── Filtro de horario: descartar turno noche / finde ──────
+                    # -- Filtro 1: horario — descartar turno noche / finde -----
                     if not schedule_ok(card_text):
-                        log.info("  [GEO/SCHED] Descartado por horario: %s",
+                        log.info("  [FILTRO/SCHED] Descartado por horario: %s",
                                  card_text[:80].strip().replace("\n", " "))
                         skipped_sched += 1
+                        continue
+
+                    # -- Filtro 2: experiencia — solo junior / sin experiencia --
+                    if not experience_ok(card_text):
+                        log.info("  [FILTRO/EXP] Descartado (senior/experiencia): %s",
+                                 card_text[:80].strip().replace("\n", " "))
+                        skipped_exp += 1
+                        continue
+
+                    # -- Filtro 3: practica/pasantia — nunca postular a practicas --
+                    if not practica_ok(card_text):
+                        log.info("  [FILTRO/PRACTICA] Descartado (practica/pasantia): %s",
+                                 card_text[:80].strip().replace("\n", " "))
+                        skipped_practica += 1
+                        continue
+
+                    # -- Filtro 4: rubro — solo IT/bodega, nada de marketing/salud/etc --
+                    if not topic_ok(card_text):
+                        log.info("  [FILTRO/TOPIC] Descartado (rubro ajeno a IT): %s",
+                                 card_text[:80].strip().replace("\n", " "))
+                        skipped_topic += 1
                         continue
 
                     # Intentar leer texto de ubicación del card
@@ -795,6 +1326,11 @@ def _run_keyword_loop(
                         loc_text = card_text[:300]
 
                     score = location_score(loc_text)
+                    # Rechazar comunas lejanas (score 2 = _LOC_FAR: Vitacura, Las Condes, etc.)
+                    if score == 2:
+                        log.info("  [GEO] Rechazada por ubicación fuera de zona: '%s'", loc_text[:60])
+                        skipped_geo += 1
+                        continue
                     if loc_text and score != 5:
                         log.debug("  [GEO] score=%d loc='%s...' url=%s",
                                   score, loc_text[:40], href[:60])
@@ -805,9 +1341,21 @@ def _run_keyword_loop(
 
             if skipped_sched:
                 log.info("  %d ofertas descartadas por turno incompatible", skipped_sched)
-                print(f"  [FILTRO] {skipped_sched} ofertas descartadas por horario (noche/finde/rotativo)")
+                print(f"  [FILTRO] {skipped_sched} ofertas descartadas -> horario (noche/finde/rotativo)")
+            if skipped_exp:
+                log.info("  %d ofertas descartadas por nivel senior / experiencia requerida", skipped_exp)
+                print(f"  [FILTRO] {skipped_exp} ofertas descartadas -> requieren experiencia/senior")
+            if skipped_geo:
+                log.info("  %d ofertas descartadas por zona fuera de Santiago/Maipú", skipped_geo)
+                print(f"  [FILTRO] {skipped_geo} ofertas descartadas -> ubicacion fuera de zona")
+            if skipped_practica:
+                log.info("  %d ofertas descartadas por ser practica/pasantia", skipped_practica)
+                print(f"  [FILTRO] {skipped_practica} ofertas descartadas -> practica/pasantia")
+            if skipped_topic:
+                log.info("  %d ofertas descartadas por rubro ajeno a IT", skipped_topic)
+                print(f"  [FILTRO] {skipped_topic} ofertas descartadas -> rubro no-IT (marketing/salud/etc)")
 
-            # Ordenar: mayor score primero (Maipú y cercanas al inicio)
+            # Ordenar: mayor score primero (Maipú primeras, luego resto de Santiago)
             scored.sort(key=lambda x: x[0], reverse=True)
 
             # Loguear si hay reordenamiento visible
@@ -815,8 +1363,8 @@ def _run_keyword_loop(
                 top_score = scored[0][0]
                 bot_score = scored[-1][0]
                 if top_score != bot_score:
-                    print(f"  [GEO] Ofertas ordenadas por cercanía a Maipú"
-                          f" (score {top_score}→{bot_score})")
+                    print(f"  [GEO] Ofertas Santiago ordenadas (Maipú primeras)"
+                          f" (score {top_score}->{bot_score})")
 
             offer_urls = []
             seen = set()
@@ -842,9 +1390,14 @@ def _run_keyword_loop(
                 elif status.startswith("error"):
                     print(f"  [FALLO] Error en {title or 'Sin Título'}: {status}")
 
-                log.info("  ✓ [%s] %s → %s", portal_name, title, status)
+                log.info("  [OK] [%s] %s -> %s", portal_name, title, status)
                 save_application(url, portal_name, title, status)
                 _csv_log(portal_name, url, title, status)
+
+                # Guardar quick link (todos los que pasan filtros)
+                if title and title != "unknown":
+                    _save_quick_link(url, title, portal_name)
+
                 applied += 1
 
                 print(f"  [PROGRESO] Aplicadas {applied}/{max_offers} en {portal_name.upper()}")
@@ -859,9 +1412,9 @@ def _run_keyword_loop(
                 except Exception as exc:
                     log.warning("go_back falló: %s", exc)
 
-        # ── Paginación ────────────────────────────────────────────────────────
+        # -- Paginación --------------------------------------------------------
         next_sel = config.get("selector_siguiente_pagina")
-        max_pages = config.get("max_pages", 5)   # límite anti-bucle infinito
+        max_pages = config.get("max_pages", 2)   # máx 2 páginas por keyword, luego sigue con la siguiente
         if not next_sel or applied >= max_offers or page_num >= max_pages:
             if page_num >= max_pages:
                 log.info("Límite de páginas alcanzado (%d). Fin.", max_pages)
@@ -890,6 +1443,566 @@ def _run_keyword_loop(
     return applied
 
 
+def _scan_offer(page, offer_url: str, config: dict, profile: dict,
+                portal: str) -> tuple:
+    """
+    Pasada 1: navega a oferta, abre formulario, escanea preguntas SIN enviar.
+    Retorna (title, status, unanswered_labels).
+    status: 'ready' | 'queued' | 'skipped' | 'error'
+
+    Comportamiento por tipo de postulacion:
+      - "directa" : click en boton (si existe) y escanear formulario en la misma pagina.
+      - "modal"   : click en boton para abrir modal, esperar 1.5s, escanear modal.
+      - "externa" : NO click (abriria nueva pestana). Escanear pagina actual y marcar
+                    'queued' para que run_scan_pass lo guarde en la cola sin aplicar.
+    """
+    from .form_filler import scan_form
+    title = "unknown"
+    try:
+        page.goto(offer_url, wait_until="domcontentloaded", timeout=25_000)
+        human_delay(0.6, 1.2)
+
+        page_text = (page.text_content("body") or "").lower()
+        _err = ["404", "no encontramos", "not found", "oferta no disponible", "oferta eliminada"]
+        if any(s in page_text for s in _err):
+            return title, "skipped: eliminada", []
+
+        title_sel = config.get("selector_titulo_oferta")
+        if title_sel:
+            try:
+                title = (page.text_content(title_sel, timeout=2_000) or "").strip()[:80]
+            except Exception:
+                pass
+
+        # Fallback: extraer título del slug de la URL si el selector falló
+        if not title or title == "unknown":
+            import re as _re
+            slug = offer_url.rstrip("/").split("/")[-1]
+            slug = _re.sub(r"[A-F0-9]{20,}.*$", "", slug, flags=_re.I)  # quitar hash al final
+            slug = _re.sub(r"^oferta-de-trabajo-de-", "", slug)
+            slug = _re.sub(r"-en-[a-z-]+$", "", slug)  # quitar "-en-ciudad"
+            slug_title = slug.replace("-", " ").strip().title()
+            if len(slug_title) > 6:
+                title = slug_title[:80]
+
+        # Filtrar por título Y por texto visible de la página (primeros 800 chars)
+        page_snippet = (page.text_content("body") or "")[:800]
+        if not practica_ok(title) or not practica_ok(page_snippet):
+            return title, "skipped: filtro", []
+        # topic_ok_it: rechazar si no hay señal IT en título o en descripción
+        if not topic_ok_it(title) and not topic_ok_it(page_snippet):
+            log.info("  [FILTRO/TOPIC-SCAN] Sin señal IT en pagina: '%s'", title[:55])
+            return title, "skipped: filtro", []
+        # topic_ok estándar: rechazar rubros explícitamente off-topic
+        if not topic_ok(title) or not topic_ok(page_snippet):
+            log.info("  [FILTRO/TOPIC-SCAN] Rubro off-topic en pagina: '%s'", title[:55])
+            return title, "skipped: filtro", []
+
+        tipo = config.get("tipo_postulacion", "directa")
+
+        # Para portales externos (GetOnBoard): no hay formulario que escanear.
+        # - Si es bodega → guardar como quick_link para postulación manual 1-click.
+        # - Si es IT     → descartar (el usuario va directamente al portal).
+        if tipo == "externa":
+            if _is_bodega_job(title):
+                log.info("  [SCAN-EXTERNA-BODEGA] %s — guardando como quick link", title[:55])
+                return title, "bodega_quick_link", []
+            else:
+                log.info("  [SCAN-EXTERNA-IT] %s — descartado (externo, no bodega)", title[:55])
+                return title, "skipped: externa_it", []
+
+        # Para portales directa/modal: intentar abrir el formulario
+        btn_sel = config.get("selector_boton_aplicar", "")
+        if btn_sel:
+            try:
+                btn = page.query_selector(btn_sel)
+                if btn and btn.is_visible():
+                    btn.click()
+                    # Esperar mas tiempo para modales (LinkedIn Easy Apply, Indeed)
+                    if tipo == "modal":
+                        page.wait_for_timeout(1500)
+                    else:
+                        human_delay(0.8, 1.5)
+                else:
+                    log.debug("  [SCAN] Boton aplicar no visible en %s — escaneando pagina tal cual", offer_url[:50])
+            except Exception as btn_exc:
+                log.debug("  [SCAN] Click en boton de aplicar fallo (%s) — escaneando pagina tal cual", btn_exc)
+
+        result = scan_form(page, profile, job_title=title)
+
+        # Para modales (LinkedIn Easy Apply): cerrar sin enviar para que go_back() funcione
+        if tipo == "modal":
+            for dismiss_sel in [
+                "button[aria-label='Dismiss']",
+                "button[aria-label='Cerrar']",
+                "button[aria-label='Descartar']",
+                "button[aria-label='Discard']",
+            ]:
+                try:
+                    btn = page.query_selector(dismiss_sel)
+                    if btn and btn.is_visible():
+                        btn.click()
+                        page.wait_for_timeout(600)
+                        # Confirmar descarte si aparece dialogo
+                        for confirm_sel in [
+                            "button[data-control-name='discard_application_confirm_btn']",
+                            "button:has-text('Discard')", "button:has-text('Descartar')",
+                        ]:
+                            cfm = page.query_selector(confirm_sel)
+                            if cfm and cfm.is_visible():
+                                cfm.click()
+                                page.wait_for_timeout(400)
+                                break
+                        break
+                except Exception:
+                    pass
+
+        if result["all_answered"]:
+            log.info("  [SCAN-OK] %s (%d campos)", title[:55], result["answered_count"])
+            return title, "ready", []
+        else:
+            log.info("  [SCAN-QUEUE] %s — %d sin respuesta: %s",
+                     title[:45], len(result["unanswered"]),
+                     ", ".join(result["unanswered"][:2]))
+            return title, "queued", result["unanswered"]
+    except Exception as exc:
+        log.debug("_scan_offer error %s: %s", offer_url[:50], exc)
+        return title, f"error: {str(exc)[:40]}", []
+
+
+def _get_offer_urls_from_page(page, config: dict, limit: int) -> list:
+    """Extrae URLs de ofertas de la pagina de resultados actual."""
+    urls = []
+    sel = config.get("selector_oferta", "a[href]")
+    try:
+        page.wait_for_selector(sel, timeout=8_000)
+        elements = page.query_selector_all(sel)
+        for el in elements:
+            href = el.get_attribute("href") or ""
+            if not href:
+                try:
+                    child_a = el.query_selector("a[href]")
+                    if child_a:
+                        href = child_a.get_attribute("href") or ""
+                except Exception:
+                    pass
+            if not href:
+                continue
+            if not href.startswith("http"):
+                base = "/".join(page.url.split("/")[:3])
+                href = base + href
+            if href not in urls:
+                urls.append(href)
+            if len(urls) >= limit * 2:
+                break
+    except Exception:
+        pass
+    return urls[:limit]
+
+
+def run_scan_pass(portal_name: str, headless: bool = False) -> None:
+    """
+    Pasada 1: recorre todos los keywords, escanea formularios SIN postular.
+    Ofertas listas -> aplica directo. Con preguntas -> guarda en scan_queue.json.
+
+    Uso: python main.py --portal laborum --scan
+    """
+    from .config import KEYWORD_GROUPS, build_config_for_keyword
+
+    if portal_name not in SITE_CONFIG:
+        raise ValueError(f"Portal '{portal_name}' no encontrado.")
+
+    run_startup_validation(portal_name, USER_PROFILE, SITE_CONFIG[portal_name])
+    rate_limiter = get_rate_limiter(portal_name)
+    session_dir  = str(SESSIONS_DIR / portal_name)
+    Path(session_dir).mkdir(exist_ok=True)
+
+    total_applied = 0
+    total_queued  = 0
+    total_skipped = 0
+
+    log.info("=== PASADA 1 (SCAN) %s | %d keywords ===", portal_name.upper(), len(KEYWORD_GROUPS))
+    print(f"\n[SCAN] Pasada 1 en {portal_name.upper()} — sin postular, solo recolectando\n")
+
+    with sync_playwright() as pw:
+        cdp = _try_cdp_connect(pw)
+        if cdp:
+            _, _, page = cdp
+            using_cdp = True
+        else:
+            ctx = pw.chromium.launch_persistent_context(
+                session_dir, headless=headless,
+                args=["--no-sandbox", "--disable-blink-features=AutomationControlled"],
+                user_agent=random_user_agent(), viewport=random_viewport(),
+                locale="es-CL", timezone_id="America/Santiago",
+            )
+            page = ctx.new_page()
+            apply_stealth(page)
+            using_cdp = False
+
+        base_config = dict(SITE_CONFIG[portal_name])
+        try:
+            page.goto(base_config["url_busqueda"], wait_until="domcontentloaded", timeout=20_000)
+            human_delay(1.5, 2.5)
+            _wait_for_login_if_needed(page, portal_name, base_config)
+        except Exception as e:
+            log.warning("Error accediendo al portal en scan: %s", e)
+
+        # Scan usa solo grupos marcados con scan=True (solo IT, excluye bodega)
+        scan_groups = [g for g in KEYWORD_GROUPS if g.get("scan", True)]
+        log.info("[SCAN] %d grupos IT para scan (bodega excluida)", len(scan_groups))
+
+        for group in scan_groups:
+            keyword = group["keyword"]
+            try:
+                config = build_config_for_keyword(portal_name, keyword)
+            except Exception:
+                config = base_config
+
+            max_o = config.get("max_offers_per_run", 10)
+            print(f"  [SCAN] '{keyword}'", end=" ", flush=True)
+
+            try:
+                page.goto(config["url_busqueda"], wait_until="domcontentloaded", timeout=20_000)
+                human_delay(0.8, 1.5)
+            except Exception:
+                print("ERROR nav")
+                continue
+
+            # --- Mismos filtros de card que el bot normal ---
+            loc_sel = config.get("selector_ubicacion_oferta", "")
+            scored: list = []
+            skipped_f = 0
+            raw_urls = _get_offer_urls_from_page(page, config, max_o * 3)
+
+            # Leer card_text para cada elemento visible en la página
+            try:
+                card_elements = page.query_selector_all(config.get("selector_oferta", "a[href]"))
+            except Exception:
+                card_elements = []
+
+            card_texts: dict = {}
+            for el in card_elements:
+                try:
+                    href = el.get_attribute("href") or ""
+                    if not href:
+                        child_a = el.query_selector("a[href]")
+                        if child_a:
+                            href = child_a.get_attribute("href") or ""
+                    if not href.startswith("http"):
+                        base = "/".join(page.url.split("/")[:3])
+                        href = base + href
+                    card_texts[href] = (el.text_content() or "")[:500]
+                except Exception:
+                    pass
+
+            skipped_geo = 0
+            for url in raw_urls:
+                card_text = card_texts.get(url, "")
+                if not schedule_ok(card_text):
+                    skipped_f += 1; continue
+                if not experience_ok(card_text):
+                    skipped_f += 1; continue
+                if not practica_ok(card_text):
+                    skipped_f += 1; continue
+                # Scan estricto: topic_ok_it exige señal IT en el card
+                if not topic_ok_it(card_text):
+                    skipped_f += 1; continue
+                loc_text = card_text
+                score = location_score(loc_text)
+                # Rechazar comunas fuera de Santiago / sin transporte (score 2)
+                if score == 2:
+                    skipped_geo += 1; continue
+                scored.append((score, url))
+
+            scored.sort(key=lambda x: x[0], reverse=True)
+            urls = [u for _, u in scored][:max_o]
+            if skipped_f:
+                print(f"({skipped_f} filtradas)", end=" ", flush=True)
+            if skipped_geo:
+                print(f"({skipped_geo} fuera de zona)", end=" ", flush=True)
+            # -------------------------------------------------
+
+            scanned = 0
+            for url in urls:
+                if already_applied(url):
+                    continue
+                if scanned >= max_o:
+                    break
+
+                title, status, unanswered = _scan_offer(page, url, config, USER_PROFILE, portal_name)
+                scanned += 1
+
+                if status == "ready":
+                    # Scan NUNCA postula — guarda en cola para que run_apply_queue lo procese
+                    _save_to_scan_queue(url, title, portal_name, [])
+                    total_queued += 1
+                elif status == "bodega_quick_link":
+                    # Oferta de bodega externa → panel verde (1-click manual)
+                    _save_quick_link(url, title, portal_name)
+                    print(f"  [🏭 BODEGA] Guardado para postulación manual: {title[:50]}")
+                    total_queued += 1
+                elif status == "queued":
+                    _save_to_scan_queue(url, title, portal_name, unanswered)
+                    total_queued += 1
+                elif "skipped" in status or "error" in status:
+                    total_skipped += 1
+
+                human_delay(0.4, 0.8)
+                try:
+                    page.go_back(wait_until="domcontentloaded")
+                    human_delay(0.3, 0.7)
+                except Exception:
+                    pass
+
+            print(f"-> {scanned} escaneadas")
+
+        if not using_cdp:
+            ctx.close()
+            # Scan no postula → siempre descartar sesión (sin postulación = sin persistencia)
+            _discard_session(session_dir, portal_name)
+
+    queue_size = len(_load_scan_queue())
+    print(f"\n[SCAN] Resultado pasada 1:")
+    print(f"  Postuladas directo   : {total_applied}")
+    print(f"  En cola (pendientes) : {total_queued}")
+    print(f"  Saltadas (filtros)   : {total_skipped}")
+    if queue_size:
+        print(f"\n  Responde el panel naranja en http://localhost:5000 y corre:")
+        print(f"  python main.py --portal {portal_name} --apply-queue")
+
+
+def run_apply_queue(portal_name: str, headless: bool = False) -> None:
+    """
+    Pasada 2: aplica a ofertas en scan_queue.json cuyas preguntas ya estan respondidas.
+
+    Uso: python main.py --portal laborum --apply-queue
+    """
+    from .form_filler import scan_form
+    from .config import build_config_for_keyword
+
+    # --- Limpieza automática ANTES de procesar ---
+    # 1. Entradas expiradas (> 5 días → oferta casi siempre cerrada)
+    pruned_age = _prune_scan_queue(max_age_days=5)
+    if pruned_age:
+        print(f"[APPLY-QUEUE] 🗑  {pruned_age} entradas expiradas (>5 días) eliminadas automáticamente.")
+
+    raw_queue = [e for e in _load_scan_queue() if e.get("portal") == portal_name]
+
+    # 2. Limpiar ítems no-IT antes de procesar (pueden venir de pasadas viejas sin filtros)
+    queue = []
+    discarded_topic = 0
+    for entry in raw_queue:
+        title = entry.get("title", "")
+        if not topic_ok_it(title) and title:
+            log.info("[APPLY-QUEUE] Descartado por topic (no IT): %s", title[:60])
+            print(f"  ⏭  No-IT eliminada: {title[:60]}")
+            _remove_from_scan_queue(entry["url"])
+            discarded_topic += 1
+        else:
+            queue.append(entry)
+    if discarded_topic:
+        print(f"[APPLY-QUEUE] {discarded_topic} ítem(s) eliminados por no ser IT.")
+
+    if not queue:
+        print(f"[APPLY-QUEUE] Sin ofertas IT en cola para {portal_name.upper()}.")
+        print(f"  Corre primero: python main.py --portal {portal_name} --scan")
+        return
+
+    print(f"\n[APPLY-QUEUE] {len(queue)} ofertas en cola para {portal_name.upper()}")
+    rate_limiter = get_rate_limiter(portal_name)
+    session_dir  = str(SESSIONS_DIR / portal_name)
+    Path(session_dir).mkdir(exist_ok=True)
+
+    applied       = 0
+    still_pending = 0
+    errors        = 0
+    total_skipped = 0
+
+    with sync_playwright() as pw:
+        cdp = _try_cdp_connect(pw)
+        if cdp:
+            _, _, page = cdp
+            using_cdp = True
+        else:
+            ctx = pw.chromium.launch_persistent_context(
+                session_dir, headless=headless,
+                args=["--no-sandbox", "--disable-blink-features=AutomationControlled"],
+                user_agent=random_user_agent(), viewport=random_viewport(),
+                locale="es-CL", timezone_id="America/Santiago",
+            )
+            page = ctx.new_page()
+            apply_stealth(page)
+            using_cdp = False
+
+        base_config = dict(SITE_CONFIG[portal_name])
+        try:
+            page.goto(base_config["url_busqueda"], wait_until="domcontentloaded", timeout=20_000)
+            human_delay(1.5, 2.5)
+            _wait_for_login_if_needed(page, portal_name, base_config)
+        except Exception as e:
+            log.warning("Error login apply-queue: %s", e)
+
+        for entry in queue:
+            url   = entry["url"]
+            title = entry.get("title", "Sin titulo")
+
+            if already_applied(url):
+                _remove_from_scan_queue(url)
+                continue
+
+            try:
+                config = build_config_for_keyword(portal_name, "desarrollador junior")
+            except Exception:
+                config = base_config
+
+            print(f"  [APPLY-QUEUE] {title[:60]}", end=" ")
+
+            try:
+                # --- Verificación rápida antes de navegar ---
+                # Detectar si la URL tiene señales de oferta muerta en la propia URL
+                _dead_url_patterns = ["/404", "not-found", "oferta-eliminada", "expired", "job-closed"]
+                if any(p in url.lower() for p in _dead_url_patterns):
+                    print(f"-> [URL_MUERTA] Eliminada de cola")
+                    _remove_from_scan_queue(url)
+                    total_skipped += 1
+                    continue
+
+                page.goto(url, wait_until="domcontentloaded", timeout=25_000)
+                human_delay(0.6, 1.2)
+
+                # --- Verificar si la oferta sigue viva tras navegar ---
+                cur_url  = page.url
+                cur_text = (page.text_content("body") or "").lower()[:600]
+                _dead_signals = [
+                    "404", "no encontramos", "not found", "oferta no disponible",
+                    "oferta eliminada", "this job is no longer", "ya no está disponible",
+                    "ya no esta disponible", "oferta cerrada", "job has expired",
+                ]
+                _login_signals = ["/login", "/authwall", "/signin", "/checkpoint", "/uas/"]
+                if any(s in cur_url.lower() for s in _login_signals):
+                    print(f"-> [LOGIN_REQUERIDO] Sesión expirada — re-loguéate y vuelve a correr")
+                    errors += 1
+                    continue
+                if any(s in cur_url.lower() or s in cur_text for s in _dead_signals):
+                    print(f"-> [OFERTA_CERRADA] Eliminada de cola automáticamente")
+                    _remove_from_scan_queue(url)
+                    _csv_log(portal_name, url, title, "skipped: oferta_cerrada")
+                    total_skipped += 1
+                    continue
+
+                tipo = config.get("tipo_postulacion", "directa")
+
+                # Portales externos (GetOnBoard): ir directo a _apply_externa
+                # No tiene sentido scan_form — el formulario está en sitio externo
+                if tipo == "externa":
+                    st = _apply_externa(page, config, profile=USER_PROFILE)
+                    t2 = title
+                    save_application(url, portal_name, t2, st)
+                    _csv_log(portal_name, url, t2, st)
+                    if st.startswith("external:") or st == "applied":
+                        _remove_from_scan_queue(url)
+                        applied += 1
+                        print(f"-> ✅ {st[:70]}")
+                        rate_limiter.acquire(portal_name)
+                    elif st in ("skipped: no_navigation", "skipped: apply_via_modal", "skipped: login_required"):
+                        removed = _increment_scan_queue_failure(url)
+                        fc = 2 if removed else 1
+                        reason = {"skipped: no_navigation": "sin navegación",
+                                  "skipped: apply_via_modal": "requiere modal",
+                                  "skipped: login_required": "requiere login"}.get(st, st)
+                        if removed:
+                            print(f"-> ⚠️  {reason} — eliminada de cola tras 2 fallos")
+                        else:
+                            print(f"-> ⚠️  {reason} (fallo {fc}/2)")
+                        errors += 1
+                    else:
+                        errors += 1
+                        print(f"-> {st[:70]}")
+                    human_delay(0.5, 1.0)
+                    continue
+
+                # Portales directa/modal: re-escanear y verificar respuestas
+                btn_sel = config.get("selector_boton_aplicar", "")
+                if btn_sel:
+                    try:
+                        btn = page.query_selector(btn_sel)
+                        if btn and btn.is_visible():
+                            btn.click()
+                            human_delay(0.8, 1.5)
+                        else:
+                            log.debug("[APPLY-QUEUE] Botón aplicar no visible: %s", url[:50])
+                    except Exception:
+                        pass
+
+                sr = scan_form(page, USER_PROFILE, job_title=title)
+
+                if not sr["all_answered"]:
+                    still_pending += 1
+                    q_labels = sr.get("unanswered", [])
+                    print(f"-> ⏳ Pendiente ({len(q_labels)} preguntas sin respuesta): {', '.join(q_labels[:2])}")
+                    _save_to_scan_queue(url, title, portal_name, q_labels)
+                    try:
+                        page.go_back(wait_until="domcontentloaded")
+                    except Exception:
+                        pass
+                    continue
+
+                # Todas respondidas — volver y aplicar con fill_form normal
+                try:
+                    page.go_back(wait_until="domcontentloaded")
+                    human_delay(0.4, 0.8)
+                except Exception:
+                    pass
+
+                r  = _process_offer_generic(page, url, config, USER_PROFILE, portal_name, dry_run=False)
+                st = r[1] if isinstance(r, tuple) else r
+                t2 = r[0] if isinstance(r, tuple) else title
+
+                save_application(url, portal_name, t2, st)
+                _csv_log(portal_name, url, t2, st)
+
+                if st in {"applied", "filled_no_submit"}:
+                    _remove_from_scan_queue(url)
+                    applied += 1
+                    print(f"-> ✅ Postulado!")
+                    rate_limiter.acquire(portal_name)
+                elif st in ("skipped: no_navigation", "skipped: oferta_eliminada"):
+                    removed = _increment_scan_queue_failure(url)
+                    reason = "oferta cerrada" if "eliminada" in st else "sin navegación"
+                    if removed:
+                        print(f"-> ⚠️  {reason} — eliminada de cola tras 2 fallos")
+                    else:
+                        print(f"-> ⚠️  {reason} (fallo 1/2)")
+                    errors += 1
+                else:
+                    errors += 1
+                    print(f"-> {st}")
+
+            except Exception as exc:
+                errors += 1
+                log.warning("Error apply-queue %s: %s", url[:50], exc)
+                # Registrar fallo — si es error persistente, eliminar de cola
+                removed = _increment_scan_queue_failure(url)
+                if removed:
+                    print(f"-> ❌ Error — eliminada de cola tras 2 fallos ({str(exc)[:40]})")
+                else:
+                    print(f"-> ❌ Error (fallo 1/2): {str(exc)[:50]}")
+
+        if not using_cdp:
+            ctx.close()
+            _maybe_keep_session(session_dir, portal_name, applied)
+
+    remaining = len(_load_scan_queue())
+    print(f"\n[APPLY-QUEUE] Resultado:")
+    print(f"  ✅ Postuladas          : {applied}")
+    print(f"  ⏳ Pendientes          : {still_pending}")
+    print(f"  🗑  Cerradas/eliminadas : {total_skipped}")
+    print(f"  ❌ Errores             : {errors}")
+    if remaining:
+        print(f"\n  Quedan en cola: {remaining} — responde el panel naranja y vuelve a correr --apply-queue")
+
+
 def run_bot_multi_keywords(portal_name: str, dry_run: bool = False, headless: bool = False) -> None:
     """
     Abre el browser UNA VEZ y ejecuta una búsqueda por cada keyword del KEYWORD_GROUPS.
@@ -897,11 +2010,12 @@ def run_bot_multi_keywords(portal_name: str, dry_run: bool = False, headless: bo
     """
     from .config import KEYWORD_GROUPS, build_config_for_keyword
     from .portals import PORTAL_REGISTRY
+    from .keyword_optimizer import get_active_groups, process_keyword_result
 
     if portal_name not in SITE_CONFIG:
         raise ValueError(f"Portal '{portal_name}' no encontrado.")
 
-    # ── Verificar si el portal está habilitado ────────────────────────────────
+    # -- Verificar si el portal está habilitado --------------------------------
     if not SITE_CONFIG[portal_name].get("enabled", True):
         msg = (
             f"[STANDBY] Portal '{portal_name.upper()}' está en standby y no se ejecutará.\n"
@@ -912,6 +2026,36 @@ def run_bot_multi_keywords(portal_name: str, dry_run: bool = False, headless: bo
         log.warning(msg)
         print(f"\n[!] CAPTCHA DETECTADO EN {portal_name.upper()}... Por favor resuélvelo manualmente. (ver plan de implementación).")
         return
+
+    # -- Verificar restricción temporal de LinkedIn ---------------------------
+    if portal_name == "linkedin":
+        _restr_path = BASE_DIR / "data" / "portal_restrictions.json"
+        _restr = {}
+        if _restr_path.exists():
+            try:
+                _restr = json.load(open(_restr_path, encoding="utf-8"))
+            except Exception:
+                pass
+        _linkedin_restr = _restr.get("linkedin", {})
+        if _linkedin_restr.get("restricted"):
+            import datetime as _dt
+            until_str = _linkedin_restr.get("until", "")
+            try:
+                until_dt = _dt.datetime.fromisoformat(until_str)
+                if _dt.datetime.now() < until_dt:
+                    until_fmt = until_dt.strftime("%d/%m/%Y %H:%M")
+                    print(f"\n[LINKEDIN] ⛔ Cuenta restringida hasta {until_fmt}. "
+                          "Saltando LinkedIn en esta sesión.")
+                    log.warning("LinkedIn restringido hasta %s — saltando.", until_str)
+                    return
+                else:
+                    # Restricción ya venció — limpiar
+                    _linkedin_restr["restricted"] = False
+                    with open(_restr_path, "w", encoding="utf-8") as _f:
+                        json.dump(_restr, _f, ensure_ascii=False, indent=2)
+                    print(f"\n[LINKEDIN] Restricción vencida — reanudando con cautela.")
+            except Exception:
+                pass
 
     run_startup_validation(portal_name, USER_PROFILE, SITE_CONFIG[portal_name])
 
@@ -936,16 +2080,16 @@ def run_bot_multi_keywords(portal_name: str, dry_run: bool = False, headless: bo
     log.info("Portal: %s | grupos: %d", portal_name, len(KEYWORD_GROUPS))
 
     with sync_playwright() as pw:
-        # ── Intentar CDP primero (Chrome del usuario ya abierto) ─────────────
+        # -- Intentar CDP primero (Chrome del usuario ya abierto) -------------
         cdp_result = _try_cdp_connect(pw)
         using_cdp  = cdp_result is not None
 
         if using_cdp:
             browser_instance, browser_ctx, page = cdp_result
             log.info("Modo CDP — usando Chrome real del usuario (puerto %d)", _CDP_PORT)
-            print(f"[CDP] ✓ Conectado a tu Chrome real — tus sesiones de Indeed/LinkedIn activas.")
+            print(f"[CDP] [OK] Conectado a tu Chrome real — tus sesiones de Indeed/LinkedIn activas.")
         else:
-            # ── Fallback: lanzar Chrome propio (sin sesiones reales) ─────────
+            # -- Fallback: lanzar Chrome propio (sin sesiones reales) ---------
             # Prioridad: CDP (Chrome DevTools Protocol) para conectar a una sesión de Chrome abierta vía iniciar_bot.bat
             print(f"[AVISO] Chrome no está en modo debug (puerto {_CDP_PORT} cerrado).")
             print(f"[AVISO] Usa iniciar_bot.bat para abrir Chrome correctamente.")
@@ -974,9 +2118,44 @@ def run_bot_multi_keywords(portal_name: str, dry_run: bool = False, headless: bo
             except (ImportError, Exception) as se:
                 log.warning("playwright-stealth no disponible (%s) — usando stealth manual", se)
 
-        total_applied = 0
+        total_applied    = 0
+        _session_verified = False  # Se activa tras el primer pre-flight exitoso
 
-        for group in KEYWORD_GROUPS:
+        def _detect_linkedin_restriction(pg) -> str | None:
+            """
+            Detecta si LinkedIn ha restringido la cuenta.
+            Retorna la fecha límite como string si está restringida, None si no.
+            """
+            try:
+                body = pg.evaluate("document.body?.innerText?.slice(0, 800) || ''") or ""
+                url  = pg.url
+                restricted = (
+                    "temporalmente restringido" in body.lower() or
+                    "access to your account is temporarily restricted" in body.lower() or
+                    "restricted" in url.lower() and "challenge" in url.lower()
+                )
+                if restricted:
+                    # Intentar extraer fecha del texto
+                    import re as _re
+                    m = _re.search(r"(May|Jun|Jul|Aug|Jan|Feb|Mar|Apr|Sep|Oct|Nov|Dec)\s+\d{1,2},\s+\d{4}", body)
+                    return m.group(0) if m else "próximamente"
+                return None
+            except Exception:
+                return None
+
+        # Obtener keywords activas (base - retiradas + generadas con éxito)
+        active_groups = get_active_groups(KEYWORD_GROUPS, portal_name)
+        log.info("[KW_OPTIMIZER] %d keywords activas (de %d base)",
+                 len(active_groups), len(KEYWORD_GROUPS))
+        print(f"\n[KEYWORDS] {len(active_groups)} keywords activas para {portal_name.upper()}")
+
+        # Cola dinámica: se puede crecer durante el loop si se generan reemplazos
+        _kw_queue = list(active_groups)
+        _kw_index = 0
+
+        while _kw_index < len(_kw_queue):
+            group   = _kw_queue[_kw_index]
+            _kw_index += 1
             keyword = group["keyword"]
             mode    = group["mode"]
             label   = group["label"]
@@ -1020,20 +2199,81 @@ def run_bot_multi_keywords(portal_name: str, dry_run: bool = False, headless: bo
                     log.error("No se pudo recrear la página: %s", page_err)
                     break
 
+            # LinkedIn: verificar restricción antes de cada keyword
+            if portal_name == "linkedin":
+                restr_until = _detect_linkedin_restriction(page)
+                if restr_until:
+                    print(f"\n[LINKEDIN] ⛔ Cuenta restringida (hasta {restr_until}). "
+                          "Guardando restricción y saltando LinkedIn.")
+                    log.warning("LinkedIn restringido detectado en tiempo de ejecución: %s", restr_until)
+                    # Persistir restricción
+                    _restr_path = BASE_DIR / "data" / "portal_restrictions.json"
+                    _restr = {}
+                    if _restr_path.exists():
+                        try: _restr = json.load(open(_restr_path, encoding="utf-8"))
+                        except Exception: pass
+                    import datetime as _dt2
+                    # Calcular fecha aprox: si detectó "May 20, 2026" → parsear
+                    try:
+                        _until_dt = _dt2.datetime.strptime(restr_until + " 23:59", "%B %d, %Y %H:%M")
+                    except Exception:
+                        _until_dt = _dt2.datetime.now() + _dt2.timedelta(days=2)
+                    _restr["linkedin"] = {"restricted": True, "until": _until_dt.isoformat()}
+                    _restr_path.parent.mkdir(exist_ok=True)
+                    with open(_restr_path, "w", encoding="utf-8") as _f:
+                        json.dump(_restr, _f, ensure_ascii=False, indent=2)
+                    break  # salir del loop de keywords de LinkedIn
+
             applied = _run_keyword_loop(
                 page, browser_ctx, portal_name, config, profile,
                 max_offers, dry_run, rate_limiter, portal_handler,
                 using_cdp=using_cdp,
+                session_verified=_session_verified,
             )
+            _session_verified = True  # Pre-flight ya corrió, no repetir en keywords siguientes
             total_applied += applied
 
+            if applied == 0:
+                print(f"\n[AVISO] '{keyword}': 0 postulaciones — todas filtradas o ya en DB.")
             print(f"\n[PORTAL_FINALIZADO] --- KEYWORD '{keyword}': {applied} postulaciones ---")
 
-            # ── Pausa anti-Cloudflare entre keywords ──────────────────────────
-            # Indeed detecta navegación rápida entre búsquedas distintas y
-            # dispara Cloudflare. Un delay de 12-20s simula comportamiento humano.
-            if group is not KEYWORD_GROUPS[-1]:
-                # Portales con anti-bot agresivo (LinkedIn, Indeed) necesitan pausa más larga
+            # -- Registrar estadísticas y evaluar retiro -------------------------
+            new_kws = process_keyword_result(keyword, portal_name, applied)
+            if new_kws:
+                # Agregar reemplazos generados a la cola dinámica
+                for nk in new_kws:
+                    _kw_queue.append(nk)
+                print(f"  [🔄 REEMPLAZOS] {len(new_kws)} nuevas keywords añadidas a la cola.")
+
+            # -- Guardia de sesión muerta ----------------------------------------
+            # Tras 5 keywords con 0 postulaciones totales → re-verificar sesión.
+            _KEYWORDS_BEFORE_SESSION_CHECK = 5
+            if (config.get("requires_login")
+                    and total_applied == 0
+                    and _kw_index % _KEYWORDS_BEFORE_SESSION_CHECK == 0
+                    and _kw_index > 0):
+                print(f"\n[SESION_CHECK] ⚠ {portal_name.upper()}: {_kw_index} keywords "
+                      f"sin postulaciones — verificando que la sesión sigue activa...")
+                log.warning("[SESION_CHECK] 0 postulaciones tras %d keywords — re-verificando login en %s",
+                            _kw_index, portal_name)
+                try:
+                    _HOME_URLS_CHECK = {
+                        "chiletrabajos": "https://www.chiletrabajos.cl",
+                        "computrabajo":  "https://candidato.cl.computrabajo.com",
+                        "laborum":       "https://www.laborum.cl",
+                        "indeed":        "https://cl.indeed.com",
+                    }
+                    if portal_name in _HOME_URLS_CHECK:
+                        page.goto(_HOME_URLS_CHECK[portal_name],
+                                  wait_until="domcontentloaded", timeout=15_000)
+                        human_delay(1.5, 2.0)
+                        _wait_for_login_if_needed(page, portal_name, config)
+                        _session_verified = False  # Fuerza re-check en próxima keyword
+                except Exception as sc_err:
+                    log.warning("[SESION_CHECK] Error re-verificando: %s", sc_err)
+
+            # -- Pausa anti-Cloudflare entre keywords --------------------------
+            if _kw_index < len(_kw_queue):
                 _strict = portal_name in ("linkedin", "indeed")
                 _kw_pause = random.uniform(8.0, 14.0) if _strict else random.uniform(3.0, 6.0)
                 log.info("Pausa inter-keyword: %.0fs...", _kw_pause)
@@ -1052,10 +2292,22 @@ def run_bot_multi_keywords(portal_name: str, dry_run: bool = False, headless: bo
                 browser_ctx.close()
             except Exception as close_err:
                 log.warning("browser_ctx.close() ignorado: %s", close_err)
+            _maybe_keep_session(session_dir, portal_name, total_applied)
 
     log.info("=== Multi-Keyword Fin. Total aplicadas: %d | Rate: %d/%d ===",
              total_applied, rate_limiter.current_count, rate_limiter.max_actions)
     log.info("Logs CSV: %s", LOGS_DIR)
+
+    if total_applied == 0:
+        print(f"\n[⚠ SIN POSTULACIONES] {portal_name.upper()} terminó con 0 postulaciones en {len(KEYWORD_GROUPS)} keywords.")
+        print(f"  → La sesión fue DESCARTADA (se necesita mínimo 1 postulación para guardar sesión).")
+        print(f"  Causas posibles:")
+        print(f"    • Todas las ofertas ya están registradas en la base de datos")
+        print(f"    • Los filtros de experiencia/horario/zona las descartaron")
+        print(f"    • La sesión expiró en algún punto del recorrido")
+        print(f"  Revisa los logs en http://127.0.0.1:5000 → pestaña Logs.")
+    else:
+        print(f"\n[✅ OK] {portal_name.upper()} — {total_applied} postulaciones realizadas. Sesión guardada.")
 
 
 def run_bot(
@@ -1073,7 +2325,7 @@ def run_bot(
       1. Validar configuración (USER_PROFILE + SITE_CONFIG)
       2. Abrir browser con sesión persistente (user_data_dir)
       3. Navegar a url_busqueda
-      4. Por cada página: extraer ofertas → deduplicar → rate limit → postular
+      4. Por cada página: extraer ofertas -> deduplicar -> rate limit -> postular
       5. Paginar hasta max_offers o sin siguiente página
 
     Args:
@@ -1091,7 +2343,7 @@ def run_bot(
         available = ", ".join(SITE_CONFIG.keys())
         raise ValueError(f"Portal '{portal_name}' no encontrado. Disponibles: {available}")
 
-    # ── Verificar si el portal está habilitado ────────────────────────────────
+    # -- Verificar si el portal está habilitado --------------------------------
     if not SITE_CONFIG[portal_name].get("enabled", True):
         log.warning("[STANDBY] Portal '%s' deshabilitado — saltando.", portal_name.upper())
         print(f"\n[STANDBY] {portal_name.upper()} está en standby y no se ejecutará.")
@@ -1105,15 +2357,15 @@ def run_bot(
 
     max_offers = config.get("max_offers_per_run", 10)
 
-    # ── 1. Validar configuración ──────────────────────────────────────────────
+    # -- 1. Validar configuración ----------------------------------------------
     run_startup_validation(portal_name, USER_PROFILE, config)
 
-    # ── 2. Cargar portal específico si existe ─────────────────────────────────
+    # -- 2. Cargar portal específico si existe ---------------------------------
     from .portals import PORTAL_REGISTRY
     PortalClass    = PORTAL_REGISTRY.get(portal_name)
     portal_handler = PortalClass(config, profile, dry_run) if PortalClass else None
 
-    # ── 3. Rate limiter ───────────────────────────────────────────────────────
+    # -- 3. Rate limiter -------------------------------------------------------
     rate_limiter = get_rate_limiter(portal_name)
 
     session_dir = str(SESSIONS_DIR / portal_name)
@@ -1143,7 +2395,7 @@ def run_bot(
     _locale, _tz = _PORTAL_LOCALE.get(portal_name, ("es-CL", "America/Santiago"))
 
     def _exec(pw_obj):
-        # ── 4. Intentar CDP prioritario (Chrome del usuario ya abierto) ──
+        # -- 4. Intentar CDP prioritario (Chrome del usuario ya abierto) --
         cdp_result = _try_cdp_connect(pw_obj)
         is_cdp = cdp_result is not None
 

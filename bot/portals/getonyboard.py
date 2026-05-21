@@ -19,7 +19,7 @@ from playwright.sync_api import Page, TimeoutError as PlaywrightTimeout
 
 from .base import BasePortal
 from ..stealth_utils import human_delay, take_error_screenshot
-from ..config import schedule_ok
+from ..config import schedule_ok, experience_ok, practica_ok, topic_ok
 
 log = logging.getLogger("applyjob.getonyboard")
 
@@ -29,7 +29,7 @@ SEL = {
     "job_title": "h1.gb-landing-cover__title, h1[class*='title'], h1",
 }
 
-# Palabras que CONFIRMAN nivel junior/entry → siempre incluir (nunca filtrar)
+# Palabras que CONFIRMAN nivel junior/entry -> siempre incluir (nunca filtrar)
 _JUNIOR_WORDS = {
     "junior", "jr.", " jr ", "trainee", "practicante", "práctica", "practica",
     "egresado", "recién titulado", "recien titulado",
@@ -45,19 +45,19 @@ _SENIOR_SUBSTRINGS = {
     "manager", "head of",
 }
 
-# Palabras cortas → requieren word-boundary para no falsar ("cto" dentro de "proyecto")
+# Palabras cortas -> requieren word-boundary para no falsar ("cto" dentro de "proyecto")
 _SENIOR_WORDS_EXACT = {"sr", "ssr", "lead", "cto", "cio", "cpo", "vp"}
 
 
 def _is_senior(title: str) -> bool:
     """
     True si el título indica nivel senior/directivo.
-    - Primero verifica palabras junior → retorna False inmediatamente.
+    - Primero verifica palabras junior -> retorna False inmediatamente.
     - Luego verifica substrings seguros (palabras largas).
     - Por último, word-boundary para abreviaciones cortas (cto, cio, sr…).
     """
     tl = title.lower()
-    # Junior explícito → nunca filtrar
+    # Junior explícito -> nunca filtrar
     for w in _JUNIOR_WORDS:
         if w in tl:
             return False
@@ -86,7 +86,7 @@ class GetOnBoardPortal(BasePortal):
         skipped_schedule = 0
 
         try:
-            # Esperar a que carguen las tarjetas (slug pages son SSR → rápido)
+            # Esperar a que carguen las tarjetas (slug pages son SSR -> rápido)
             try:
                 page.wait_for_selector(SEL["card"], timeout=10_000)
             except PlaywrightTimeout:
@@ -120,6 +120,12 @@ class GetOnBoardPortal(BasePortal):
                     # Filtro horario
                     if not schedule_ok(card_text):
                         log.info("  [gob] Descartado (horario): %s", card_title[:60])
+                        skipped_schedule += 1
+                        continue
+
+                    # Filtro experiencia
+                    if not experience_ok(card_text):
+                        log.info("  [gob] Descartado (senior/exp): %s", card_title[:60])
                         skipped_schedule += 1
                         continue
 
@@ -191,9 +197,20 @@ class GetOnBoardPortal(BasePortal):
                     "  return d ? d.innerText : document.body?.innerText?.slice(0,800) || '';"
                     "}"
                 ) or ""
-                if not schedule_ok(title + " " + desc_text):
+                full_text = title + " " + desc_text
+                if not practica_ok(full_text):
+                    log.info("  [gob] Descartada (práctica/pasantía): '%s'", title)
+                    return "skipped_practica", title
+                if not schedule_ok(full_text):
                     log.info("  [gob] Descartada (horario): '%s'", title)
                     return "skipped_schedule", title
+                if not experience_ok(full_text):
+                    log.info("  [gob] Descartada (senior/experiencia): '%s'", title)
+                    print(f"  [FILTRO] Descartada por nivel/experiencia: {title}")
+                    return "skipped_experience", title
+                if not topic_ok(full_text):
+                    log.info("  [gob] Descartada (fuera de rubro IT/bodega): '%s'", title)
+                    return "skipped_topic", title
             except Exception:
                 pass
 
@@ -217,7 +234,7 @@ class GetOnBoardPortal(BasePortal):
             except Exception as exc:
                 log.debug("  [gob] No se encontró botón Postular: %s", exc)
 
-            log.info("  [gob] external_apply → %s | '%s'", apply_url[:70], title)
+            log.info("  [gob] external_apply -> %s | '%s'", apply_url[:70], title)
             return "external_apply", title
 
         except Exception as exc:

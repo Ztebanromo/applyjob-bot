@@ -1,167 +1,660 @@
 <!DOCTYPE html>
 <html lang="es">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ApplyJob Bot | Master Mode Dashboard</title>
+    <title>ApplyJob | Dashboard</title>
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&display=swap" rel="stylesheet">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.min.js"></script>
     <style>
         :root {
-            --primary:#6366f1; --primary-glow:rgba(99,102,241,0.4);
-            --secondary:#a855f7; --bg:#0f172a; --card-bg:rgba(30,41,59,0.7);
-            --text:#f8fafc; --text-dim:#94a3b8; --accent:#22d3ee;
-            --success:#10b981; --danger:#ef4444; --warning:#f59e0b;
+            --primary: #6366f1;
+            --primary-glow: rgba(99, 102, 241, 0.4);
+            --secondary: #a855f7;
+            --bg: #0f172a;
+            --card-bg: rgba(30, 41, 59, 0.7);
+            --text: #f8fafc;
+            --text-dim: #94a3b8;
+            --accent: #22d3ee;
+            --success: #10b981;
+            --danger: #ef4444;
+            --warning: #f59e0b;
         }
-        *{ margin:0; padding:0; box-sizing:border-box; font-family:'Outfit',sans-serif; }
-        body{
-            background-color:var(--bg);
-            background-image:radial-gradient(at 0% 0%,rgba(99,102,241,.12) 0,transparent 50%),
-                             radial-gradient(at 100% 100%,rgba(168,85,247,.12) 0,transparent 50%);
-            color:var(--text); min-height:100vh;
-            padding:0.75rem 1rem;
-            display:flex; flex-direction:column; align-items:center;
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: 'Outfit', sans-serif;
         }
-        .container{ width:100%; max-width:1300px; display:grid; grid-template-columns:1fr 2fr; gap:1rem; margin-top:0.5rem; }
 
-        header{ text-align:center; margin-bottom:0.6rem; }
-        header h1{
-            font-size:1.8rem; font-weight:800;
-            background:linear-gradient(to right,#6366f1,#a855f7,#22d3ee);
-            -webkit-background-clip:text; -webkit-text-fill-color:transparent;
-            margin-bottom:0.2rem;
+        body {
+            background-color: var(--bg);
+            background-image: radial-gradient(at 0% 0%, rgba(99, 102, 241, .12) 0, transparent 50%),
+                radial-gradient(at 100% 100%, rgba(168, 85, 247, .12) 0, transparent 50%);
+            color: var(--text);
+            min-height: 100vh;
+            padding: 0.75rem 1rem;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
         }
-        header p{ color:var(--text-dim); font-size:0.85rem; }
 
-        .stats-bar{ display:grid; grid-template-columns:repeat(4,1fr); gap:0.6rem; width:100%; max-width:1300px; margin-bottom:0.6rem; }
-        .stat-card{
-            background:var(--card-bg); border:1px solid rgba(255,255,255,0.1);
-            padding:0.6rem 0.75rem; border-radius:12px;
-            display:flex; flex-direction:column; align-items:center; gap:0.2rem;
+        .container {
+            width: 100%;
+            max-width: 1300px;
+            display: grid;
+            grid-template-columns: 1fr 2fr;
+            gap: 1rem;
+            margin-top: 0.5rem;
         }
-        .stat-value{ font-size:1.4rem; font-weight:800; color:var(--accent); }
-        .stat-label{ font-size:0.68rem; color:var(--text-dim); text-transform:uppercase; letter-spacing:1px; }
 
-        .card{
-            background:var(--card-bg); backdrop-filter:blur(12px);
-            border:1px solid rgba(255,255,255,0.1); border-radius:16px;
-            padding:1rem; box-shadow:0 10px 30px -8px rgba(0,0,0,0.5);
+        header {
+            text-align: center;
+            margin-bottom: 0.6rem;
         }
-        .card h2{ font-size:1rem; margin-bottom:0.75rem; display:flex; align-items:center; gap:0.5rem; }
-        .form-group{ margin-bottom:0.6rem; }
-        label{ display:block; font-size:0.75rem; color:var(--text-dim); margin-bottom:0.25rem; }
-        input[type="text"],input[type="email"],input[type="number"],select{
-            width:100%; background:rgba(15,23,42,0.5); border:1px solid rgba(255,255,255,0.1);
-            border-radius:8px; padding:0.4rem 0.7rem; color:white; outline:none;
-            font-size:0.82rem; transition:border-color .2s;
+
+        header h1 {
+            font-size: 1.8rem;
+            font-weight: 800;
+            background: linear-gradient(to right, #6366f1, #a855f7, #22d3ee);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            margin-bottom: 0.2rem;
         }
-        textarea{ font-size:0.82rem; }
-        input:focus,textarea:focus{ border-color:var(--primary); }
 
-        .btn{ cursor:pointer; border:none; border-radius:8px; padding:0.5rem 1rem; font-weight:600; font-size:0.85rem; transition:all .2s; display:flex; align-items:center; justify-content:center; gap:0.4rem; width:100%; }
-        .btn-primary{ background:linear-gradient(135deg,var(--primary),var(--secondary)); color:white; }
-        .btn-success{ background:linear-gradient(135deg,#10b981,#059669); color:white; }
-        .btn-danger { background:linear-gradient(135deg,#ef4444,#dc2626); color:white; }
-        .btn:disabled{ opacity:0.5; cursor:not-allowed; }
-        .btn:hover:not(:disabled){ filter:brightness(1.1); }
-        .toolbar-btn{
-            cursor:pointer; border:1px solid rgba(255,255,255,0.12);
-            background:rgba(255,255,255,0.06); color:var(--text);
-            border-radius:7px; padding:0.3rem 0.6rem;
-            font-size:0.72rem; font-weight:700; transition:all .2s;
+        header p {
+            color: var(--text-dim);
+            font-size: 0.85rem;
         }
-        .toolbar-btn:hover{ border-color:var(--accent); color:var(--accent); }
 
-        .ops-panel{ margin:0.6rem 0; display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:0.5rem; }
-        .ops-item{ background:rgba(15,23,42,0.42); border:1px solid rgba(255,255,255,0.09); border-radius:8px; padding:0.5rem 0.7rem; min-width:0; }
-        .ops-label{ color:var(--text-dim); font-size:0.62rem; text-transform:uppercase; letter-spacing:.04em; margin-bottom:0.2rem; }
-        .ops-value{ font-size:0.8rem; font-weight:700; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-        .ops-value.ok{ color:var(--success); } .ops-value.warn{ color:var(--warning); }
-        .ops-value.info{ color:var(--accent); } .ops-value.danger{ color:var(--danger); }
-
-        .terminal-wrap{ margin-top:0.6rem; }
-        .terminal-header{
-            display:flex; align-items:center; justify-content:space-between;
-            background:rgba(16,185,129,0.08); border:1px solid rgba(16,185,129,0.2);
-            border-bottom:none; border-radius:10px 10px 0 0;
-            padding:0.4rem 0.75rem; font-size:0.72rem; color:var(--success);
+        .stats-bar {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 0.6rem;
+            width: 100%;
+            max-width: 1300px;
+            margin-bottom: 0.6rem;
         }
-        .terminal-header span{ display:flex; align-items:center; gap:0.4rem; }
-        .terminal-dot{ width:7px; height:7px; border-radius:50%; background:var(--success); box-shadow:0 0 5px var(--success); animation:pulse 2s infinite; }
-        @keyframes pulse{ 0%,100%{opacity:1} 50%{opacity:0.4} }
-        .terminal{
-            background:#050a0e; border-radius:0 0 10px 10px;
-            padding:0.75rem 1rem;
-            font-family:'Courier New',monospace; font-size:0.75rem;
-            height:320px; overflow-y:auto; color:#10b981;
-            border:1px solid rgba(16,185,129,0.2); border-top:none;
+
+        .stat-card {
+            background: var(--card-bg);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            padding: 0.6rem 0.75rem;
+            border-radius: 12px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 0.2rem;
         }
-        .log-line{ margin-bottom:3px; border-left:2px solid transparent; padding-left:6px; line-height:1.4; }
-        .log-success{ color:var(--success); border-left-color:var(--success); }
-        .log-error  { color:var(--danger);  border-left-color:var(--danger); }
-        .log-portal { color:var(--primary); font-weight:bold; border-left-color:var(--primary); }
-        .log-warning{ color:var(--warning); border-left-color:var(--warning); }
-        .log-search { color:var(--accent);  border-left-color:var(--accent); font-style:italic; }
 
-        .portal-grid{ display:grid; grid-template-columns:repeat(3,1fr); gap:0.5rem; margin-bottom:0.75rem; }
-        .portal-item{
-            background:rgba(255,255,255,0.03); border:1px solid rgba(255,255,255,0.1);
-            padding:0.6rem 0.7rem; border-radius:10px;
-            display:flex; flex-direction:column; gap:0.35rem;
-            transition:all .2s; min-width:0;
+        .stat-value {
+            font-size: 1.4rem;
+            font-weight: 800;
+            color: var(--accent);
         }
-        .portal-item.active { border-color:var(--primary); background:rgba(99,102,241,0.12); }
-        .portal-item.done   { border-color:var(--success); background:rgba(16,185,129,0.1); }
-        .portal-item.disabled-hint{ opacity:0.45; }
-        .portal-item input[type="checkbox"]{ width:14px; height:14px; accent-color:var(--primary); flex-shrink:0; }
-        .portal-name{ font-weight:700; font-size:0.82rem; text-transform:capitalize; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-        .portal-status-text{ font-size:0.65rem; color:var(--text-dim); }
-        .portal-counter{ font-weight:800; color:var(--accent); font-size:0.9rem; }
-        .session-dot{ width:7px; height:7px; border-radius:50%; background:var(--text-dim); display:inline-block; flex-shrink:0; transition:all .3s; }
-        .session-dot.active { background:var(--success); box-shadow:0 0 5px var(--success); }
-        .session-dot.missing{ background:var(--warning); box-shadow:0 0 5px rgba(245,158,11,.4); }
 
-        .file-upload{ position:relative; border:2px dashed rgba(255,255,255,0.1); border-radius:8px; padding:0.6rem; text-align:center; cursor:pointer; font-size:0.78rem; }
-        .file-upload input{ position:absolute; inset:0; opacity:0; cursor:pointer; }
-
-        .registry{ max-height:200px; overflow-y:auto; display:flex; flex-direction:column; gap:0.35rem; margin-top:0.6rem; }
-        .registry-card{ display:flex; align-items:center; gap:0.5rem; padding:0.4rem 0.7rem; border-radius:7px; font-size:0.78rem; border:1px solid rgba(255,255,255,0.07); }
-        .registry-card.success{ background:rgba(16,185,129,0.1); border-color:rgba(16,185,129,0.3); }
-        .registry-card.error  { background:rgba(239,68,68,0.1);  border-color:rgba(239,68,68,0.3); }
-        .registry-badge{ font-size:0.62rem; font-weight:700; padding:1px 6px; border-radius:20px; text-transform:uppercase; flex-shrink:0; }
-        .registry-badge.success{ background:rgba(16,185,129,0.25); color:var(--success); }
-        .registry-badge.error  { background:rgba(239,68,68,0.25);  color:var(--danger); }
-        .registry-title{ flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-        .registry-portal{ font-size:0.62rem; color:var(--text-dim); flex-shrink:0; }
-
-        .iv-panel{
-            display:none; border-radius:10px; padding:0.75rem 1rem;
-            border:2px solid var(--warning); margin-top:0.6rem;
-            background:rgba(245,158,11,0.06);
-            animation:ivPulse 2.5s ease-in-out infinite;
+        .stat-label {
+            font-size: 0.68rem;
+            color: var(--text-dim);
+            text-transform: uppercase;
+            letter-spacing: 1px;
         }
-        .iv-panel.login{ border-color:#818cf8; background:rgba(129,140,248,0.08); animation:ivPulseLogin 2.5s ease-in-out infinite; }
-        @keyframes ivPulse      { 0%,100%{box-shadow:0 0 0 rgba(245,158,11,0)} 50%{box-shadow:0 0 16px rgba(245,158,11,0.4)} }
-        @keyframes ivPulseLogin { 0%,100%{box-shadow:0 0 0 rgba(129,140,248,0)} 50%{box-shadow:0 0 16px rgba(129,140,248,0.4)} }
-        .iv-header{ display:flex; align-items:center; gap:0.75rem; margin-bottom:0.5rem; }
-        .iv-icon  { font-size:1.6rem; flex-shrink:0; }
-        .iv-title { font-size:0.9rem; font-weight:800; }
-        .iv-sub   { font-size:0.7rem; color:var(--text-dim); margin-top:2px; }
-        .iv-steps { padding-left:1.2rem; color:var(--text-dim); line-height:2; font-size:0.8rem; }
-        .iv-steps strong{ color:var(--text); }
-        .iv-btn-sound{ background:rgba(255,255,255,0.07); border:1px solid rgba(255,255,255,0.15); color:white; border-radius:6px; padding:0.25rem 0.6rem; cursor:pointer; font-size:0.72rem; margin-left:auto; flex-shrink:0; }
 
-        #captcha-modal{ display:none; position:fixed; inset:0; background:rgba(0,0,0,0.85); backdrop-filter:blur(8px); z-index:9999; align-items:center; justify-content:center; opacity:0; pointer-events:none; transition:opacity .3s; }
+        .card {
+            background: var(--card-bg);
+            backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 16px;
+            padding: 1rem;
+            box-shadow: 0 10px 30px -8px rgba(0, 0, 0, 0.5);
+        }
+
+        .card h2 {
+            font-size: 1rem;
+            margin-bottom: 0.75rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .form-group {
+            margin-bottom: 0.6rem;
+        }
+
+        label {
+            display: block;
+            font-size: 0.75rem;
+            color: var(--text-dim);
+            margin-bottom: 0.25rem;
+        }
+
+        input[type="text"],
+        input[type="email"],
+        input[type="number"],
+        select {
+            width: 100%;
+            background: rgba(15, 23, 42, 0.5);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 8px;
+            padding: 0.4rem 0.7rem;
+            color: white;
+            outline: none;
+            font-size: 0.82rem;
+            transition: border-color .2s;
+        }
+
+        textarea {
+            font-size: 0.82rem;
+        }
+
+        input:focus,
+        textarea:focus {
+            border-color: var(--primary);
+        }
+
+        .btn {
+            cursor: pointer;
+            border: none;
+            border-radius: 8px;
+            padding: 0.5rem 1rem;
+            font-weight: 600;
+            font-size: 0.85rem;
+            transition: all .2s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.4rem;
+            width: 100%;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, var(--primary), var(--secondary));
+            color: white;
+        }
+
+        .btn-success {
+            background: linear-gradient(135deg, #10b981, #059669);
+            color: white;
+        }
+
+        .btn-danger {
+            background: linear-gradient(135deg, #ef4444, #dc2626);
+            color: white;
+        }
+
+        .btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .btn:hover:not(:disabled) {
+            filter: brightness(1.1);
+        }
+
+        .toolbar-btn {
+            cursor: pointer;
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            background: rgba(255, 255, 255, 0.06);
+            color: var(--text);
+            border-radius: 7px;
+            padding: 0.3rem 0.6rem;
+            font-size: 0.72rem;
+            font-weight: 700;
+            transition: all .2s;
+        }
+
+        .toolbar-btn:hover {
+            border-color: var(--accent);
+            color: var(--accent);
+        }
+
+        .ops-panel {
+            margin: 0.6rem 0;
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 0.5rem;
+        }
+
+        .ops-item {
+            background: rgba(15, 23, 42, 0.42);
+            border: 1px solid rgba(255, 255, 255, 0.09);
+            border-radius: 8px;
+            padding: 0.5rem 0.7rem;
+            min-width: 0;
+        }
+
+        .ops-label {
+            color: var(--text-dim);
+            font-size: 0.62rem;
+            text-transform: uppercase;
+            letter-spacing: .04em;
+            margin-bottom: 0.2rem;
+        }
+
+        .ops-value {
+            font-size: 0.8rem;
+            font-weight: 700;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .ops-value.ok {
+            color: var(--success);
+        }
+
+        .ops-value.warn {
+            color: var(--warning);
+        }
+
+        .ops-value.info {
+            color: var(--accent);
+        }
+
+        .ops-value.danger {
+            color: var(--danger);
+        }
+
+        .terminal-wrap {
+            margin-top: 0.6rem;
+        }
+
+        .terminal-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            background: rgba(16, 185, 129, 0.08);
+            border: 1px solid rgba(16, 185, 129, 0.2);
+            border-bottom: none;
+            border-radius: 10px 10px 0 0;
+            padding: 0.4rem 0.75rem;
+            font-size: 0.72rem;
+            color: var(--success);
+        }
+
+        .terminal-header span {
+            display: flex;
+            align-items: center;
+            gap: 0.4rem;
+        }
+
+        .terminal-dot {
+            width: 7px;
+            height: 7px;
+            border-radius: 50%;
+            background: var(--success);
+            box-shadow: 0 0 5px var(--success);
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+
+            0%,
+            100% {
+                opacity: 1
+            }
+
+            50% {
+                opacity: 0.4
+            }
+        }
+
+        .terminal {
+            background: #050a0e;
+            border-radius: 0 0 10px 10px;
+            padding: 0.75rem 1rem;
+            font-family: 'Courier New', monospace;
+            font-size: 0.75rem;
+            height: 320px;
+            overflow-y: auto;
+            color: #10b981;
+            border: 1px solid rgba(16, 185, 129, 0.2);
+            border-top: none;
+        }
+
+        .log-line {
+            margin-bottom: 3px;
+            border-left: 2px solid transparent;
+            padding-left: 6px;
+            line-height: 1.4;
+        }
+
+        .log-success {
+            color: var(--success);
+            border-left-color: var(--success);
+        }
+
+        .log-error {
+            color: var(--danger);
+            border-left-color: var(--danger);
+        }
+
+        .log-portal {
+            color: var(--primary);
+            font-weight: bold;
+            border-left-color: var(--primary);
+        }
+
+        .log-warning {
+            color: var(--warning);
+            border-left-color: var(--warning);
+        }
+
+        .log-search {
+            color: var(--accent);
+            border-left-color: var(--accent);
+            font-style: italic;
+        }
+
+        .log-manual {
+            color: #fb923c;
+            border-left-color: #fb923c;
+            background: rgba(251,146,60,0.08);
+            font-weight: 600;
+            padding: 0.25rem 0.5rem;
+            border-radius: 0 6px 6px 0;
+            animation: pulseManual 1.5s ease-in-out 3;
+        }
+        @keyframes pulseManual {
+            0%,100% { background: rgba(251,146,60,0.08); }
+            50%      { background: rgba(251,146,60,0.22); }
+        }
+
+        #manual-actions-panel {
+            background: rgba(251,146,60,0.07);
+            border: 1px solid rgba(251,146,60,0.3);
+            border-radius: 10px;
+            padding: 0.5rem 0.75rem;
+            margin-bottom: 0.5rem;
+            display: none;
+        }
+        #manual-actions-panel .ma-header {
+            display: flex; align-items: center; justify-content: space-between;
+            font-size: 0.78rem; font-weight: 600; color: #fb923c; margin-bottom: 0.35rem;
+        }
+        #manual-actions-list { list-style: none; padding: 0; margin: 0; }
+        #manual-actions-list li {
+            font-size: 0.73rem; color: var(--text-dim);
+            padding: 0.15rem 0;
+            border-bottom: 1px solid rgba(255,255,255,0.05);
+        }
+        #manual-actions-list li:last-child { border-bottom: none; }
+
+        .portal-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 0.5rem;
+            margin-bottom: 0.75rem;
+        }
+
+        .portal-item {
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            padding: 0.6rem 0.7rem;
+            border-radius: 10px;
+            display: flex;
+            flex-direction: column;
+            gap: 0.35rem;
+            transition: all .2s;
+            min-width: 0;
+        }
+
+        .portal-item.active {
+            border-color: var(--primary);
+            background: rgba(99, 102, 241, 0.12);
+        }
+
+        .portal-item.done {
+            border-color: var(--success);
+            background: rgba(16, 185, 129, 0.1);
+        }
+
+        .portal-item.disabled-hint {
+            opacity: 0.45;
+        }
+
+        .portal-item input[type="checkbox"] {
+            width: 14px;
+            height: 14px;
+            accent-color: var(--primary);
+            flex-shrink: 0;
+        }
+
+        .portal-name {
+            font-weight: 700;
+            font-size: 0.82rem;
+            text-transform: capitalize;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .portal-status-text {
+            font-size: 0.65rem;
+            color: var(--text-dim);
+        }
+
+        .portal-counter {
+            font-weight: 800;
+            color: var(--accent);
+            font-size: 0.9rem;
+        }
+
+        .session-dot {
+            width: 7px;
+            height: 7px;
+            border-radius: 50%;
+            background: var(--text-dim);
+            display: inline-block;
+            flex-shrink: 0;
+            transition: all .3s;
+        }
+
+        .session-dot.active {
+            background: var(--success);
+            box-shadow: 0 0 5px var(--success);
+        }
+
+        .session-dot.missing {
+            background: var(--warning);
+            box-shadow: 0 0 5px rgba(245, 158, 11, .4);
+        }
+
+        .file-upload {
+            position: relative;
+            border: 2px dashed rgba(255, 255, 255, 0.1);
+            border-radius: 8px;
+            padding: 0.6rem;
+            text-align: center;
+            cursor: pointer;
+            font-size: 0.78rem;
+        }
+
+        .file-upload input {
+            position: absolute;
+            inset: 0;
+            opacity: 0;
+            cursor: pointer;
+        }
+
+        .registry {
+            max-height: 200px;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 0.35rem;
+            margin-top: 0.6rem;
+        }
+
+        .registry-card {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.4rem 0.7rem;
+            border-radius: 7px;
+            font-size: 0.78rem;
+            border: 1px solid rgba(255, 255, 255, 0.07);
+        }
+
+        .registry-card.success {
+            background: rgba(16, 185, 129, 0.1);
+            border-color: rgba(16, 185, 129, 0.3);
+        }
+
+        .registry-card.error {
+            background: rgba(239, 68, 68, 0.1);
+            border-color: rgba(239, 68, 68, 0.3);
+        }
+
+        .registry-badge {
+            font-size: 0.62rem;
+            font-weight: 700;
+            padding: 1px 6px;
+            border-radius: 20px;
+            text-transform: uppercase;
+            flex-shrink: 0;
+        }
+
+        .registry-badge.success {
+            background: rgba(16, 185, 129, 0.25);
+            color: var(--success);
+        }
+
+        .registry-badge.error {
+            background: rgba(239, 68, 68, 0.25);
+            color: var(--danger);
+        }
+
+        .registry-title {
+            flex: 1;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .registry-portal {
+            font-size: 0.62rem;
+            color: var(--text-dim);
+            flex-shrink: 0;
+        }
+
+        .iv-panel {
+            display: none;
+            border-radius: 10px;
+            padding: 0.75rem 1rem;
+            border: 2px solid var(--warning);
+            margin-top: 0.6rem;
+            background: rgba(245, 158, 11, 0.06);
+            animation: ivPulse 2.5s ease-in-out infinite;
+        }
+
+        .iv-panel.login {
+            border-color: #818cf8;
+            background: rgba(129, 140, 248, 0.08);
+            animation: ivPulseLogin 2.5s ease-in-out infinite;
+        }
+
+        @keyframes ivPulse {
+
+            0%,
+            100% {
+                box-shadow: 0 0 0 rgba(245, 158, 11, 0)
+            }
+
+            50% {
+                box-shadow: 0 0 16px rgba(245, 158, 11, 0.4)
+            }
+        }
+
+        @keyframes ivPulseLogin {
+
+            0%,
+            100% {
+                box-shadow: 0 0 0 rgba(129, 140, 248, 0)
+            }
+
+            50% {
+                box-shadow: 0 0 16px rgba(129, 140, 248, 0.4)
+            }
+        }
+
+        .iv-header {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            margin-bottom: 0.5rem;
+        }
+
+        .iv-icon {
+            font-size: 1.6rem;
+            flex-shrink: 0;
+        }
+
+        .iv-title {
+            font-size: 0.9rem;
+            font-weight: 800;
+        }
+
+        .iv-sub {
+            font-size: 0.7rem;
+            color: var(--text-dim);
+            margin-top: 2px;
+        }
+
+        .iv-steps {
+            padding-left: 1.2rem;
+            color: var(--text-dim);
+            line-height: 2;
+            font-size: 0.8rem;
+        }
+
+        .iv-steps strong {
+            color: var(--text);
+        }
+
+        .iv-btn-sound {
+            background: rgba(255, 255, 255, 0.07);
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            color: white;
+            border-radius: 6px;
+            padding: 0.25rem 0.6rem;
+            cursor: pointer;
+            font-size: 0.72rem;
+            margin-left: auto;
+            flex-shrink: 0;
+        }
+
+        #captcha-modal {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.85);
+            backdrop-filter: blur(8px);
+            z-index: 9999;
+            align-items: center;
+            justify-content: center;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity .3s;
+        }
+
+        #scan-status.done  { color:#4ade80; border-color:rgba(74,222,128,0.25); background:rgba(74,222,128,0.07); }
+        #scan-status.error { color:var(--danger); border-color:rgba(239,68,68,0.25); background:rgba(239,68,68,0.07); }
     </style>
 </head>
+
 <body>
     <header>
-        <h1>ApplyJob | Master Mode</h1>
+        <h1>ApplyJob</h1>
         <div style="display:flex; gap:8px; justify-content:center; flex-wrap:wrap; margin-top:4px;">
-            <span style="background:var(--primary-glow); padding:3px 12px; border-radius:20px; font-size:0.75rem; border:1px solid var(--primary);">
+            <span
+                style="background:var(--primary-glow); padding:3px 12px; border-radius:20px; font-size:0.75rem; border:1px solid var(--primary);">
                 🔑 <b id="kw-text">--</b>
             </span>
-            <span style="background:rgba(34,211,238,0.08); padding:3px 12px; border-radius:20px; font-size:0.75rem; border:1px solid var(--accent);">
+            <span
+                style="background:rgba(34,211,238,0.08); padding:3px 12px; border-radius:20px; font-size:0.75rem; border:1px solid var(--accent);">
                 <b id="action-text">Esperando...</b>
             </span>
         </div>
@@ -169,22 +662,30 @@
 
     <!-- (banner flotante eliminado — reemplazado por iv-panel dentro del card) -->
 
-    <div class="stats-bar">
-        <div class="stat-card">
-            <span class="stat-value" id="stat-applied">0</span>
-            <span class="stat-label">Aplicadas</span>
+    <div class="stats-bar" style="grid-template-columns: repeat(6,1fr);">
+        <div class="stat-card" title="Postulaciones enviadas correctamente en esta sesión">
+            <span class="stat-value" id="stat-applied" style="color:var(--success);">0</span>
+            <span class="stat-label">✅ Postuladas</span>
         </div>
-        <div class="stat-card">
-            <span class="stat-value" id="stat-errors" style="color: var(--danger);">0</span>
-            <span class="stat-label">Errores</span>
+        <div class="stat-card" title="Ofertas externas registradas (link abierto / GetOnBoard)">
+            <span class="stat-value" id="stat-external" style="color:var(--accent);">0</span>
+            <span class="stat-label">⚡ Externas</span>
         </div>
-        <div class="stat-card">
-            <span class="stat-value" id="stat-portal" style="font-size: 1.2rem; color: var(--warning);">---</span>
-            <span class="stat-label">Portal Actual</span>
+        <div class="stat-card" title="Descartadas por filtros (horario, experiencia, rubro, etc.)">
+            <span class="stat-value" id="stat-filtered" style="color:var(--warning);">0</span>
+            <span class="stat-label">🔻 Filtradas</span>
         </div>
-        <div class="stat-card">
-            <span class="stat-value" id="stat-status" style="font-size: 1.2rem;">Inactivo</span>
-            <span class="stat-label">Estado Bot</span>
+        <div class="stat-card" title="No se pudo navegar: oferta cerrada o botón sin acción">
+            <span class="stat-value" id="stat-nonav" style="color:#f97316;">0</span>
+            <span class="stat-label">⚠️ Sin Nav</span>
+        </div>
+        <div class="stat-card" title="Errores reales de navegación o postulación">
+            <span class="stat-value" id="stat-errors" style="color:var(--danger);">0</span>
+            <span class="stat-label">❌ Errores</span>
+        </div>
+        <div class="stat-card" style="grid-column: span 1;">
+            <span class="stat-value" id="stat-portal" style="font-size:1rem; color:var(--warning);">---</span>
+            <span class="stat-label">🌐 Portal</span>
         </div>
     </div>
 
@@ -194,7 +695,8 @@
             <h2>⚙️ Configuración</h2>
 
             <!-- Banner de detección de CV -->
-            <div id="cv-parse-banner" style="display:none; background:rgba(16,185,129,0.1); border:1px solid rgba(16,185,129,0.3); border-radius:12px; padding:0.75rem 1rem; margin-bottom:1.25rem; font-size:0.85rem; color:var(--success); display:none; align-items:center; gap:0.6rem;">
+            <div id="cv-parse-banner"
+                style="display:none; background:rgba(16,185,129,0.1); border:1px solid rgba(16,185,129,0.3); border-radius:12px; padding:0.75rem 1rem; margin-bottom:1.25rem; font-size:0.85rem; color:var(--success); align-items:center; gap:0.6rem;">
                 <span style="font-size:1.2rem;">✓</span>
                 <span id="cv-parse-msg">Campos detectados del CV</span>
             </div>
@@ -206,33 +708,61 @@
                         <span id="cv-name">Seleccionar archivo (.pdf / .docx)</span>
                         <input type="file" name="cv_file" id="cv_input" accept=".pdf,.docx,.doc">
                     </div>
-                    <div id="cv-parsing" style="display:none; font-size:0.8rem; color:var(--text-dim); margin-top:0.4rem; text-align:center;">
-                        ⏳ Leyendo CV...
+                    <div id="cv-parsing"
+                        style="display:none; font-size:0.8rem; color:var(--text-dim); margin-top:0.4rem; text-align:center;">
+                        Leyendo CV...
                     </div>
+                    <div id="cv-path-display"
+                        style="font-size:0.75rem; color:var(--success); margin-top:0.4rem; word-break:break-all; display:none;">
+                    </div>
+                    <!-- ruta persistida — se envía al bot como USER_CV_PATH -->
+                    <input type="hidden" name="USER_CV_PATH" id="inp-cv-path">
                 </div>
 
                 <div class="form-group">
-                    <label>Keywords de búsqueda</label>
-                    <input type="text" name="USER_KEYWORDS" id="inp-keywords" placeholder="Ej: desarrollador junior, bodega">
+                    <label style="display:flex;align-items:center;gap:0.5rem;">
+                        Keywords de búsqueda
+                        <span style="font-size:0.68rem;color:var(--text-dim);font-weight:400;">acordeón por categoría · cada keyword = búsqueda separada</span>
+                        <span style="margin-left:auto;font-size:0.68rem;color:#34d399;" id="kw-selected-count"></span>
+                        <span style="background:rgba(16,185,129,0.15);border:1px solid rgba(16,185,129,0.3);color:#34d399;border-radius:4px;padding:1px 6px;font-size:0.62rem;font-weight:700;white-space:nowrap;">🔒 sin experiencia siempre</span>
+                    </label>
+                    <div id="kw-accordion" style="border:1px solid rgba(255,255,255,0.08);border-radius:8px;overflow:hidden;"></div>
+                    <div style="display:flex;gap:0.4rem;margin-top:0.4rem;align-items:center;">
+                        <input type="text" id="kw-add-input" placeholder="+ agregar keyword personalizada..."
+                            style="flex:1;background:rgba(15,23,42,0.5);border:1px solid rgba(255,255,255,0.08);border-radius:6px;padding:0.3rem 0.6rem;color:white;outline:none;font-size:0.78rem;"
+                            onkeydown="if(event.key==='Enter'){event.preventDefault();addCustomKeyword();}">
+                        <button type="button" onclick="addCustomKeyword()" style="background:rgba(99,102,241,0.2);border:1px solid var(--primary);color:var(--primary);border-radius:6px;padding:0.3rem 0.7rem;font-size:0.78rem;cursor:pointer;">+ Agregar</button>
+                    </div>
+                    <input type="hidden" name="USER_KEYWORDS" id="inp-keywords">
                 </div>
 
                 <!-- Sección colapsable con campos del perfil -->
                 <details id="profile-details" style="margin-bottom:0.6rem;">
-                    <summary style="cursor:pointer; color:var(--text-dim); font-size:0.78rem; margin-bottom:0.5rem; list-style:none; display:flex; align-items:center; gap:0.4rem;">
+                    <summary
+                        style="cursor:pointer; color:var(--text-dim); font-size:0.78rem; margin-bottom:0.5rem; list-style:none; display:flex; align-items:center; gap:0.4rem;">
                         <span id="profile-arrow">▶</span> Datos del perfil
-                        <span id="cv-fields-count" style="background:var(--success); color:white; border-radius:20px; padding:1px 6px; font-size:0.68rem; display:none;">0 detectados</span>
+                        <span id="cv-fields-count"
+                            style="background:var(--success); color:white; border-radius:20px; padding:1px 6px; font-size:0.68rem; display:none;">0
+                            detectados</span>
                     </summary>
                     <div style="display:flex; flex-direction:column; gap:0.5rem;">
                         <div style="display:grid; grid-template-columns:1fr 1fr; gap:0.5rem;">
-                            <div><label>Nombre</label><input type="text" name="USER_FIRST_NAME" id="inp-firstname" placeholder="Ignacio"><input type="hidden" name="USER_FULL_NAME" id="inp-fullname"></div>
-                            <div><label>Apellido</label><input type="text" name="USER_LAST_NAME" id="inp-lastname" placeholder="Romo"></div>
+                            <div><label>Nombre</label><input type="text" name="USER_FIRST_NAME" id="inp-firstname"
+                                    placeholder="Ignacio"><input type="hidden" name="USER_FULL_NAME" id="inp-fullname">
+                            </div>
+                            <div><label>Apellido</label><input type="text" name="USER_LAST_NAME" id="inp-lastname"
+                                    placeholder="Romo"></div>
                         </div>
-                        <div><label>Email</label><input type="text" name="USER_EMAIL" id="inp-email" placeholder="correo@ejemplo.com"></div>
+                        <div><label>Email</label><input type="text" name="USER_EMAIL" id="inp-email"
+                                placeholder="correo@ejemplo.com"></div>
                         <div style="display:grid; grid-template-columns:1fr 1fr; gap:0.5rem;">
-                            <div><label>Teléfono</label><input type="text" name="USER_PHONE" id="inp-phone" placeholder="+56 9 1234 5678"></div>
-                            <div><label>Ciudad</label><input type="text" name="USER_CITY" id="inp-city" placeholder="Santiago, RM"></div>
+                            <div><label>Teléfono</label><input type="text" name="USER_PHONE" id="inp-phone"
+                                    placeholder="+56 9 1234 5678"></div>
+                            <div><label>Ciudad</label><input type="text" name="USER_CITY" id="inp-city"
+                                    placeholder="Santiago, RM"></div>
                         </div>
-                        <div><label>LinkedIn</label><input type="text" name="USER_LINKEDIN" id="inp-linkedin" placeholder="https://linkedin.com/in/..."></div>
+                        <div><label>LinkedIn</label><input type="text" name="USER_LINKEDIN" id="inp-linkedin"
+                                placeholder="https://linkedin.com/in/..."></div>
                         <div><label>Carta de presentación</label>
                             <textarea name="USER_COVER_LETTER" id="inp-cover"
                                 style="width:100%; background:rgba(15,23,42,0.5); border:1px solid rgba(255,255,255,0.1); border-radius:8px; padding:0.4rem 0.7rem; color:white; outline:none; resize:vertical; min-height:60px; font-family:inherit; font-size:0.78rem;"
@@ -246,29 +776,32 @@
                         <label>Ofertas por Portal</label>
                         <input type="number" name="MAX_OFFERS" id="inp-max" value="20" min="1">
                     </div>
-                    <button type="submit" class="btn btn-primary" style="width:auto; white-space:nowrap;">💾 Guardar</button>
+                    <button type="submit" class="btn btn-primary" style="width:auto; white-space:nowrap;">💾
+                        Guardar</button>
                 </div>
 
                 <!-- Campos ocultos con valores fijos del perfil (se envían al bot en runtime) -->
                 <input type="hidden" name="USER_PHONE_NUMBER" id="inp-phone-number" value="934200859">
-                <input type="hidden" name="USER_PORTFOLIO"    id="inp-portfolio"    value="https://github.com/Ztebanromo">
-                <input type="hidden" name="USER_SALARY"       id="inp-salary"       value="850000">
-                <input type="hidden" name="USER_YEARS_EXP"    id="inp-years-exp"    value="0">
+                <input type="hidden" name="USER_PORTFOLIO" id="inp-portfolio" value="https://github.com/Ztebanromo">
+                <input type="hidden" name="USER_SALARY" id="inp-salary" value="850000">
+                <input type="hidden" name="USER_YEARS_EXP" id="inp-years-exp" value="0">
                 <input type="hidden" name="USER_AVAILABILITY" id="inp-availability" value="Inmediata">
-                <input type="hidden" name="USER_ENGLISH_LEVEL" id="inp-english"     value="Básico técnico">
-                <input type="hidden" name="USER_WORK_MODE"    id="inp-work-mode"    value="Sí">
+                <input type="hidden" name="USER_ENGLISH_LEVEL" id="inp-english" value="Básico técnico">
+                <input type="hidden" name="USER_WORK_MODE" id="inp-work-mode" value="Sí">
             </form>
 
             <!-- Registro de postulaciones -->
             <h2 style="margin-top:1rem;">📋 Registro</h2>
             <div class="registry" id="registry">
-                <p style="color: var(--text-dim); font-size: 0.85rem; text-align:center; padding: 1rem 0;">Las postulaciones aparecerán aquí...</p>
+                <p style="color: var(--text-dim); font-size: 0.85rem; text-align:center; padding: 1rem 0;">Las
+                    postulaciones aparecerán aquí...</p>
             </div>
         </div>
 
         <!-- Columna Derecha: Control & Terminal -->
         <div class="card">
-            <div style="display:flex; align-items:center; justify-content:space-between; gap:0.5rem; margin-bottom:0.6rem;">
+            <div
+                style="display:flex; align-items:center; justify-content:space-between; gap:0.5rem; margin-bottom:0.6rem;">
                 <h2 style="margin-bottom:0;">🚀 Control Maestro</h2>
                 <div style="display:flex; gap:0.4rem;">
                     <button type="button" class="toolbar-btn" id="selectAllPortalsBtn">Todos</button>
@@ -280,10 +813,17 @@
                 <!-- Portales generados por JS -->
             </div>
 
-            <div style="display:flex; gap:0.5rem;">
-                <button id="runBtn" class="btn btn-success">▶ Iniciar proceso</button>
-                <button id="stopBtn" class="btn btn-danger" style="display:none;">⏹ Detener</button>
+            <!-- Botones de control -->
+            <div style="display:flex; gap:0.5rem; flex-wrap:wrap; align-items:center; margin-bottom:0.5rem;">
+                <button id="scanBtn" class="btn" style="background:linear-gradient(135deg,#0284c7,#0ea5e9);color:#fff;font-weight:700;flex:1;">
+                    🔍 Scan
+                </button>
+                <button id="postularBtn" class="btn btn-success" style="flex:1;font-weight:700;">
+                    🚀 Postular
+                </button>
+                <button id="stopBtn" class="btn btn-danger" style="flex:1;" disabled>⏹ Detener</button>
             </div>
+            <div id="scan-status" style="display:none;font-size:0.8rem;font-weight:600;color:#38bdf8;margin-bottom:0.4rem;padding:0.4rem 0.6rem;background:rgba(14,165,233,0.08);border:1px solid rgba(14,165,233,0.2);border-radius:8px;"></div>
 
             <div class="ops-panel" aria-live="polite">
                 <div class="ops-item">
@@ -297,6 +837,10 @@
                 <div class="ops-item">
                     <div class="ops-label">Sesiones</div>
                     <div class="ops-value warn" id="ops-sessions">Revisando...</div>
+                </div>
+                <div class="ops-item" style="cursor:pointer;" onclick="document.getElementById('pq-panel').scrollIntoView({behavior:'smooth'})">
+                    <div class="ops-label">Preguntas</div>
+                    <div class="ops-value ok" id="ops-questions">Sin pendientes</div>
                 </div>
             </div>
 
@@ -313,25 +857,114 @@
                 <ol class="iv-steps" id="iv-steps"></ol>
             </div>
 
-            <!-- Panel de Preguntas Pendientes -->
-            <div id="pq-panel" style="display:none; background:rgba(139,92,246,0.08); border:1px solid rgba(139,92,246,0.35); border-radius:12px; padding:1rem 1.2rem; margin-bottom:1rem;">
-                <div style="display:flex; align-items:center; gap:0.6rem; margin-bottom:0.75rem;">
-                    <span style="font-size:1.2rem;">❓</span>
-                    <strong style="color:#a78bfa; font-size:0.95rem;">Preguntas sin respuesta</strong>
-                    <span id="pq-badge" style="background:#7c3aed; color:white; border-radius:20px; padding:0.1rem 0.55rem; font-size:0.72rem; font-weight:700; margin-left:auto;">0</span>
-                    <button onclick="loadPendingQuestions()" style="background:none;border:none;color:var(--text-dim);cursor:pointer;font-size:0.72rem;margin-left:0.3rem;" title="Actualizar">↻</button>
+            <!-- Banner post-scan: muestra resultados del último scan -->
+            <div id="scan-result-banner" style="display:none; background:rgba(16,185,129,0.08); border:1px solid rgba(16,185,129,0.3); border-radius:10px; padding:0.6rem 1rem; margin-bottom:0.75rem; font-size:0.82rem;">
+                <div style="display:flex; align-items:center; gap:0.5rem; flex-wrap:wrap;">
+                    <span style="font-weight:700; color:#34d399;">📋 Resultado del Scan</span>
+                    <span id="scan-result-queue" style="color:#a3e635; font-weight:600;">— ofertas en cola</span>
+                    <span style="color:var(--text-dim);">·</span>
+                    <span id="scan-result-questions" style="color:#c4b5fd; font-weight:600;">— preguntas</span>
+                    <span id="scan-result-cta" style="margin-left:auto; display:none;">
+                        <button onclick="document.getElementById('postularBtn').click()"
+                            style="background:linear-gradient(135deg,#059669,#10b981);color:white;border:none;border-radius:7px;padding:0.3rem 0.9rem;cursor:pointer;font-size:0.8rem;font-weight:700;box-shadow:0 2px 8px rgba(16,185,129,0.35);">
+                            🚀 Postular a todo
+                        </button>
+                    </span>
                 </div>
-                <div id="pq-list" style="display:flex; flex-direction:column; gap:0.75rem;"></div>
-                <p style="font-size:0.75rem; color:var(--text-dim); margin:0.5rem 0 0;">
-                    El bot dejó estos campos vacíos. Respóndelos aquí y la próxima vez los usará automáticamente.
-                </p>
+            </div>
+
+            <!-- Panel de Preguntas (Acordeón — siempre visible si hay datos) -->
+            <div id="pq-panel" style="display:none; background:rgba(139,92,246,0.08); border:1px solid rgba(139,92,246,0.35); border-radius:12px; margin-bottom:1rem; overflow:hidden;">
+                <!-- Cabecera acordeón (siempre visible) -->
+                <div id="pq-header" onclick="togglePqPanel()"
+                    style="display:flex; align-items:center; gap:0.6rem; padding:0.75rem 1rem; cursor:pointer; user-select:none;">
+                    <span style="font-size:1rem;">❓</span>
+                    <strong style="color:#a78bfa; font-size:0.88rem; flex:1;">Preguntas del Scan</strong>
+                    <span id="pq-badge-answered" style="background:#065f46; color:#6ee7b7; border-radius:20px; padding:0.1rem 0.5rem; font-size:0.7rem; font-weight:700;">0 ✓</span>
+                    <span id="pq-badge" style="background:#7c3aed; color:white; border-radius:20px; padding:0.1rem 0.5rem; font-size:0.7rem; font-weight:700; display:none;">0 ⚠</span>
+                    <button id="pq-autofill-btn" onclick="event.stopPropagation(); autoFillFromCV()"
+                        style="background:linear-gradient(135deg,#0891b2,#06b6d4);border:none;color:white;border-radius:6px;padding:0.25rem 0.65rem;cursor:pointer;font-size:0.72rem;font-weight:700;"
+                        title="Responder automáticamente usando los datos de tu CV y perfil">🧠 Responder desde CV</button>
+                    <button onclick="event.stopPropagation(); loadPendingQuestions()"
+                        style="background:none;border:none;color:var(--text-dim);cursor:pointer;font-size:0.72rem;" title="Actualizar">↻</button>
+                    <span id="pq-chevron" style="color:var(--text-dim); font-size:0.8rem; transition:transform 0.2s;">▼</span>
+                </div>
+                <!-- Cuerpo colapsable -->
+                <div id="pq-body" style="padding:0 1rem 0.75rem; display:flex; flex-direction:column; gap:0.6rem;">
+                    <div id="pq-list"></div>
+                    <p style="font-size:0.72rem; color:var(--text-dim); margin:0.25rem 0 0;">
+                        ✏️ Las respuestas se guardan automáticamente al escribir. Se reusan en futuras sesiones.
+                    </p>
+                </div>
+            </div>
+
+            <!-- Panel de Acciones Manuales Pendientes -->
+            <div id="manual-actions-panel">
+                <div class="ma-header">
+                    <span>⚠ Preguntas sin responder — acción manual requerida</span>
+                    <button onclick="clearManualActions()" style="background:none;border:none;color:#fb923c;cursor:pointer;font-size:0.72rem;opacity:0.7;">limpiar</button>
+                </div>
+                <ul id="manual-actions-list"></ul>
+            </div>
+
+            <!-- Panel Links Rápidos — acordeón colapsable -->
+            <div id="quick-links-panel" style="display:none; background:rgba(16,185,129,0.07); border:1px solid rgba(16,185,129,0.3); border-radius:10px; margin-bottom:0.5rem; overflow:hidden;">
+                <!-- Header clickable (acordeón) -->
+                <div onclick="toggleQuickLinks()" style="display:flex; align-items:center; justify-content:space-between; padding:0.5rem 0.75rem; cursor:pointer; user-select:none; gap:0.5rem;">
+                    <div style="display:flex;align-items:center;gap:0.5rem;flex:1;min-width:0;">
+                        <span style="font-size:0.9rem;">🚀</span>
+                        <span style="font-size:0.78rem; font-weight:700; color:#34d399; white-space:nowrap;">Postulación rápida</span>
+                        <span id="quick-links-count" style="font-size:0.72rem;color:#6ee7b7;font-weight:400;"></span>
+                        <span style="font-size:0.65rem;color:rgba(110,231,183,0.6);font-style:italic;display:none;" id="ql-hint">abre ofertas que el bot no puede postular solo</span>
+                    </div>
+                    <div style="display:flex;align-items:center;gap:0.4rem;" onclick="event.stopPropagation()">
+                        <button id="apply-all-btn" onclick="applyAllQuickLinks()" style="font-size:0.72rem;background:linear-gradient(135deg,#059669,#10b981);color:white;border:none;border-radius:6px;padding:0.25rem 0.75rem;cursor:pointer;font-weight:700;white-space:nowrap;box-shadow:0 2px 8px rgba(16,185,129,0.3);">Postular a todo</button>
+                        <button onclick="clearQuickLinks()" style="background:none;border:none;color:#34d399;cursor:pointer;font-size:0.72rem;opacity:0.6;" title="Limpiar todo">🗑</button>
+                    </div>
+                    <span id="ql-chevron" style="color:#34d399;font-size:0.75rem;transition:transform 0.2s;display:inline-block;pointer-events:none;">▼</span>
+                </div>
+                <!-- Cuerpo colapsable -->
+                <div id="quick-links-body" style="padding:0 0.75rem 0.5rem; display:flex; flex-direction:column; gap:0.3rem;"></div>
+            </div>
+
+            <!-- Panel Registros Históricos -->
+            <div id="records-panel" style="background:rgba(30,41,59,0.6); border:1px solid rgba(99,102,241,0.2); border-radius:12px; margin-bottom:0.75rem; overflow:hidden;">
+                <div id="records-header" onclick="toggleRecords()"
+                    style="display:flex; align-items:center; gap:0.6rem; padding:0.65rem 1rem; cursor:pointer; user-select:none;">
+                    <span style="font-size:0.95rem;">📋</span>
+                    <strong style="color:#a5b4fc; font-size:0.85rem; flex:1;">Registros — Historial de Postulaciones</strong>
+                    <span id="records-total" style="font-size:0.72rem; color:var(--text-dim);">cargando...</span>
+                    <button onclick="event.stopPropagation(); loadRecords()"
+                        style="background:none;border:none;color:var(--text-dim);cursor:pointer;font-size:0.72rem;" title="Actualizar">↻</button>
+                    <span id="records-chevron" style="color:var(--text-dim); font-size:0.8rem; transition:transform 0.2s; transform:rotate(-90deg);">▼</span>
+                </div>
+                <div id="records-body" style="display:none; padding:0 0.75rem 0.75rem; overflow-x:auto;">
+                    <!-- Resumen por portal -->
+                    <div id="records-summary" style="display:flex; gap:0.5rem; flex-wrap:wrap; margin-bottom:0.5rem;"></div>
+                    <!-- Tabla últimas postulaciones -->
+                    <table style="width:100%; border-collapse:collapse; font-size:0.75rem;">
+                        <thead>
+                            <tr style="color:var(--text-dim); border-bottom:1px solid rgba(255,255,255,0.07);">
+                                <th style="text-align:left; padding:0.3rem 0.5rem; font-weight:600;">Fecha</th>
+                                <th style="text-align:left; padding:0.3rem 0.5rem; font-weight:600;">Portal</th>
+                                <th style="text-align:left; padding:0.3rem 0.5rem; font-weight:600;">Título</th>
+                                <th style="text-align:left; padding:0.3rem 0.5rem; font-weight:600;">Estado</th>
+                            </tr>
+                        </thead>
+                        <tbody id="records-tbody"></tbody>
+                    </table>
+                    <p id="records-empty" style="display:none; font-size:0.75rem; color:var(--text-dim); text-align:center; padding:0.75rem;">Sin registros aún — las postulaciones aparecerán aquí.</p>
+                </div>
             </div>
 
             <!-- Terminal de logs -->
             <div class="terminal-wrap">
                 <div class="terminal-header">
-                    <span><div class="terminal-dot"></div> Actividad en tiempo real</span>
-                    <button onclick="document.getElementById('log-container').innerHTML=''" style="background:none;border:none;color:var(--text-dim);cursor:pointer;font-size:0.75rem;">limpiar</button>
+                    <span>
+                        <div class="terminal-dot"></div> Actividad en tiempo real
+                    </span>
+                    <button onclick="document.getElementById('log-container').innerHTML=''"
+                        style="background:none;border:none;color:var(--text-dim);cursor:pointer;font-size:0.75rem;">limpiar</button>
                 </div>
                 <div class="terminal" id="terminal">
                     <div id="log-container"></div>
@@ -341,8 +974,10 @@
     </div>
 
     <!-- Modal CAPTCHA (overlay completo) -->
-    <div id="captcha-modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.85); backdrop-filter:blur(8px); z-index:9999; align-items:center; justify-content:center; opacity:0; pointer-events:none; transition:opacity 0.3s ease;">
-        <div class="card" style="max-width:500px; text-align:center; border:2px solid var(--warning); box-shadow:0 0 30px var(--warning);">
+    <div id="captcha-modal"
+        style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.85); backdrop-filter:blur(8px); z-index:9999; align-items:center; justify-content:center; opacity:0; pointer-events:none; transition:opacity 0.3s ease;">
+        <div class="card"
+            style="max-width:500px; text-align:center; border:2px solid var(--warning); box-shadow:0 0 30px var(--warning);">
             <h2 style="color:var(--warning); justify-content:center;">⚠️ CAPTCHA REQUERIDO</h2>
             <p style="font-size:1.1rem; margin-bottom:1.5rem;">El portal solicitó verificación humana.</p>
             <div style="background:rgba(245,158,11,0.1); padding:1.5rem; border-radius:12px; margin-bottom:2rem;">
@@ -352,17 +987,19 @@
                     <li>El bot continuará automáticamente.</li>
                 </ol>
             </div>
-            <p style="font-size:0.9rem; color:var(--text-dim); font-style:italic;">Esta ventana se cerrará sola al detectar la resolución.</p>
+            <p style="font-size:0.9rem; color:var(--text-dim); font-style:italic;">Esta ventana se cerrará sola al
+                detectar la resolución.</p>
         </div>
     </div>
 
     <script>
         // ── Portales ───────────────────────────────────────────────────────────
         // Orden: primero los portales locales/principales, luego globales
-        const PORTALS = ['chiletrabajos', 'laborum', 'getonyboard', 'computrabajo', 'linkedin', 'indeed'];
+        // Indeed excluido: bloqueado por Cloudflare Turnstile (no automatizable)
+        const PORTALS = ['chiletrabajos', 'laborum', 'getonyboard', 'computrabajo', 'linkedin'];
 
         // Portales activados por defecto al cargar el dashboard
-        const DEFAULT_PORTALS = new Set(['chiletrabajos', 'laborum', 'getonyboard', 'computrabajo']);
+        const DEFAULT_PORTALS = new Set(['chiletrabajos', 'laborum', 'getonyboard', 'computrabajo', 'linkedin']);
 
         const PORTAL_ICONS = {
             linkedin: '💼', indeed: '🔍', computrabajo: '🏢',
@@ -378,27 +1015,68 @@
             laborum: 'Laborum'
         };
 
+        const PORTAL_URLS = {
+            linkedin:      'https://www.linkedin.com/jobs/',
+            indeed:        'https://cl.indeed.com/',
+            computrabajo:  'https://cl.computrabajo.com/',
+            getonyboard:   'https://www.getonbrd.com/jobs-desarrollador-junior',
+            chiletrabajos: 'https://www.chiletrabajos.cl/',
+            laborum:       'https://www.laborum.cl/'
+        };
+
         function portalLabel(portal) {
             return PORTAL_LABELS[(portal || '').toLowerCase()] || portal || 'portal';
+        }
+
+        let _portalRestrictions = {};
+
+        async function loadPortalRestrictions() {
+            try {
+                const res = await fetch('/api/portal-restrictions');
+                _portalRestrictions = await res.json();
+                // Actualizar badges en el grid
+                for (const [portal, info] of Object.entries(_portalRestrictions)) {
+                    if (info.restricted) {
+                        const badge = document.getElementById(`restr-${portal}`);
+                        if (badge) {
+                            const until = (info.until || '').slice(0, 10);
+                            badge.style.display = '';
+                            badge.title = `Restringido hasta ${until}`;
+                        }
+                        // Des-checkear y deshabilitar el portal
+                        const cb = document.querySelector(`.portal-checkbox[value="${portal}"]`);
+                        if (cb) { cb.checked = false; cb.disabled = true; }
+                        const item = document.getElementById(`p-${portal}`);
+                        if (item) item.style.opacity = '0.45';
+                        const ps = document.getElementById(`ps-${portal}`);
+                        if (ps) { ps.textContent = '⛔ Restringido'; ps.style.color = '#ef4444'; }
+                    }
+                }
+            } catch(e) { console.warn('loadPortalRestrictions error', e); }
         }
 
         function buildPortalGrid() {
             const grid = document.getElementById('portal-grid');
             grid.innerHTML = '';
             PORTALS.forEach(portal => {
-                const icon      = PORTAL_ICONS[portal] || '🌐';
-                const label     = portalLabel(portal);
+                const icon = PORTAL_ICONS[portal] || '🌐';
+                const label = portalLabel(portal);
                 const isDefault = DEFAULT_PORTALS.has(portal);
-                const item      = document.createElement('div');
-                item.className  = 'portal-item' + (isDefault ? '' : ' disabled-hint');
-                item.id         = `p-${portal}`;
-                item.innerHTML  = `
+                const item = document.createElement('div');
+                item.className = 'portal-item' + (isDefault ? '' : ' disabled-hint');
+                item.id = `p-${portal}`;
+                const portalUrl = PORTAL_URLS[portal] || '#';
+                item.innerHTML = `
                     <div style="display:flex; align-items:center; gap:8px;">
                         <input type="checkbox" class="portal-checkbox" value="${portal}"
                             ${isDefault ? 'checked' : ''}
                             onchange="this.closest('.portal-item').classList.toggle('disabled-hint', !this.checked); refreshSessionSummary();">
-                        <span class="portal-name">${icon} ${label}</span>
-                        <span class="session-dot" id="session-${portal}" title="Sin sesión" style="margin-left:auto;"></span>
+                        <a class="portal-name" href="${portalUrl}"
+                           onclick="window.open('${portalUrl}','_blank','noopener'); return false;"
+                           style="text-decoration:none; color:inherit; cursor:pointer;"
+                           title="Abrir ${label}">${icon} ${label}</a>
+                        <span id="restr-${portal}" style="display:none; background:#7f1d1d; color:#fca5a5; border-radius:4px; padding:0.1rem 0.4rem; font-size:0.62rem; font-weight:700; margin-left:auto; white-space:nowrap;">⛔ RESTRINGIDO</span>
+                        <span class="session-dot" id="session-${portal}" title="Sin sesión" style="margin-left:6px;"></span>
                     </div>
                     <div style="display:flex; justify-content:space-between; align-items:center; border-top:1px solid rgba(255,255,255,0.06); padding-top:0.5rem; margin-top:0.1rem;">
                         <span class="portal-status-text" id="ps-${portal}">Pendiente</span>
@@ -409,27 +1087,26 @@
         }
 
         // ── Config ─────────────────────────────────────────────────────────────
+        // Mapa: clave .env → id del input en el form
         const CFG_MAP = {
-            USER_KEYWORDS:     'inp-keywords',
             USER_MAX_OFFERS:   'inp-max',
+            USER_FIRST_NAME:   'inp-firstname',
+            USER_LAST_NAME:    'inp-lastname',
+            USER_FULL_NAME:    'inp-fullname',
+            USER_EMAIL:        'inp-email',
+            USER_PHONE:        'inp-phone',
+            USER_PHONE_NUMBER: 'inp-phone-number',
+            USER_CITY:         'inp-city',
+            USER_LINKEDIN:     'inp-linkedin',
+            USER_PORTFOLIO:    'inp-portfolio',
+            USER_SALARY:       'inp-salary',
+            USER_YEARS_EXP:    'inp-years-exp',
+            USER_AVAILABILITY: 'inp-availability',
+            USER_ENGLISH_LEVEL:'inp-english',
+            USER_WORK_MODE:    'inp-work-mode',
+            USER_COVER_LETTER: 'inp-cover',
         };
-        const RUNTIME_PROFILE_FIELDS = [
-            'USER_FULL_NAME',
-            'USER_FIRST_NAME',
-            'USER_LAST_NAME',
-            'USER_EMAIL',
-            'USER_PHONE',
-            'USER_PHONE_NUMBER',
-            'USER_CITY',
-            'USER_LINKEDIN',
-            'USER_PORTFOLIO',
-            'USER_COVER_LETTER',
-            'USER_SALARY',
-            'USER_YEARS_EXP',
-            'USER_AVAILABILITY',
-            'USER_ENGLISH_LEVEL',
-            'USER_WORK_MODE',
-        ];
+        const RUNTIME_PROFILE_FIELDS = Object.keys(CFG_MAP).concat(['USER_CV_PATH']);
 
         async function loadConfig() {
             try {
@@ -440,42 +1117,167 @@
                     const val = cfg[key];
                     if (val) {
                         const el = document.getElementById(id);
-                        if (el) el.value = val;
+                        if (el) el.tagName === 'TEXTAREA' ? (el.value = val) : (el.value = val);
                     }
                 }
-                if (cfg.USER_KEYWORDS) document.getElementById('kw-text').innerText = cfg.USER_KEYWORDS;
-                document.getElementById('cv-name').innerText = 'Seleccionar archivo (.pdf / .docx)';
-            } catch(e) {}
+                // Restaurar CV guardado con indicador visual claro
+                if (cfg.USER_CV_PATH) {
+                    document.getElementById('inp-cv-path').value = cfg.USER_CV_PATH;
+                    const fname = cfg.USER_CV_PATH.split(/[\\/]/).pop();
+                    // Cambiar texto dentro del dropzone
+                    document.getElementById('cv-name').innerHTML =
+                        `<span style="color:var(--success);font-weight:600;">✓ ${fname}</span>`;
+                    // Poner borde verde al dropzone
+                    const dz = document.getElementById('cv-dropzone');
+                    if (dz) { dz.style.border = '2px solid var(--success)'; dz.style.background = 'rgba(16,185,129,0.06)'; }
+                    // Mostrar ruta completa debajo
+                    const pathDisplay = document.getElementById('cv-path-display');
+                    pathDisplay.style.display = 'block';
+                    pathDisplay.innerText = cfg.USER_CV_PATH;
+                } else {
+                    document.getElementById('cv-name').innerText = 'Seleccionar archivo (.pdf / .docx)';
+                    const dz = document.getElementById('cv-dropzone');
+                    if (dz) { dz.style.border = ''; dz.style.background = ''; }
+                }
+            } catch (e) { }
+        }
+
+        // ── Keyword chips ──────────────────────────────────────────────────────
+        // ── Keywords Acordeón ─────────────────────────────────────────────────
+        // _kwGroups: { [category]: { open, keywords: [{kw, active, custom}] } }
+        let _kwGroups = {};
+        const _CAT_ICONS = {
+            Desarrollo:'💻', Stack:'⚡', Analista:'🔎', Datos:'📊',
+            Soporte:'🛠', QA:'✅', Egresado:'🎓', Bodega:'📦', Custom:'✏️'
+        };
+
+        function _syncKwHidden() {
+            const all = [];
+            for (const cat of Object.values(_kwGroups))
+                cat.keywords.filter(k => k.active).forEach(k => all.push(k.kw));
+            document.getElementById('inp-keywords').value = all.join(',');
+            const total = all.length;
+            const countEl = document.getElementById('kw-selected-count');
+            if (countEl) countEl.textContent = `${total} seleccionadas`;
+        }
+
+        function renderKwAccordion() {
+            const acc = document.getElementById('kw-accordion');
+            acc.innerHTML = '';
+            Object.entries(_kwGroups).forEach(([cat, grp]) => {
+                const active = grp.keywords.filter(k => k.active).length;
+                const total  = grp.keywords.length;
+                const icon   = _CAT_ICONS[cat] || '🔹';
+                // Header
+                const hdr = document.createElement('div');
+                hdr.style.cssText = 'display:flex;align-items:center;gap:0.5rem;padding:0.35rem 0.6rem;background:rgba(15,23,42,0.6);cursor:pointer;border-bottom:1px solid rgba(255,255,255,0.06);user-select:none;';
+                hdr.innerHTML = `
+                    <span style="font-size:0.78rem;">${icon} <strong style="color:#e2e8f0;">${cat}</strong></span>
+                    <span style="font-size:0.65rem;color:#64748b;margin-left:0.2rem;">${active}/${total}</span>
+                    <span style="margin-left:auto;font-size:0.7rem;color:#64748b;">${grp.open ? '▾' : '▸'}</span>
+                    <label onclick="event.stopPropagation()" style="display:flex;align-items:center;gap:0.25rem;font-size:0.68rem;color:#94a3b8;cursor:pointer;">
+                        <input type="checkbox" id="kw-cat-all-${cat}"
+                            ${active === total ? 'checked' : active > 0 ? 'indeterminate' : ''}
+                            onchange="toggleCatAll('${cat}', this.checked)">
+                        todos
+                    </label>`;
+                hdr.onclick = () => { grp.open = !grp.open; renderKwAccordion(); };
+                // Fix indeterminate
+                const cb = hdr.querySelector(`#kw-cat-all-${cat}`);
+                if (cb && active > 0 && active < total) cb.indeterminate = true;
+                acc.appendChild(hdr);
+
+                if (grp.open) {
+                    const body = document.createElement('div');
+                    body.style.cssText = 'display:flex;flex-wrap:wrap;gap:0.3rem;padding:0.4rem 0.6rem 0.5rem;background:rgba(8,12,28,0.4);border-bottom:1px solid rgba(255,255,255,0.04);';
+                    grp.keywords.forEach((item, idx) => {
+                        const chip = document.createElement('label');
+                        chip.style.cssText = `display:inline-flex;align-items:center;gap:0.25rem;padding:0.18rem 0.55rem;border-radius:20px;font-size:0.7rem;cursor:pointer;user-select:none;transition:all 0.15s;border:1px solid ${item.custom ? 'rgba(251,146,60,0.4)' : item.active ? 'rgba(99,102,241,0.5)' : 'rgba(255,255,255,0.1)'};background:${item.custom ? 'rgba(251,146,60,0.1)' : item.active ? 'rgba(99,102,241,0.15)' : 'rgba(255,255,255,0.03)'};color:${item.custom ? '#fb923c' : item.active ? '#c4b5fd' : '#475569'};`;
+                        const removeBtn = item.custom ? `<span onclick="removeCustomKw('${cat}',${idx});event.preventDefault();" style="margin-left:0.2rem;opacity:0.6;font-size:0.62rem;">✕</span>` : '';
+                        chip.innerHTML = `<input type="checkbox" style="display:none;" ${item.active ? 'checked' : ''} onchange="toggleKw('${cat}',${idx},this.checked)">${item.kw}${removeBtn}`;
+                        chip.querySelector('input').onchange = (e) => { toggleKw(cat, idx, e.target.checked); };
+                        chip.onclick = (e) => { if (e.target.tagName !== 'INPUT' && e.target.tagName !== 'SPAN') { item.active = !item.active; renderKwAccordion(); _syncKwHidden(); } };
+                        body.appendChild(chip);
+                    });
+                    acc.appendChild(body);
+                }
+            });
+            _syncKwHidden();
+        }
+
+        function toggleKw(cat, idx, active) {
+            _kwGroups[cat].keywords[idx].active = active;
+            renderKwAccordion();
+        }
+        function toggleCatAll(cat, active) {
+            _kwGroups[cat].keywords.forEach(k => k.active = active);
+            renderKwAccordion();
+        }
+        function removeCustomKw(cat, idx) {
+            _kwGroups[cat].keywords.splice(idx, 1);
+            if (!_kwGroups[cat].keywords.length) delete _kwGroups[cat];
+            renderKwAccordion();
+        }
+
+        function addCustomKeyword() {
+            const inp = document.getElementById('kw-add-input');
+            const val = inp.value.trim();
+            if (!val) return;
+            if (!_kwGroups['Custom']) _kwGroups['Custom'] = { open: true, keywords: [] };
+            const already = _kwGroups['Custom'].keywords.find(k => k.kw.toLowerCase() === val.toLowerCase());
+            if (!already) {
+                _kwGroups['Custom'].keywords.push({ kw: val, active: true, custom: true });
+                renderKwAccordion();
+            }
+            inp.value = '';
+        }
+
+        async function loadKeywordChips() {
+            try {
+                const res = await fetch('/api/keywords');
+                if (!res.ok) return;
+                const groups = await res.json();
+                _kwGroups = {};
+                groups.forEach(g => {
+                    const cat = g.label || 'Custom';
+                    if (!_kwGroups[cat]) _kwGroups[cat] = { open: false, keywords: [] };
+                    _kwGroups[cat].keywords.push({ kw: g.keyword || g, active: true, custom: false });
+                });
+                // Abrir la primera categoría por defecto
+                const first = Object.keys(_kwGroups)[0];
+                if (first) _kwGroups[first].open = true;
+                renderKwAccordion();
+            } catch (e) { }
         }
 
         // ── Parse CV automático ────────────────────────────────────────────────
         // Mapa: campo del parser → id del input en el form
         const CV_FIELD_MAP = {
-            full_name:    'inp-fullname',
-            first_name:   'inp-firstname',
-            last_name:    'inp-lastname',
-            email:        'inp-email',
-            phone:        'inp-phone',
+            full_name: 'inp-fullname',
+            first_name: 'inp-firstname',
+            last_name: 'inp-lastname',
+            email: 'inp-email',
+            phone: 'inp-phone',
             phone_number: 'inp-phone-number',
-            city:         'inp-city',
-            linkedin:     'inp-linkedin',
-            portfolio:    'inp-portfolio',
+            city: 'inp-city',
+            linkedin: 'inp-linkedin',
+            portfolio: 'inp-portfolio',
             cover_letter: 'inp-cover',
-            years_exp:    'inp-years-exp',
+            years_exp: 'inp-years-exp',
         };
 
         async function parseCvFile(file) {
             const parsing = document.getElementById('cv-parsing');
-            const banner  = document.getElementById('cv-parse-banner');
-            const msg     = document.getElementById('cv-parse-msg');
-            const badge   = document.getElementById('cv-fields-count');
+            const banner = document.getElementById('cv-parse-banner');
+            const msg = document.getElementById('cv-parse-msg');
+            const badge = document.getElementById('cv-fields-count');
             banner.style.display = 'none';
             parsing.style.display = 'block';
 
             try {
                 const fd = new FormData();
                 fd.append('cv_file', file);
-                const res  = await fetch('/api/parse_cv', { method: 'POST', body: fd });
+                const res = await fetch('/api/parse_cv', { method: 'POST', body: fd });
                 const data = await res.json();
                 parsing.style.display = 'none';
 
@@ -493,6 +1295,14 @@
                     }
                 }
 
+                // Guardar ruta permanente del CV para pasarla al bot
+                if (data.cv_path) {
+                    document.getElementById('inp-cv-path').value = data.cv_path;
+                    const pathDisplay = document.getElementById('cv-path-display');
+                    pathDisplay.style.display = 'block';
+                    pathDisplay.innerText = 'CV guardado: ' + data.cv_path;
+                }
+
                 // Abrir la sección de perfil automáticamente si detectó algo
                 if (count > 0) {
                     document.getElementById('profile-details').open = true;
@@ -504,11 +1314,11 @@
                 } else {
                     banner.style.display = 'flex';
                     banner.style.borderColor = 'rgba(245,158,11,0.3)';
-                    banner.style.background  = 'rgba(245,158,11,0.1)';
-                    banner.style.color       = 'var(--warning)';
-                    msg.innerText = 'No se detectaron campos automáticamente. Completa los datos manualmente.';
+                    banner.style.background = 'rgba(245,158,11,0.1)';
+                    banner.style.color = 'var(--warning)';
+                    msg.innerText = 'No se detectaron campos. Completa los datos manualmente.';
                 }
-            } catch(e) {
+            } catch (e) {
                 parsing.style.display = 'none';
                 alert('Error al parsear el CV: ' + e.message);
             }
@@ -516,8 +1326,37 @@
 
         // ── SocketIO ───────────────────────────────────────────────────────────
         const socket = io('/bot');
-        const runBtn  = document.getElementById('runBtn');
-        const stopBtn = document.getElementById('stopBtn');
+        const scanBtn    = document.getElementById('scanBtn');
+
+        // Al conectar/reconectar: sincronizar UI con el estado real del servidor.
+        // Evita botones bloqueados cuando el servidor se reinicia mid-session.
+        socket.on('connect', () => {
+            fetch('/api/bot-state')
+                .then(r => r.ok ? r.json() : null)
+                .then(data => {
+                    if (!data) return;
+                    if (data.scan_active)  { lockScan();  setBotControls('running'); }
+                    else                   { unlockScan(); }
+                    if (data.apply_active) { lockApply(); setBotControls('running'); }
+                    else                   { unlockApply(); }
+                    if (!data.scan_active && !data.apply_active) {
+                        setBotControls('idle');
+                        _botMode = null;
+                    }
+                })
+                .catch(() => {
+                    // Si no hay endpoint aún, al menos desbloquear
+                    unlockBtns();
+                    setBotControls('idle');
+                });
+        });
+
+        socket.on('disconnect', () => {
+            const statusEl = document.getElementById('stat-status');
+            if (statusEl) { statusEl.innerText = '⚡ Reconectando...'; statusEl.style.color = 'var(--warning)'; }
+        });
+        const postularBtn = document.getElementById('postularBtn');
+        const stopBtn    = document.getElementById('stopBtn');
         const logContainer = document.getElementById('log-container');
         const terminal = document.getElementById('terminal');
         const captchaModal = document.getElementById('captcha-modal');
@@ -528,7 +1367,7 @@
         const opsSessions = document.getElementById('ops-sessions');
         let sessionCache = {};
 
-        const playSound = (freq, duration, type='sine') => {
+        const playSound = (freq, duration, type = 'sine') => {
             try {
                 const ctx = new (window.AudioContext || window.webkitAudioContext)();
                 const osc = ctx.createOscillator(); const gain = ctx.createGain();
@@ -537,10 +1376,10 @@
                 gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + duration);
                 osc.connect(gain); gain.connect(ctx.destination);
                 osc.start(); osc.stop(ctx.currentTime + duration);
-            } catch(e) {}
+            } catch (e) { }
         };
 
-        function setOps(el, text, tone='info') {
+        function setOps(el, text, tone = 'info') {
             el.innerText = text;
             el.className = `ops-value ${tone}`;
         }
@@ -568,33 +1407,28 @@
             if (mode === 'running') {
                 statusEl.innerText = 'Activo';
                 statusEl.style.color = 'var(--success)';
-                runBtn.disabled = true;
-                stopBtn.disabled = false;
-                stopBtn.style.display = 'flex';
+                scanBtn.disabled     = true;
+                postularBtn.disabled = true;
+                stopBtn.disabled     = false;
                 setOps(opsState, 'Ejecutando portales', 'ok');
                 return;
             }
             if (mode === 'stopping') {
                 statusEl.innerText = 'Deteniendo...';
                 statusEl.style.color = 'var(--warning)';
-                runBtn.disabled = true;
-                stopBtn.disabled = true;
-                stopBtn.style.display = 'flex';
+                scanBtn.disabled     = true;
+                postularBtn.disabled = true;
+                stopBtn.disabled     = true;
                 setOps(opsState, 'Cerrando proceso actual', 'warn');
                 return;
             }
             if (mode === 'finished') {
                 statusEl.innerText = '✓ Completado';
                 statusEl.style.color = 'var(--success)';
-                runBtn.disabled = false;
-                stopBtn.disabled = false;
-                stopBtn.style.display = 'none';
+                scanBtn.disabled     = false;
+                postularBtn.disabled = false;
+                stopBtn.disabled     = true;
                 setOps(opsState, 'Proceso finalizado', 'ok');
-                // Sonido de finalización
-                playSound(523, 0.3, 'triangle');
-                setTimeout(() => playSound(659, 0.3, 'triangle'), 250);
-                setTimeout(() => playSound(784, 0.5, 'triangle'), 500);
-                // Volver a "Listo" después de 8 segundos
                 setTimeout(() => {
                     statusEl.innerText = 'Listo';
                     statusEl.style.color = 'var(--text-dim)';
@@ -605,15 +1439,22 @@
             // idle / default
             statusEl.innerText = 'Inactivo';
             statusEl.style.color = 'var(--text-dim)';
-            runBtn.disabled = false;
-            stopBtn.disabled = false;
-            stopBtn.style.display = 'none';
+            scanBtn.disabled     = false;
+            postularBtn.disabled = false;
+            stopBtn.disabled     = true;
             setOps(opsState, 'Listo para iniciar', 'ok');
         }
 
         socket.on('bot_status', (data) => {
             const statusEl = document.getElementById('stat-status');
-            if (data.running || data.status === 'started' || data.status === 'starting') {
+            if (data.status === 'already_running') {
+                // El servidor ya está ocupado — desbloquear UI y avisar
+                unlockBtns();
+                _botMode = null;
+                setScanStatus('⚠️ El bot ya está en ejecución. Usa Detener si quieres reiniciarlo.');
+                setBotControls('running');
+                setAction('Bot ya en ejecución (sesión anterior)');
+            } else if (data.running || data.status === 'started' || data.status === 'starting') {
                 setBotControls('running');
                 setAction('Bot en ejecución...');
             } else {
@@ -671,8 +1512,20 @@
 
         socket.on('update_stats', (stats) => updateStats(stats));
         function updateStats(stats) {
-            document.getElementById('stat-applied').innerText = stats.applied;
-            document.getElementById('stat-errors').innerText  = stats.errors;
+            const set = (id, val) => { const el = document.getElementById(id); if (el) el.innerText = val ?? 0; };
+            set('stat-applied',  stats.applied  ?? 0);
+            set('stat-external', stats.external ?? 0);
+            set('stat-filtered', stats.filtered ?? 0);
+            set('stat-nonav',    stats.no_nav   ?? 0);
+            set('stat-errors',   stats.errors   ?? 0);
+            // Pulso visual en el contador que cambió
+            ['stat-applied','stat-external','stat-filtered','stat-nonav','stat-errors'].forEach(id => {
+                const el = document.getElementById(id);
+                if (!el) return;
+                el.style.transition = 'transform .15s ease';
+                el.style.transform  = 'scale(1.25)';
+                setTimeout(() => el.style.transform = 'scale(1)', 180);
+            });
         }
 
         socket.on('captcha_required', (data) => {
@@ -711,40 +1564,422 @@
             loadPendingQuestions();
         });
 
+        // ── Registros históricos ──────────────────────────────────────────────
+        let _recordsOpen = false;
+        function toggleRecords() {
+            _recordsOpen = !_recordsOpen;
+            const body = document.getElementById('records-body');
+            const chev = document.getElementById('records-chevron');
+            if (body) body.style.display = _recordsOpen ? 'block' : 'none';
+            if (chev) chev.style.transform = _recordsOpen ? 'rotate(0deg)' : 'rotate(-90deg)';
+            if (_recordsOpen) loadRecords();
+        }
+
+        const STATUS_COLORS = {
+            applied:     '#10b981',
+            external:    '#22d3ee',
+            skipped:     '#94a3b8',
+            error:       '#ef4444',
+            dry_run:     '#6b7280',
+        };
+        function statusColor(s) {
+            if (!s) return '#94a3b8';
+            if (s === 'applied') return STATUS_COLORS.applied;
+            if (s.startsWith('external')) return STATUS_COLORS.external;
+            if (s.startsWith('skipped')) return STATUS_COLORS.skipped;
+            if (s.startsWith('error')) return STATUS_COLORS.error;
+            return '#94a3b8';
+        }
+        function statusLabel(s) {
+            if (!s) return '—';
+            if (s === 'applied') return '✅ Postulado';
+            if (s.startsWith('external')) return '⚡ Externo';
+            if (s === 'skipped_404') return '🚫 404';
+            if (s === 'skipped_senior' || s === 'skipped_experience') return '🔻 Senior';
+            if (s === 'skipped_schedule') return '🔻 Horario';
+            if (s === 'skipped_practica') return '🔻 Práctica';
+            if (s === 'skipped_topic') return '🔻 Rubro';
+            if (s.startsWith('skipped')) return '⏭ Saltado';
+            if (s.startsWith('error')) return '❌ Error';
+            if (s === 'dry_run') return '🧪 Dry run';
+            return s.slice(0, 18);
+        }
+
+        async function loadRecords() {
+            try {
+                const [recentRes, statsRes] = await Promise.all([
+                    fetch('/api/recent?limit=30'),
+                    fetch('/api/db-stats'),
+                ]);
+                const rows  = await recentRes.json();
+                const stats = await statsRes.json();
+
+                // Total badge
+                const totalEl = document.getElementById('records-total');
+                if (totalEl) totalEl.textContent = `${stats.total ?? 0} total en DB`;
+
+                // Resumen por portal
+                const summary = document.getElementById('records-summary');
+                if (summary && stats.by_portal) {
+                    summary.innerHTML = '';
+                    for (const [portal, statuses] of Object.entries(stats.by_portal)) {
+                        const applied = statuses.applied || 0;
+                        const ext = Object.entries(statuses).filter(([k]) => k.startsWith('external')).reduce((a,[,v]) => a+v, 0);
+                        const errors = Object.entries(statuses).filter(([k]) => k.startsWith('error')).reduce((a,[,v]) => a+v, 0);
+                        summary.innerHTML += `<span style="background:rgba(99,102,241,0.15);border:1px solid rgba(99,102,241,0.25);border-radius:8px;padding:0.25rem 0.6rem;font-size:0.72rem;">
+                            <span style="color:#a5b4fc;font-weight:700;">${portal}</span>
+                            <span style="color:#10b981;margin-left:0.3rem;">✅${applied}</span>
+                            ${ext > 0 ? `<span style="color:#22d3ee;margin-left:0.3rem;">⚡${ext}</span>` : ''}
+                            ${errors > 0 ? `<span style="color:#ef4444;margin-left:0.3rem;">❌${errors}</span>` : ''}
+                        </span>`;
+                    }
+                }
+
+                // Tabla de registros
+                const tbody = document.getElementById('records-tbody');
+                const empty = document.getElementById('records-empty');
+                if (!tbody) return;
+                tbody.innerHTML = '';
+
+                if (!Array.isArray(rows) || rows.length === 0) {
+                    if (empty) empty.style.display = 'block';
+                    return;
+                }
+                if (empty) empty.style.display = 'none';
+
+                rows.forEach(r => {
+                    const color = statusColor(r.status);
+                    const label = statusLabel(r.status);
+                    const date  = (r.applied_at || '').slice(0, 16).replace('T', ' ');
+                    const tr = document.createElement('tr');
+                    tr.style.cssText = 'border-bottom:1px solid rgba(255,255,255,0.04);';
+                    tr.innerHTML = `
+                        <td style="padding:0.3rem 0.5rem;color:var(--text-dim);white-space:nowrap;">${date}</td>
+                        <td style="padding:0.3rem 0.5rem;color:#a5b4fc;font-weight:600;">${escHtml(r.portal || '')}</td>
+                        <td style="padding:0.3rem 0.5rem;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${escHtml(r.title || '')}">${escHtml((r.title || '—').slice(0,50))}</td>
+                        <td style="padding:0.3rem 0.5rem;color:${color};font-weight:600;white-space:nowrap;">${label}</td>`;
+                    tbody.appendChild(tr);
+                });
+            } catch(e) { console.warn('loadRecords error', e); }
+        }
+
+        // Actualizar registros al finalizar cada run
+        socket.on('bot_status', (data) => {
+            if (!data.running && (data.status === 'finished' || data.status === 'stopped')) {
+                if (_recordsOpen) loadRecords();
+            }
+        });
+
+        // ── Quick Links Bodega ────────────────────────────────────────────────
+        let _qlOpen = true;
+        function toggleQuickLinks() {
+            _qlOpen = !_qlOpen;
+            const body = document.getElementById('quick-links-body');
+            const chev = document.getElementById('ql-chevron');
+            const hint = document.getElementById('ql-hint');
+            if (body) body.style.display = _qlOpen ? 'flex' : 'none';
+            if (chev) chev.style.transform = _qlOpen ? 'rotate(0deg)' : 'rotate(-90deg)';
+            if (hint) hint.style.display = _qlOpen ? 'none' : 'inline';
+        }
+
+        async function loadQuickLinks() {
+            try {
+                const res  = await fetch('/api/quick-links');
+                const data = await res.json();
+                const panel = document.getElementById('quick-links-panel');
+                const list  = document.getElementById('quick-links-body');
+                const countEl = document.getElementById('quick-links-count');
+                if (!Array.isArray(data) || data.length === 0) {
+                    panel.style.display = 'none';
+                    if (countEl) countEl.textContent = '';
+                    return;
+                }
+                panel.style.display = 'block';
+                if (countEl) countEl.textContent = `— ${data.length} oferta${data.length !== 1 ? 's' : ''}`;
+                list.innerHTML = '';
+                data.forEach(item => {
+                    const row = document.createElement('div');
+                    row.style.cssText = 'display:flex;align-items:center;gap:0.4rem;background:rgba(16,185,129,0.08);border:1px solid rgba(16,185,129,0.15);border-radius:7px;padding:0.3rem 0.5rem;';
+                    const portalBadge = `<span style="font-size:0.65rem;background:rgba(16,185,129,0.2);color:#34d399;border-radius:4px;padding:1px 5px;white-space:nowrap;">${item.portal || ''}</span>`;
+                    const title = document.createElement('span');
+                    title.style.cssText = 'flex:1;font-size:0.75rem;color:#f8fafc;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
+                    title.textContent   = item.title || item.url;
+                    const openBtn = document.createElement('a');
+                    openBtn.href        = item.url;
+                    openBtn.textContent = 'Postular';
+                    openBtn.style.cssText = 'font-size:0.72rem;background:linear-gradient(135deg,#059669,#10b981);color:white;border:none;border-radius:6px;padding:0.25rem 0.6rem;cursor:pointer;text-decoration:none;white-space:nowrap;font-weight:600;';
+                    openBtn.onclick = (e) => { e.preventDefault(); window.open(item.url, '_blank', 'noopener'); dismissQuickLink(item.url); row.remove(); checkQuickLinksEmpty(); };
+                    const dismissBtn = document.createElement('button');
+                    dismissBtn.textContent = '✕';
+                    dismissBtn.title       = 'Descartar';
+                    dismissBtn.style.cssText = 'background:none;border:none;color:rgba(255,255,255,0.3);cursor:pointer;font-size:0.75rem;padding:0 0.2rem;';
+                    dismissBtn.onclick = () => { dismissQuickLink(item.url); row.remove(); checkQuickLinksEmpty(); };
+                    row.innerHTML = portalBadge;
+                    row.appendChild(title);
+                    row.appendChild(openBtn);
+                    row.appendChild(dismissBtn);
+                    list.appendChild(row);
+                });
+            } catch(e) { /* silencioso */ }
+        }
+
+        async function dismissQuickLink(url) {
+            try { await fetch('/api/quick-links/dismiss', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url})}); }
+            catch(e) {}
+        }
+
+        async function applyAllQuickLinks() {
+            const btn  = document.getElementById('apply-all-btn');
+            const list = document.getElementById('quick-links-body');
+            const rows = [...list.querySelectorAll('a')];
+            if (!rows.length) return;
+
+            const total = rows.length;
+            btn.disabled = true;
+            btn.textContent = `Abriendo ${total}...`;
+
+            // Abrir todas en nuevas pestañas con pausa para evitar bloqueo de popups
+            for (let i = 0; i < rows.length; i++) {
+                const a   = rows[i];
+                const url = a.href || a.getAttribute('href');
+                if (!url) continue;
+                window.open(url, '_blank', 'noopener');
+                const row = a.closest('div[style*="border-radius:7px"]');
+                if (row) row.remove();
+                await dismissQuickLink(url);
+                btn.textContent = `Abriendo ${i + 1}/${total}...`;
+                await new Promise(r => setTimeout(r, 250));
+            }
+
+            checkQuickLinksEmpty();
+            btn.disabled = false;
+            btn.textContent = 'Postular a todo';
+        }
+
+        async function clearQuickLinks() {
+            try {
+                await fetch('/api/quick-links/clear', {method:'POST'});
+                document.getElementById('quick-links-panel').style.display = 'none';
+                document.getElementById('quick-links-body').innerHTML = '';
+            } catch(e) {}
+        }
+
+        function checkQuickLinksEmpty() {
+            const list    = document.getElementById('quick-links-body');
+            const countEl = document.getElementById('quick-links-count');
+            if (!list || !list.children.length) {
+                document.getElementById('quick-links-panel').style.display = 'none';
+                if (countEl) countEl.textContent = '';
+            } else {
+                const n = list.children.length;
+                if (countEl) countEl.textContent = `— ${n} oferta${n !== 1 ? 's' : ''}`;
+            }
+        }
+
+        let _pqOpen = true; // acordeón abierto por defecto
+        function togglePqPanel() {
+            _pqOpen = !_pqOpen;
+            const body = document.getElementById('pq-body');
+            const chev = document.getElementById('pq-chevron');
+            if (body) body.style.display = _pqOpen ? 'flex' : 'none';
+            if (chev) chev.style.transform = _pqOpen ? 'rotate(0deg)' : 'rotate(-90deg)';
+        }
+
+        async function loadScanQueueCount() {
+            try {
+                const res = await fetch('/api/scan-queue');
+                const data = await res.json();
+                const count = data.count || 0;
+                const el = document.getElementById('scan-result-queue');
+                if (el) el.textContent = `${count} oferta${count !== 1 ? 's' : ''} en cola`;
+                return count;
+            } catch { return 0; }
+        }
+
         async function loadPendingQuestions() {
             try {
-                const res  = await fetch('/api/pending-questions');
+                const res = await fetch('/api/pending-questions');
                 const data = await res.json();
                 if (!Array.isArray(data)) return;
 
+                const answered   = data.filter(q => q.answered);
                 const unanswered = data.filter(q => !q.answered);
-                const panel  = document.getElementById('pq-panel');
-                const badge  = document.getElementById('pq-badge');
-                const list   = document.getElementById('pq-list');
+                const total      = data.length;
+                const panel      = document.getElementById('pq-panel');
+                const badgeWarn  = document.getElementById('pq-badge');
+                const badgeOk    = document.getElementById('pq-badge-answered');
+                const list       = document.getElementById('pq-list');
 
-                badge.innerText = unanswered.length;
-                panel.style.display = unanswered.length > 0 ? 'block' : 'none';
+                // Mostrar panel solo si hay datos
+                if (panel) panel.style.display = total > 0 ? 'block' : 'none';
+
+                // Badges
+                if (badgeOk) { badgeOk.textContent = `${answered.length} ✓`; badgeOk.style.display = answered.length > 0 ? '' : 'none'; }
+                if (badgeWarn) { badgeWarn.textContent = `${unanswered.length} ⚠`; badgeWarn.style.display = unanswered.length > 0 ? '' : 'none'; }
+
+                // Actualizar card ops
+                const opsQ = document.getElementById('ops-questions');
+                if (opsQ) {
+                    if (unanswered.length === 0) { opsQ.textContent = total > 0 ? `${total} respondidas` : 'Sin pendientes'; opsQ.className = 'ops-value ok'; }
+                    else { opsQ.textContent = `${unanswered.length} sin responder`; opsQ.className = 'ops-value warn'; }
+                }
+
+                // Actualizar banner resultado
+                const qEl = document.getElementById('scan-result-questions');
+                const ctaEl = document.getElementById('scan-result-cta');
+                if (qEl) qEl.textContent = unanswered.length === 0
+                    ? `${total} preguntas ✅`
+                    : `${unanswered.length}/${total} sin responder`;
+                if (ctaEl) ctaEl.style.display = unanswered.length === 0 && total >= 0 ? '' : 'none';
+
+                if (!list) return;
                 list.innerHTML = '';
 
+                // Solo mostrar preguntas SIN responder — las respondidas desaparecen
+                if (unanswered.length === 0 && total > 0) {
+                    list.innerHTML = `<div style="text-align:center;padding:0.8rem;color:#10b981;font-size:0.82rem;">✅ Todas las preguntas respondidas</div>`;
+                } else if (unanswered.length === 0) {
+                    list.innerHTML = `<div style="text-align:center;padding:0.8rem;color:var(--text-dim);font-size:0.8rem;">Sin preguntas pendientes</div>`;
+                }
+
                 unanswered.forEach(q => {
+                    const uid = hashStr(q.norm);
+                    const suggestion = q.suggested_answer || '';
+                    const label = escHtml(q.label || q.question || q.norm);
                     const item = document.createElement('div');
-                    item.style.cssText = 'background:rgba(255,255,255,0.04);border-radius:8px;padding:0.75rem 1rem;';
+                    item.id = `pq-item-${uid}`;
+                    item.style.cssText = `background:rgba(255,255,255,0.03);border-radius:8px;padding:0.6rem 0.8rem;border-left:3px solid #f59e0b;transition:opacity 0.35s,max-height 0.35s;overflow:hidden;`;
                     item.innerHTML = `
-                        <div style="font-size:0.82rem;color:#c4b5fd;margin-bottom:0.5rem;line-height:1.4;">${escHtml(q.question)}</div>
-                        <div style="display:flex;gap:0.5rem;align-items:flex-start;">
-                            <textarea id="pq-ta-${hashStr(q.norm)}" rows="2"
+                        <div style="font-size:0.8rem;color:#fcd34d;margin-bottom:0.35rem;line-height:1.3;">⚠️ ${label}</div>
+                        ${suggestion ? `
+                        <div id="pq-sug-${uid}" style="background:rgba(6,182,212,0.1);border:1px solid rgba(6,182,212,0.3);border-radius:6px;padding:0.3rem 0.55rem;margin-bottom:0.35rem;display:flex;align-items:center;gap:0.4rem;flex-wrap:wrap;">
+                            <span style="font-size:0.71rem;color:#67e8f9;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${escHtml(suggestion)}">🧠 ${escHtml(suggestion)}</span>
+                            <button onclick="useSuggestion('${uid}',\`${escHtml(suggestion)}\`)"
+                                style="background:#0891b2;border:none;color:white;border-radius:4px;padding:0.18rem 0.45rem;cursor:pointer;font-size:0.68rem;flex-shrink:0;">✓ Usar</button>
+                        </div>` : ''}
+                        <div style="display:flex;gap:0.4rem;align-items:flex-start;">
+                            <textarea id="pq-ta-${uid}" rows="2"
                                 placeholder="Escribe tu respuesta..."
-                                style="flex:1;background:rgba(255,255,255,0.06);border:1px solid rgba(139,92,246,0.3);
-                                       border-radius:6px;padding:0.4rem 0.6rem;color:white;font-size:0.8rem;resize:vertical;"></textarea>
-                            <button onclick="answerQuestion('${escHtml(q.norm)}', '${hashStr(q.norm)}')"
-                                style="background:#7c3aed;border:none;color:white;border-radius:6px;
-                                       padding:0.45rem 0.8rem;cursor:pointer;font-size:0.78rem;flex-shrink:0;">
-                                Guardar
-                            </button>
+                                onblur="autoSaveQuestion('${escHtml(q.norm)}','${uid}')"
+                                style="flex:1;background:rgba(255,255,255,0.06);border:1px solid rgba(245,158,11,0.4);border-radius:6px;padding:0.35rem 0.55rem;color:white;font-size:0.78rem;resize:vertical;transition:border-color 0.3s;"></textarea>
+                            <button onclick="answerQuestion('${escHtml(q.norm)}','${uid}')"
+                                style="background:#7c3aed;border:none;color:white;border-radius:6px;padding:0.4rem 0.7rem;cursor:pointer;font-size:0.75rem;flex-shrink:0;">Guardar</button>
                         </div>`;
                     list.appendChild(item);
                 });
-            } catch(e) { console.warn('loadPendingQuestions error', e); }
+
+                // Si se abrió post-scan, expand el acordeón
+                if (unanswered.length > 0 && !_pqOpen) { togglePqPanel(); }
+                // Ocultar panel si no hay nada que mostrar
+                if (panel) panel.style.display = (total > 0 || unanswered.length > 0) ? 'block' : 'none';
+
+            } catch (e) { console.warn('loadPendingQuestions error', e); }
+        }
+
+        function toggleEdit(uid) {
+            const editDiv = document.getElementById('pq-edit-' + uid);
+            if (editDiv) editDiv.style.display = editDiv.style.display === 'none' ? 'flex' : 'none';
+        }
+
+        function useSuggestion(uid, text) {
+            const ta = document.getElementById('pq-ta-' + uid);
+            if (ta) {
+                ta.value = text;
+                ta.focus();
+                // Ocultar la chip de sugerencia
+                const sug = document.getElementById('pq-sug-' + uid);
+                if (sug) { sug.style.transition = 'opacity 0.25s'; sug.style.opacity = '0'; setTimeout(() => sug.remove(), 260); }
+            }
+        }
+
+        async function autoFillFromCV() {
+            const btn = document.getElementById('pq-autofill-btn');
+            if (btn) { btn.disabled = true; btn.innerText = '⏳ Buscando en CV...'; }
+            try {
+                const res = await fetch('/api/pending-questions/auto-fill', { method: 'POST' });
+                const data = await res.json();
+                if (data.ok) {
+                    await loadPendingQuestions();
+                    if (btn) { btn.disabled = false; btn.innerText = '🧠 Responder desde CV'; }
+                    if (data.filled > 0) {
+                        // Mostrar detalle de qué se respondió
+                        let detail = '';
+                        if (data.details && data.details.length) {
+                            detail = '\n' + data.details.slice(0, 5).map(d => `• ${d.label}: ${d.answer}`).join('\n');
+                            if (data.details.length > 5) detail += `\n... y ${data.details.length - 5} más.`;
+                        }
+                        showToast(`✅ ${data.filled} pregunta(s) respondidas desde tu perfil.${data.remaining > 0 ? ` Quedan ${data.remaining} sin responder.` : ' ¡Todo listo!'}`, '#0891b2');
+                    } else {
+                        showToast('ℹ️ No quedaron preguntas sin responder, o no se encontraron coincidencias nuevas.', '#6b7280');
+                    }
+                } else {
+                    if (btn) { btn.disabled = false; btn.innerText = '🧠 Responder desde CV'; }
+                    showToast('Error: ' + (data.error || 'desconocido'), '#dc2626');
+                }
+            } catch (e) {
+                if (btn) { btn.disabled = false; btn.innerText = '🧠 Responder desde CV'; }
+                showToast('Error de red: ' + e.message, '#dc2626');
+            }
+        }
+
+        // Desvanece y elimina el item de pregunta del DOM
+        function _dismissPqItem(uid) {
+            const item = document.getElementById('pq-item-' + uid);
+            if (!item) return;
+            item.style.transition = 'opacity 0.35s, max-height 0.4s, padding 0.4s, margin 0.4s';
+            item.style.opacity = '0';
+            item.style.maxHeight = item.offsetHeight + 'px';
+            // forzar reflow
+            item.getBoundingClientRect();
+            item.style.maxHeight = '0';
+            item.style.padding = '0';
+            item.style.marginBottom = '0';
+            setTimeout(() => {
+                item.remove();
+                // Si ya no quedan preguntas sin responder, actualizar badges
+                const remaining = document.querySelectorAll('[id^="pq-item-"]').length;
+                if (remaining === 0) {
+                    const list = document.getElementById('pq-list');
+                    if (list) list.innerHTML = `<div style="text-align:center;padding:0.8rem;color:#10b981;font-size:0.82rem;">✅ Todas las preguntas respondidas</div>`;
+                }
+                loadPendingQuestions();   // actualizar badges del header
+            }, 420);
+        }
+
+        // Auto-guardar respuesta al perder el foco del textarea
+        async function autoSaveQuestion(norm, uid) {
+            const ta = document.getElementById('pq-ta-' + uid);
+            if (!ta) return;
+            const answer = ta.value.trim();
+            if (!answer) return;
+            try {
+                const res = await fetch('/api/pending-questions/answer', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ norm, answer }),
+                });
+                const data = await res.json();
+                if (data.ok) {
+                    // Borde verde breve → luego fade-out del item
+                    ta.style.borderColor = '#10b981';
+                    setTimeout(() => _dismissPqItem(uid), 600);
+                }
+            } catch (e) { /* silencioso */ }
+        }
+
+        function showToast(msg, color) {
+            let t = document.getElementById('global-toast');
+            if (!t) {
+                t = document.createElement('div');
+                t.id = 'global-toast';
+                t.style.cssText = 'position:fixed;bottom:1.5rem;left:50%;transform:translateX(-50%);padding:0.6rem 1.2rem;border-radius:8px;color:white;font-size:0.82rem;z-index:9999;transition:opacity 0.4s;pointer-events:none;';
+                document.body.appendChild(t);
+            }
+            t.style.background = color || '#374151';
+            t.innerText = msg;
+            t.style.opacity = '1';
+            clearTimeout(t._to);
+            t._to = setTimeout(() => { t.style.opacity = '0'; }, 3500);
         }
 
         async function answerQuestion(norm, uid) {
@@ -756,21 +1991,21 @@
             try {
                 const res = await fetch('/api/pending-questions/answer', {
                     method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({norm, answer}),
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ norm, answer }),
                 });
                 const data = await res.json();
                 if (data.ok) {
-                    ta.closest('div[style]').style.opacity = '0.4';
-                    setTimeout(loadPendingQuestions, 600);
+                    ta.style.borderColor = '#10b981';
+                    setTimeout(() => _dismissPqItem(uid), 300);
                 } else {
-                    alert('Error: ' + (data.error || 'desconocido'));
+                    showToast('Error: ' + (data.error || 'desconocido'), '#dc2626');
                 }
-            } catch(e) { alert('Error de red: ' + e.message); }
+            } catch (e) { showToast('Error de red: ' + e.message, '#dc2626'); }
         }
 
         function escHtml(s) {
-            return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+            return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
         }
         function hashStr(s) {
             let h = 0;
@@ -785,8 +2020,13 @@
             setTimeout(() => playSound(988, 0.25, 'sine'), 440);
         }
 
-        // Cargar preguntas pendientes al iniciar el dashboard
-        loadPendingQuestions();
+        // Cargar preguntas y cola al iniciar el dashboard (mostrar estado de scan anterior si existe)
+        Promise.all([loadScanQueueCount(), loadPendingQuestions()]).then(([qCount]) => {
+            if (qCount > 0) {
+                const banner = document.getElementById('scan-result-banner');
+                if (banner) banner.style.display = 'block';
+            }
+        });
 
         function setAction(text) { document.getElementById('action-text').innerText = text; }
 
@@ -807,7 +2047,7 @@
                 const decoded = new TextDecoder('utf-8', { fatal: false }).decode(bytes);
                 // Solo usar si mejora: menos caracteres basura
                 const noiseBefore = (s.match(/[\xC3\xC2\xE2]/g) || []).length;
-                const noiseAfter  = (decoded.match(/[\xC3\xC2\xE2]/g) || []).length;
+                const noiseAfter = (decoded.match(/[\xC3\xC2\xE2]/g) || []).length;
                 return noiseAfter < noiseBefore ? decoded : s;
             } catch (_) { return s; }
         }
@@ -915,6 +2155,10 @@
                 const q = mClean.replace('[PREGUNTA_PENDIENTE]', '').trim();
                 return `❓ Pregunta sin respuesta guardada: "${q.slice(0, 80)}".`;
             }
+            if (mClean.includes('[MANUAL_REQUIRED]')) {
+                const q = mClean.replace(/.*\[MANUAL_REQUIRED\]\s*/i, '').trim();
+                return `🔔 Acción manual requerida: "${q.slice(0, 100)}"`;
+            }
 
             // ── Líneas técnicas → silenciar ──────────────────────────────────
             if (isNoisyLine(mClean)) return '';
@@ -946,7 +2190,12 @@
             const displayMessage = formatLogMessage(m);
             if (!displayMessage) return;
 
-            if (m.includes('[EXITO]') || m.includes('Postulación completada')) {
+            if (m.includes('[MANUAL_REQUIRED]')) {
+                line.classList.add('log-manual');
+                playManualAlarm();
+                const question = m.replace(/.*\[MANUAL_REQUIRED\]\s*/i, '').trim();
+                addManualAction(question);
+            } else if (m.includes('[EXITO]') || m.includes('Postulación completada')) {
                 line.classList.add('log-success');
                 playSound(880, 0.15);
             } else if (m.includes('[FALLO]') || m.includes('Error en')) {
@@ -961,7 +2210,7 @@
                     playSound(523, 0.4, 'triangle');
                     // Marcar portal como completado en el grid
                     const portalMatch = m.match(/portal completado:\s*(\w+)/i) ||
-                                        m.match(/\b(linkedin|indeed|computrabajo|getonyboard|chiletrabajos|laborum)\b/i);
+                        m.match(/\b(linkedin|indeed|computrabajo|getonyboard|chiletrabajos|laborum)\b/i);
                     if (portalMatch) {
                         const p = (portalMatch[1] || '').toLowerCase();
                         const pEl = document.getElementById(`p-${p}`);
@@ -978,12 +2227,12 @@
             }
 
             // Actualizar badge de acción actual
-            if (m.includes('[BUSCANDO]'))        setAction('Buscando ofertas...');
-            if (m.includes('[ABRIENDO]'))        setAction('Abriendo oferta...');
-            if (m.includes('[EXITO]'))           setAction('Postulación exitosa');
-            if (m.includes('[FALLO]'))           setAction('Error al postular');
-            if (m.includes('[FILTRO]'))          setAction('Oferta filtrada por horario');
-            if (m.includes('[CAPTCHA]'))         setAction('Esperando verificación humana...');
+            if (m.includes('[BUSCANDO]')) setAction('Buscando ofertas...');
+            if (m.includes('[ABRIENDO]')) setAction('Abriendo oferta...');
+            if (m.includes('[EXITO]')) setAction('Postulación exitosa');
+            if (m.includes('[FALLO]')) setAction('Error al postular');
+            if (m.includes('[FILTRO]')) setAction('Oferta filtrada por horario');
+            if (m.includes('[CAPTCHA]')) setAction('Esperando verificación humana...');
             if (m.includes('[LOGIN_REQUERIDO]')) setAction('Esperando login manual...');
             if (m.includes('[BUSQUEDA]')) {
                 const kw = m.match(/Buscando: '(.+)' en/);
@@ -1023,12 +2272,12 @@
         let _ivStart = null;
 
         function showIntervention(type, portal) {
-            const panel  = document.getElementById('iv-panel');
-            const isNew  = getComputedStyle(panel).display === 'none';
+            const panel = document.getElementById('iv-panel');
+            const isNew = getComputedStyle(panel).display === 'none';
 
             panel.className = `iv-panel${type === 'login' ? ' login' : ''}`;
             panel.style.display = 'block';
-            document.getElementById('iv-icon').innerText  = type === 'login' ? '🔑' : '⚠️';
+            document.getElementById('iv-icon').innerText = type === 'login' ? '🔑' : '⚠️';
             document.getElementById('iv-title').innerText =
                 type === 'login'
                     ? `Login requerido en ${(portal || 'portal').toUpperCase()}`
@@ -1053,7 +2302,7 @@
                 clearInterval(_ivTimer);
                 _ivTimer = setInterval(() => {
                     const s = Math.floor((Date.now() - _ivStart) / 1000);
-                    const txt = s < 60 ? `${s}s` : `${Math.floor(s/60)}m ${s % 60}s`;
+                    const txt = s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${s % 60}s`;
                     document.getElementById('iv-elapsed').innerText = txt;
                 }, 1000);
                 playAlertSound();
@@ -1087,6 +2336,95 @@
             setTimeout(() => playSound(440, 0.35, 'square'), 400);
         }
 
+        function playManualAlarm() {
+            // Tono urgente: tres pulsos descendentes (naranja = atención)
+            playSound(660, 0.18, 'square');
+            setTimeout(() => playSound(550, 0.18, 'square'), 220);
+            setTimeout(() => playSound(440, 0.30, 'square'), 440);
+        }
+
+        function normalizeForQA(text) {
+            return text.toLowerCase()
+                .normalize('NFD').replace(/[̀-ͯ]/g, '')
+                .replace(/\s+/g, ' ').trim();
+        }
+
+        function addManualAction(question) {
+            const panel = document.getElementById('manual-actions-panel');
+            const list  = document.getElementById('manual-actions-list');
+            panel.style.display = 'block';
+            const norm = normalizeForQA(question);
+            const existing = Array.from(list.querySelectorAll('li')).map(li => li.dataset.norm);
+            if (existing.includes(norm)) return;
+            const uid = hashStr(norm);
+            const li = document.createElement('li');
+            li.dataset.norm = norm;
+            li.style.cssText = 'border-bottom:1px solid rgba(255,255,255,0.06); overflow:hidden;';
+            li.innerHTML = `
+                <div onclick="toggleMA('${uid}')"
+                    style="display:flex;align-items:center;gap:0.5rem;padding:0.45rem 0;cursor:pointer;user-select:none;">
+                    <span id="ma-arrow-${uid}" style="color:#fb923c;font-size:0.7rem;transition:transform 0.2s;">▶</span>
+                    <span style="color:#fb923c;font-size:0.77rem;flex:1;">${escHtml(question)}</span>
+                </div>
+                <div id="ma-body-${uid}" style="display:none;padding:0 0 0.5rem 1rem;">
+                    <div style="display:flex;gap:0.5rem;align-items:center;">
+                        <input id="ma-inp-${uid}" type="text" placeholder="Tu respuesta..."
+                            style="flex:1;background:rgba(255,255,255,0.07);border:1px solid rgba(251,146,60,0.4);
+                                   border-radius:6px;padding:0.3rem 0.55rem;color:white;font-size:0.77rem;"
+                            onkeydown="if(event.key==='Enter') saveManualAnswer('${escHtml(norm)}','${uid}')">
+                        <button onclick="saveManualAnswer('${escHtml(norm)}','${uid}')"
+                            style="background:#fb923c;border:none;color:white;border-radius:6px;
+                                   padding:0.3rem 0.7rem;cursor:pointer;font-size:0.77rem;white-space:nowrap;">
+                            Guardar
+                        </button>
+                    </div>
+                </div>`;
+            list.appendChild(li);
+        }
+
+        function toggleMA(uid) {
+            const body  = document.getElementById('ma-body-' + uid);
+            const arrow = document.getElementById('ma-arrow-' + uid);
+            const open  = body.style.display !== 'none';
+            body.style.display  = open ? 'none' : 'block';
+            arrow.style.transform = open ? '' : 'rotate(90deg)';
+            if (!open) setTimeout(() => document.getElementById('ma-inp-' + uid)?.focus(), 50);
+        }
+
+        async function saveManualAnswer(norm, uid) {
+            const inp = document.getElementById('ma-inp-' + uid);
+            if (!inp) return;
+            const answer = inp.value.trim();
+            if (!answer) { inp.focus(); return; }
+            try {
+                const res = await fetch('/api/save-qa', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ norm, answer }),
+                });
+                const data = await res.json();
+                if (data.ok) {
+                    const li = inp.closest('li');
+                    li.style.transition = 'opacity 0.3s';
+                    li.style.opacity = '0';
+                    setTimeout(() => {
+                        li.remove();
+                        const list = document.getElementById('manual-actions-list');
+                        if (!list.children.length)
+                            document.getElementById('manual-actions-panel').style.display = 'none';
+                    }, 320);
+                    setTimeout(loadPendingQuestions, 400);
+                } else {
+                    alert('Error al guardar: ' + (data.error || 'desconocido'));
+                }
+            } catch (e) { alert('Error de red: ' + e.message); }
+        }
+
+        function clearManualActions() {
+            document.getElementById('manual-actions-list').innerHTML = '';
+            document.getElementById('manual-actions-panel').style.display = 'none';
+        }
+
         function showCaptchaModal() {
             captchaModal.style.opacity = '1';
             captchaModal.style.pointerEvents = 'auto';
@@ -1099,32 +2437,6 @@
         }
 
         // ── Controles ─────────────────────────────────────────────────────────
-        runBtn.onclick = () => {
-            const portals = Array.from(document.querySelectorAll('.portal-checkbox:checked')).map(cb => cb.value);
-            if (portals.length === 0) { alert('Selecciona al menos un portal.'); return; }
-            const formData = new FormData(document.getElementById('configForm'));
-            const profile = {};
-            RUNTIME_PROFILE_FIELDS.forEach(key => {
-                const value = (formData.get(key) || '').toString().trim();
-                if (value) profile[key] = value;
-            });
-            setBotControls('running');
-            setOps(opsIntervention, 'Ninguna', 'info');
-            hideCaptchaModal();
-            // Reset per-portal counters
-            PORTALS.forEach(p => {
-                const pc = document.getElementById(`pc-${p}`); if (pc) pc.innerText = '0';
-                const ps = document.getElementById(`ps-${p}`); if (ps) ps.innerText = sessionCache[p] ? 'Sesión guardada' : 'Puede pedir login';
-                const pe = document.getElementById(`p-${p}`);
-                if (pe) { pe.classList.remove('active', 'done'); }
-            });
-            socket.emit('start_master', {
-                portals,
-                profile,
-                keywords: (formData.get('USER_KEYWORDS') || '').toString().trim(),
-                max_offers: (formData.get('MAX_OFFERS') || '').toString().trim(),
-            });
-        };
         stopBtn.onclick = () => {
             setBotControls('stopping');
             socket.emit('stop_master');
@@ -1132,6 +2444,174 @@
             hideCaptchaModal();
             setAction('Deteniendo...');
         };
+
+        // ── Scan & Postular — independientes, memoria compartida ──────────────
+        const scanStatus = document.getElementById('scan-status');
+        let   _botMode   = null;   // 'scan' | 'postular' | null
+
+        function getSelectedPortals() {
+            const sel = Array.from(document.querySelectorAll('.portal-checkbox:checked')).map(c => c.value);
+            return sel.length ? sel : ['laborum','computrabajo','chiletrabajos','getonyboard','linkedin'];
+        }
+
+        function setScanStatus(text, cls = '') {
+            scanStatus.style.display = text ? 'block' : 'none';
+            scanStatus.textContent   = text;
+            scanStatus.className     = cls;
+        }
+
+        // Scan y Postular son independientes — cada uno se bloquea solo a sí mismo
+        function lockScan()    { scanBtn.disabled    = true;  _refreshStopBtn(); }
+        function unlockScan()  { scanBtn.disabled    = false; _refreshStopBtn(); }
+        function lockApply()   { postularBtn.disabled = true; _refreshStopBtn(); }
+        function unlockApply() { postularBtn.disabled = false; _refreshStopBtn(); }
+
+        function _refreshStopBtn() {
+            stopBtn.disabled = scanBtn.disabled === false && postularBtn.disabled === false;
+        }
+
+        // Legado (stop usa ambos)
+        function lockBtns()   { lockScan(); lockApply(); }
+        function unlockBtns() { unlockScan(); unlockApply(); }
+
+        function playScanDone() {
+            playSound(440, 0.25, 'sine');
+            setTimeout(() => playSound(554, 0.25, 'sine'), 220);
+            setTimeout(() => playSound(659, 0.4,  'sine'), 440);
+            setTimeout(() => playSound(880, 0.5,  'sine'), 660);
+        }
+        function playApplyDone() {
+            playSound(523, 0.2, 'triangle');
+            setTimeout(() => playSound(659, 0.2, 'triangle'), 180);
+            setTimeout(() => playSound(784, 0.2, 'triangle'), 360);
+            setTimeout(() => playSound(1047,0.5, 'triangle'), 540);
+        }
+
+        // ── SCAN: recorre portales, graba preguntas en memoria ────────────────
+        scanBtn.onclick = async () => {
+            const portals = getSelectedPortals();
+            if (!portals.length) { alert('Selecciona al menos un portal.'); return; }
+            _botMode = 'scan';
+            lockScan();
+            setScanStatus('🔍 Conectando… escaneando ' + portals.join(', '));
+            try {
+                const res = await fetch('/api/scan', {
+                    method: 'POST',
+                    headers: {'Content-Type':'application/json'},
+                    body: JSON.stringify({portals})
+                });
+                const d = await res.json();
+                if (!d.ok) throw new Error(d.msg || 'Error al iniciar scan');
+                setAction('Scan en progreso…');
+            } catch(e) {
+                setScanStatus('❌ ' + e.message);
+                unlockScan();
+                _botMode = null;
+            }
+        };
+
+        // ── POSTULAR: aplica directamente usando la memoria compartida ────────
+        postularBtn.onclick = () => {
+            const portals = getSelectedPortals();
+            if (!portals.length) { alert('Selecciona al menos un portal.'); return; }
+
+            // Recopilar perfil desde los inputs del form usando CFG_MAP
+            const profile = {};
+            for (const [key, id] of Object.entries(CFG_MAP)) {
+                const el = document.getElementById(id);
+                if (el && el.value.trim()) profile[key] = el.value.trim();
+            }
+            const activeKeywords = document.getElementById('inp-keywords').value;
+            const maxOffers = (document.getElementById('inp-max')?.value || '').toString().trim();
+
+            _botMode = 'postular';
+
+            // Reset contadores de portales
+            PORTALS.forEach(p => {
+                const pc = document.getElementById(`pc-${p}`); if (pc) pc.innerText = '0';
+                const ps = document.getElementById(`ps-${p}`); if (ps) ps.innerText = sessionCache[p] ? 'Sesión guardada' : 'Puede pedir login';
+                const pe = document.getElementById(`p-${p}`);
+                if (pe) { pe.classList.remove('active', 'done'); }
+            });
+
+            setScanStatus('🚀 Conectando… postulando en ' + portals.join(', '));
+            lockApply();
+
+            socket.emit('start_master', {
+                portals,
+                profile,
+                keywords:   activeKeywords,
+                max_offers: maxOffers,
+            });
+        };
+
+        // ── Estado del proceso — scan y apply independientes ──────────────────
+        socket.on('bot_status', (data) => {
+            // ── Scan terminó ──
+            if (data.status === 'scan_finished' || (data.status === 'stopped' && _botMode === 'scan')) {
+                unlockScan();
+                if (_botMode === 'scan') {
+                    _botMode = null;
+                    playScanDone();
+                    const banner = document.getElementById('scan-result-banner');
+                    if (banner) banner.style.display = 'block';
+                    Promise.all([loadScanQueueCount(), loadPendingQuestions()]).then(([qCount]) => {
+                        const unanswered = document.getElementById('pq-badge')?.innerText?.replace(' ⚠','') | 0;
+                        setScanStatus(`✅ Scan completado — ${qCount} ofertas en cola${unanswered > 0 ? ', ' + unanswered + ' preguntas pendientes' : ' · todas respondidas'}`);
+                    });
+                    if (Notification.permission === 'granted')
+                        new Notification('ApplyJob — Scan listo', { body: 'Pulsa 🚀 Postular a todo.' });
+                }
+                // Si apply también terminó → controles idle
+                if (!data.apply_active) setBotControls('idle');
+                return;
+            }
+
+            // ── Apply terminó ──
+            if (data.status === 'finished' || (data.status === 'stopped' && _botMode === 'postular')) {
+                unlockApply();
+                if (_botMode === 'postular') {
+                    _botMode = null;
+                    playApplyDone();
+                    loadScanQueueCount();
+                    loadQuickLinks();
+                    setScanStatus('✅ Postulación completada. Revisa los contadores arriba.');
+                    if (Notification.permission === 'granted')
+                        new Notification('ApplyJob — Completado', { body: 'Todas las ofertas fueron procesadas.' });
+                }
+                if (!data.scan_active) setBotControls('idle');
+                return;
+            }
+
+            // ── Ambos detenidos ──
+            if (data.status === 'stopped') {
+                _botMode = null;
+                unlockBtns();
+                setBotControls('idle');
+                hideIntervention(); hideCaptchaModal();
+                return;
+            }
+
+            // ── En ejecución: actualizar controles ──
+            if (data.scan_active || data.apply_active) {
+                setBotControls('running');
+                if (data.scan_active)  lockScan();
+                if (data.apply_active) lockApply();
+            }
+
+            if (data.stats)           updateStats(data.stats);
+            if (data.current_portal)  updatePortalUI(data.current_portal);
+            if (data.intervention)    showIntervention(data.intervention.type, data.intervention.portal);
+            if (data.logs && logContainer.innerHTML === '') {
+                data.logs.forEach(msg => appendLogLine(msg));
+            }
+        });
+
+        // Pedir permiso para notificaciones del sistema al cargar
+        if (Notification && Notification.permission === 'default') {
+            Notification.requestPermission();
+        }
+        // ─────────────────────────────────────────────────────────────────
         selectAllPortalsBtn.onclick = () => setAllPortals(true);
         clearPortalsBtn.onclick = () => setAllPortals(false);
 
@@ -1139,9 +2619,24 @@
             e.preventDefault();
             const sourceData = new FormData(e.target);
             const formData = new FormData();
-            formData.append('USER_KEYWORDS', (sourceData.get('USER_KEYWORDS') || '').toString());
+            // Guardar configuración operativa
             formData.append('MAX_OFFERS', (sourceData.get('MAX_OFFERS') || '').toString());
-            const res  = await fetch('/save_config', { method: 'POST', body: formData });
+            // Guardar todos los campos del perfil
+            const PROFILE_KEYS = [
+                'USER_FULL_NAME','USER_FIRST_NAME','USER_LAST_NAME',
+                'USER_EMAIL','USER_PHONE','USER_PHONE_NUMBER',
+                'USER_CITY','USER_LINKEDIN','USER_PORTFOLIO',
+                'USER_SALARY','USER_YEARS_EXP','USER_AVAILABILITY',
+                'USER_ENGLISH_LEVEL','USER_WORK_MODE','USER_COVER_LETTER',
+                'USER_CV_PATH',
+            ];
+            PROFILE_KEYS.forEach(k => {
+                const el = document.getElementById('inp-' + k.replace('USER_','').toLowerCase().replace(/_/g,'-')) ||
+                           document.querySelector(`[name="${k}"]`);
+                const val = el ? (el.value || el.innerText || '').trim() : '';
+                if (val) formData.append(k, val);
+            });
+            const res = await fetch('/save_config', { method: 'POST', body: formData });
             const data = await res.json();
             alert(data.message);
             loadConfig();
@@ -1160,12 +2655,17 @@
         };
 
         // Toggle flecha en details
-        document.getElementById('profile-details').addEventListener('toggle', function() {
+        document.getElementById('profile-details').addEventListener('toggle', function () {
             document.getElementById('profile-arrow').innerText = this.open ? '▼' : '▶';
         });
 
         buildPortalGrid();
+        loadPortalRestrictions();  // marca portales restringidos (badges + deshabilita checkbox)
         loadConfig();
+        loadKeywordChips();
+        loadQuickLinks();
+        loadRecords();  // poblar total del panel de registros al iniciar
+        setInterval(loadQuickLinks, 30_000);  // refresca cada 30s mientras el bot corre
 
         // ── Cargar estadísticas históricas de la DB al iniciar ─────────────────
         async function loadHistoricalStats() {
@@ -1173,24 +2673,40 @@
                 const res = await fetch('/api/stats');
                 if (!res.ok) return;
                 const data = await res.json();
-                if (data.applied)
-                    document.getElementById('stat-applied').innerText = data.applied;
-                if (data.errors)
-                    document.getElementById('stat-errors').innerText = data.errors;
-                // Mostrar desglose por portal en tooltip si hover
+                // Actualizar todos los contadores desde la DB histórica
+                const set = (id, val) => { const el = document.getElementById(id); if (el && val) el.innerText = val; };
+                set('stat-applied',  data.applied);
+                set('stat-errors',   data.errors);
+                set('stat-filtered', data.skipped);
+                // Desglose por portal en tooltip del primer counter
                 if (data.by_portal && Object.keys(data.by_portal).length) {
                     const breakdown = Object.entries(data.by_portal)
-                        .map(([p, n]) => `${p}: ${n}`)
+                        .map(([p, s]) => {
+                            const total = typeof s === 'object'
+                                ? Object.values(s).reduce((a,b) => a+b, 0)
+                                : s;
+                            return `${p}: ${total}`;
+                        })
                         .join(' | ');
                     const appliedEl = document.getElementById('stat-applied');
-                    if (appliedEl) appliedEl.title = `Historial: ${breakdown}`;
+                    if (appliedEl) appliedEl.title = `Historial total: ${breakdown}`;
                 }
-            } catch(e) {}
+                // Mini tabla de estado breakdown (by_status)
+                if (data.by_status && Object.keys(data.by_status).length > 0) {
+                    const rows = Object.entries(data.by_status)
+                        .sort((a,b) => b[1]-a[1])
+                        .slice(0, 8)
+                        .map(([k,v]) => `<tr><td style="color:var(--text-dim);padding:1px 8px 1px 0;font-size:.72rem">${k}</td><td style="font-weight:700;font-size:.72rem">${v}</td></tr>`)
+                        .join('');
+                    const tip = document.getElementById('stat-applied');
+                    if (tip) tip.title = `Por estado:\n${Object.entries(data.by_status).map(([k,v])=>`${k}: ${v}`).join('\n')}`;
+                }
+            } catch (e) { }
         }
         loadHistoricalStats();
 
         // Sincronizar full_name desde firstname + lastname
-        ['inp-firstname','inp-lastname'].forEach(id => {
+        ['inp-firstname', 'inp-lastname'].forEach(id => {
             document.getElementById(id)?.addEventListener('input', () => {
                 const fn = document.getElementById('inp-firstname')?.value || '';
                 const ln = document.getElementById('inp-lastname')?.value || '';
@@ -1200,4 +2716,5 @@
         });
     </script>
 </body>
+
 </html>
