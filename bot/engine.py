@@ -44,6 +44,20 @@ log = logging.getLogger("applyjob.engine")
 
 from playwright.sync_api import sync_playwright, Page
 
+# ── Señal de parada desde gui_server ─────────────────────────────────────────
+# gui_server.py escribe este archivo cuando el usuario hace clic en Detener.
+# engine.py lo chequea en cada iteración del loop principal y cierra el browser
+# limpiamente antes de salir — evita que el Chrome del usuario quede con tabs
+# abiertas y que el proceso quede colgado en una espera de Playwright.
+_STOP_SIGNAL_PATH = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "data", "STOP_SIGNAL"
+)
+
+def _should_stop() -> bool:
+    """Retorna True si gui_server solicitó detener la ejecución."""
+    return os.path.exists(_STOP_SIGNAL_PATH)
+
 # ---------------------------------------------------------------------------
 # Auto-detección del ejecutable de Chrome/Chromium
 # ---------------------------------------------------------------------------
@@ -123,12 +137,15 @@ def _discard_session(session_dir: str, portal_name: str) -> None:
     except Exception as exc:
         log.debug("_discard_session error: %s", exc)
 
+# Siempre descartar sesión al finalizar → siempre pedir login al próximo run.
+# El usuario quiere control total del login en cada sesión.
+MIN_APPLIES_TO_KEEP_SESSION = 1   # usado solo para logging de progreso
+
 def _maybe_keep_session(session_dir: str, portal_name: str, applied: int) -> None:
-    """Persiste la sesión solo si applied >= 1, de lo contrario la descarta."""
-    if applied >= 1:
-        print(f"[SESSION] ✅ Sesión guardada para {portal_name.upper()} ({applied} postulaciones).")
-    else:
-        _discard_session(session_dir, portal_name)
+    """Siempre descarta la sesión para que el próximo run pida login."""
+    print(f"[SESSION] {portal_name.upper()} — sesion descartada. "
+          f"La proxima vez pedira login ({applied} postulaciones en esta sesion).")
+    _discard_session(session_dir, portal_name)
 
 
 # ---------------------------------------------------------------------------
@@ -668,6 +685,19 @@ _LOGIN_SIGNALS = {
         "form[action*='login']",
         "form[action*='iniciar']",
     ],
+    "getonyboard": [
+        # Botón "Ingresa" — puede ser <a>, <button> o componente React
+        "a:has-text('Ingresa')",
+        "button:has-text('Ingresa')",
+        "[class*='sign-in']:has-text('Ingresa')",
+        "nav a:has-text('Ingresa')",
+        "header a:has-text('Ingresa')",
+        "a[href*='/auth/sign_in']",
+        "a[href*='/auth/sign']",
+        "a[href*='/login']",
+        "input[name='user[email]']",
+        "input[type='password']",
+    ],
 }
 
 # Selectores que confirman que ya hay sesión activa
@@ -728,6 +758,18 @@ _LOGGED_IN_SIGNALS = {
         "#IA_AccountHamburger",
         "a[href*='/myjobs']",
     ],
+    "getonyboard": [
+        # Nav logueado en GetOnBoard — avatar o link al perfil del usuario
+        "a[href*='/workers/me']",
+        "a[href*='/profile']",
+        "img[class*='avatar']",
+        "img[class*='Avatar']",
+        "div[class*='user-menu']",
+        "div[class*='UserMenu']",
+        "a:has-text('Mi perfil')",
+        "a:has-text('Mis postulaciones')",
+        "a:has-text('Ver perfil')",
+    ],
 }
 
 # URLs de login por portal
@@ -737,6 +779,7 @@ _LOGIN_URLS = {
     "indeed":        "https://cl.indeed.com/account/login",
     "chiletrabajos": "https://www.chiletrabajos.cl/candidato/login",
     "computrabajo":  "https://cl.computrabajo.com/candidato/login",
+    "getonyboard":   "https://www.getonbrd.com/auth/sign_in",
 }
 
 
@@ -915,7 +958,7 @@ def _wait_for_login_if_needed(page, portal_name: str, config: dict) -> None:
     # -- Paso 2: esperar a que la página termine de cargar antes de verificar ---
     # Portales con requires_login necesitan que el DOM esté completo para
     # detectar correctamente si el botón de login o el avatar del usuario aparece.
-    _PORTALS_FORCE_LOGIN = ("indeed", "laborum", "linkedin", "chiletrabajos", "computrabajo")
+    _PORTALS_FORCE_LOGIN = ("indeed", "laborum", "linkedin", "chiletrabajos", "computrabajo", "getonyboard")
     try:
         page.wait_for_load_state("domcontentloaded", timeout=5_000)
         page.wait_for_function("() => document.readyState === 'complete'", timeout=5_000)
@@ -935,16 +978,24 @@ def _wait_for_login_if_needed(page, portal_name: str, config: dict) -> None:
     if not needs:
         # Esperar un poco más — la página puede seguir cargando elementos del header
         try:
-            page.wait_for_timeout(1500)
+            page.wait_for_timeout(2000)  # 2s para que React/SPA hidrate el nav
         except Exception:
             pass
 
         if _is_logged_in():
             return
         if not _needs_login():
-            # Sin señales claras de login y sin CF -> continuar igual
-            log.info("Sin señales claras de login en %s — continuando.", portal_name)
-            return
+            if portal_name not in _PORTALS_FORCE_LOGIN:
+                # Sin señales claras y portal no forzado -> continuar
+                log.info("Sin señales claras de login en %s — continuando.", portal_name)
+                return
+            # _PORTALS_FORCE_LOGIN: sin señales positivas NI negativas → ambiguo.
+            # Para portales que SIEMPRE requieren cuenta (getonyboard, linkedin, etc.),
+            # el silencio no es seguro — tratar como login requerido y esperar.
+            log.warning("[SESION] %s: sin señales de sesión activa — asumiendo login necesario.",
+                        portal_name)
+            print(f"\n[SESION_CHECK] {portal_name.upper()}: no se detectó sesión activa. "
+                  "Esperando login en el navegador...")
 
     # -- Hay que hacer login ---------------------------------------------------
     log.warning("LOGIN REQUERIDO en %s", portal_name)
@@ -1040,11 +1091,15 @@ def _run_keyword_loop(
     max_offers: int, dry_run: bool, rate_limiter, portal_handler,
     using_cdp: bool = False,
     session_verified: bool = False,
-) -> int:
+    deadline: float = 0.0,
+) -> tuple[int, list[str]]:
     """
     Navega a config['url_busqueda'], extrae ofertas y postula.
     Reutilizable en run_bot (keyword única) y run_bot_multi_keywords (browser compartido).
-    Retorna el número de postulaciones completadas.
+
+    Retorna (aplicadas: int, títulos_vistos: list[str]).
+    Los títulos vistos permiten al llamador extraer nuevas keywords dinámicamente.
+
     session_verified=True indica que el login ya fue verificado en esta ejecución
     (evita navegar a la home en cada keyword del loop multi-keyword).
     """
@@ -1059,6 +1114,8 @@ def _run_keyword_loop(
         "computrabajo":  "https://candidato.cl.computrabajo.com",
         "laborum":       "https://www.laborum.cl",
         "indeed":        "https://cl.indeed.com",
+        "getonyboard":   "https://www.getonbrd.com",
+        "linkedin":      "https://www.linkedin.com/feed",  # pre-flight antes de buscar
     }
     if not session_verified and config.get("requires_login") and portal_name in _HOME_URLS:
         home_url = _HOME_URLS[portal_name]
@@ -1085,11 +1142,27 @@ def _run_keyword_loop(
     # Segunda verificación sobre la URL de búsqueda (puede redirigir a login)
     _wait_for_login_if_needed(page, portal_name, config)
 
-    applied  = 0
+    applied      = 0   # postulaciones REALES (applied / external / filled)
+    visited      = 0   # ofertas visitadas en total (safety cap para evitar bucle infinito)
+    _seen_titles: list[str] = []   # títulos de ofertas vistas — para extracción dinámica de keywords
+    _MAX_VISITS = max_offers * 6  # nunca visitar más de 6× la cuota — por si todo es skip
+    # Statuses que cuentan como postulación real (definido una vez aquí para ambos paths)
+    _REAL_APPLY = {"applied", "filled_no_submit", "external_apply", "dry_run"}
     page_num = 1
     current_listing_url = page.url
 
-    while applied < max_offers:
+    while applied < max_offers and visited < _MAX_VISITS:
+
+        # ── Señal de parada: el usuario hizo clic en Detener ──────────────
+        if _should_stop():
+            print(f"\n[STOP] Señal de parada detectada. Saliendo del loop de paginas.")
+            sys.exit(0)
+
+        # ── Límite de tiempo por keyword ──────────────────────────────────
+        if deadline and time.time() > deadline:
+            print(f"\n[TIEMPO_KW] Tiempo por keyword agotado ({applied} postuladas). Siguiente keyword.")
+            break
+
         log.info("--- Página %d | aplicadas: %d/%d | rate: %d/%d restantes ---",
                  page_num, applied, max_offers,
                  rate_limiter.current_count, rate_limiter.max_actions)
@@ -1174,7 +1247,15 @@ def _run_keyword_loop(
             log.info("  [OK] Ofertas encontradas: %d", len(offer_ids))
 
             for offer_id in offer_ids:
-                if applied >= max_offers:
+                if _should_stop():
+                    print(f"\n[STOP] Señal de parada detectada entre ofertas. Saliendo.")
+                    sys.exit(0)
+
+                if deadline and time.time() > deadline:
+                    print(f"\n[TIEMPO_KW] Tiempo por keyword agotado. Siguiente keyword.")
+                    break
+
+                if applied >= max_offers or visited >= _MAX_VISITS:
                     break
 
                 offer_url = (portal_handler.get_job_url(page, offer_id)
@@ -1208,6 +1289,11 @@ def _run_keyword_loop(
                 elapsed = time.time() - start_time
                 status, title = result if isinstance(result, tuple) else (result, "")
 
+                visited += 1  # siempre cuenta visita
+                # Recolectar título para extracción dinámica de keywords
+                if title and title not in ("unknown", ""):
+                    _seen_titles.append(title)
+
                 if status == "applied":
                     print(f"  [ÉXITO] Postulación completada para: {title or offer_id}")
                 elif status == "error: linkedin_blocked":
@@ -1215,7 +1301,7 @@ def _run_keyword_loop(
                     log.warning("LinkedIn bloqueado — abortando loop de LinkedIn.")
                     save_application(offer_url, portal_name, title, status)
                     _csv_log(portal_name, offer_url, title, status)
-                    return applied  # ← salir INMEDIATAMENTE del loop
+                    return applied, _seen_titles  # ← salir INMEDIATAMENTE del loop
                 elif status.startswith("error"):
                     print(f"  [FALLO] Error en {title or offer_id}: {status}")
 
@@ -1227,12 +1313,14 @@ def _run_keyword_loop(
                 if title and title != "unknown":
                     _save_quick_link(offer_url, title, portal_name)
 
-                applied += 1
+                # Contar solo postulaciones REALES (no skips ni errores)
+                is_real = status in _REAL_APPLY or (isinstance(status, str) and status.startswith("external:"))
+                if is_real:
+                    applied += 1
 
                 print(f"  [PROGRESO] Aplicadas {applied}/{max_offers} en {portal_name.upper()}")
 
-                _RATE_COUNTED = {"applied", "filled_no_submit", "dry_run"}
-                if status in _RATE_COUNTED:
+                if status in {"applied", "filled_no_submit", "dry_run"}:
                     rate_limiter.acquire(portal_name)
 
                 # LinkedIn necesita delays más largos para evitar detección
@@ -1325,7 +1413,11 @@ def _run_keyword_loop(
                     if not loc_text:
                         loc_text = card_text[:300]
 
-                    score = location_score(loc_text)
+                    # Portales remotos internacionales: skip filtro geográfico
+                    if config.get("remote_intl"):
+                        score = 9  # tratarlos como remote siempre
+                    else:
+                        score = location_score(loc_text)
                     # Rechazar comunas lejanas (score 2 = _LOC_FAR: Vitacura, Las Condes, etc.)
                     if score == 2:
                         log.info("  [GEO] Rechazada por ubicación fuera de zona: '%s'", loc_text[:60])
@@ -1374,7 +1466,15 @@ def _run_keyword_loop(
                     offer_urls.append(url)
 
             for url in offer_urls:
-                if applied >= max_offers:
+                if _should_stop():
+                    print(f"\n[STOP] Señal de parada detectada entre URLs. Saliendo.")
+                    sys.exit(0)
+
+                if deadline and time.time() > deadline:
+                    print(f"\n[TIEMPO_KW] Tiempo por keyword agotado. Siguiente keyword.")
+                    break
+
+                if applied >= max_offers or visited >= _MAX_VISITS:
                     break
                 if already_applied(url):
                     log.debug("  [skip-db] %s", url)
@@ -1384,6 +1484,11 @@ def _run_keyword_loop(
                 title, status = _process_offer_generic(
                     page, url, config, profile, portal_name, dry_run
                 )
+
+                visited += 1  # siempre cuenta visita
+                # Recolectar título para extracción dinámica de keywords
+                if title and title not in ("unknown", ""):
+                    _seen_titles.append(title)
 
                 if status == "applied":
                     print(f"  [ÉXITO] Postulación completada para: {title or 'Sin Título'}")
@@ -1398,7 +1503,10 @@ def _run_keyword_loop(
                 if title and title != "unknown":
                     _save_quick_link(url, title, portal_name)
 
-                applied += 1
+                # Contar solo postulaciones REALES (no skips ni errores)
+                is_real = status in _REAL_APPLY or (isinstance(status, str) and status.startswith("external:"))
+                if is_real:
+                    applied += 1
 
                 print(f"  [PROGRESO] Aplicadas {applied}/{max_offers} en {portal_name.upper()}")
 
@@ -1414,7 +1522,7 @@ def _run_keyword_loop(
 
         # -- Paginación --------------------------------------------------------
         next_sel = config.get("selector_siguiente_pagina")
-        max_pages = config.get("max_pages", 2)   # máx 2 páginas por keyword, luego sigue con la siguiente
+        max_pages = config.get("max_pages", 3)   # máx 3 páginas por keyword, luego sigue con la siguiente
         if not next_sel or applied >= max_offers or page_num >= max_pages:
             if page_num >= max_pages:
                 log.info("Límite de páginas alcanzado (%d). Fin.", max_pages)
@@ -1440,7 +1548,13 @@ def _run_keyword_loop(
             log.warning("Error al paginar: %s", exc)
             break
 
-    return applied
+    # Diagnóstico: si visitamos ofertas pero 0 fueron postulaciones reales, avisar
+    if visited > 0 and applied == 0:
+        print(f"  [AVISO] {visited} ofertas visitadas en {portal_name.upper()} pero 0 postulaciones reales."
+              f" Causas: DB duplicada, filtros estrictos, o sesion expirada.")
+        log.warning("  [AVISO] %d offers visitadas, 0 real_applied en %s", visited, portal_name)
+
+    return applied, _seen_titles
 
 
 def _scan_offer(page, offer_url: str, config: dict, profile: dict,
@@ -1608,6 +1722,7 @@ def run_scan_pass(portal_name: str, headless: bool = False) -> None:
     Uso: python main.py --portal laborum --scan
     """
     from .config import KEYWORD_GROUPS, build_config_for_keyword
+    from .keyword_optimizer import get_active_groups, process_keyword_result, extract_keywords_from_seen_titles
 
     if portal_name not in SITE_CONFIG:
         raise ValueError(f"Portal '{portal_name}' no encontrado.")
@@ -1649,8 +1764,9 @@ def run_scan_pass(portal_name: str, headless: bool = False) -> None:
             log.warning("Error accediendo al portal en scan: %s", e)
 
         # Scan usa solo grupos marcados con scan=True (solo IT, excluye bodega)
-        scan_groups = [g for g in KEYWORD_GROUPS if g.get("scan", True)]
-        log.info("[SCAN] %d grupos IT para scan (bodega excluida)", len(scan_groups))
+        scan_groups_base = [g for g in KEYWORD_GROUPS if g.get("scan", True)]
+        scan_groups = list(get_active_groups(scan_groups_base, portal_name))
+        log.info("[SCAN] %d grupos IT para scan (bodega excluida, optimizer aplicado)", len(scan_groups))
 
         for group in scan_groups:
             keyword = group["keyword"]
@@ -1756,6 +1872,20 @@ def run_scan_pass(portal_name: str, headless: bool = False) -> None:
                     pass
 
             print(f"-> {scanned} escaneadas")
+
+            # Extraer patrones de títulos vistos y generar nuevas keywords
+            page_titles = [t for t in card_texts.values() if t]
+            if page_titles:
+                _existing = {g["keyword"].lower().strip() for g in scan_groups}
+                for nk in extract_keywords_from_seen_titles(page_titles, portal_name, _existing):
+                    scan_groups.append(nk)
+                    print(f"  [KW_SCAN] Nueva combinación detectada: '{nk['keyword']}'")
+
+            # Registrar resultado en optimizer: found = raw offers antes de filtros
+            new_kws = process_keyword_result(keyword, portal_name, applied=0, found=len(raw_urls))
+            if new_kws:
+                scan_groups.extend(new_kws)
+                print(f"  [KW_RETIRE] '{keyword}' retirada (0 ofertas) → {len(new_kws)} reemplazos")
 
         if not using_cdp:
             ctx.close()
@@ -2003,14 +2133,52 @@ def run_apply_queue(portal_name: str, headless: bool = False) -> None:
         print(f"\n  Quedan en cola: {remaining} — responde el panel naranja y vuelve a correr --apply-queue")
 
 
+# ── Límite de tiempo por portal y retry ─────────────────────────────────────
+# MAX_PORTAL_MINUTES: tiempo máximo por sesión de portal (configurable via .env)
+# RETRY_WAIT_INITIAL: si 0 postulaciones → esperar X min y reintentar
+# RETRY_DECREMENT   : reducir la espera en cada reintento fallido
+MAX_PORTAL_MINUTES   = int(os.getenv("MAX_PORTAL_MINUTES", "25"))
+_RETRY_WAIT_INITIAL  = 15 * 60   # 15 min primer reintento
+_RETRY_DECREMENT     = 5  * 60   # -5 min por cada reintento
+
+
+def _retry_countdown(wait_secs: int, portal: str) -> None:
+    """
+    Cuenta regresiva visible en dashboard.
+    Chequea señal de parada cada 2s; imprime mensaje cada 60s.
+    """
+    remaining = wait_secs
+    since_last_print = 0
+    while remaining > 0:
+        if _should_stop():
+            print(f"\n[STOP] Señal detectada durante espera de retry. Saliendo.")
+            sys.exit(0)
+        chunk = min(2, remaining)
+        time.sleep(chunk)
+        remaining -= chunk
+        since_last_print += chunk
+        if since_last_print >= 60:
+            mins = remaining // 60
+            secs = remaining % 60
+            print(f"  [RETRY] {portal.upper()}: reintentando en {mins}m {secs:02d}s...", flush=True)
+            since_last_print = 0
+    # Imprimir también al inicio del countdown
+    if wait_secs > 0:
+        mins0 = wait_secs // 60
+        print(f"  [RETRY] {portal.upper()}: esperando {mins0} min antes de reintentar...", flush=True)
+
+
 def run_bot_multi_keywords(portal_name: str, dry_run: bool = False, headless: bool = False) -> None:
     """
     Abre el browser UNA VEZ y ejecuta una búsqueda por cada keyword del KEYWORD_GROUPS.
     Al compartir el contexto del browser, Cloudflare/login solo se resuelve una vez.
+
+    Tiempo por keyword dinámico: ≤5→25 min, ≤10→20 min, ≤15→15 min, ≤20→10 min, >20→5 min.
+    Si termina con 0 postulaciones → reintenta tras 15 min, luego 10 min, luego 5 min.
     """
     from .config import KEYWORD_GROUPS, build_config_for_keyword
     from .portals import PORTAL_REGISTRY
-    from .keyword_optimizer import get_active_groups, process_keyword_result
+    from .keyword_optimizer import get_active_groups, process_keyword_result, extract_keywords_from_seen_titles
 
     if portal_name not in SITE_CONFIG:
         raise ValueError(f"Portal '{portal_name}' no encontrado.")
@@ -2067,9 +2235,17 @@ def run_bot_multi_keywords(portal_name: str, dry_run: bool = False, headless: bo
         log.info("Usando Chromium de Playwright")
 
     _PORTAL_LOCALE = {
-        "indeed": ("es-CL", "America/Santiago"), "laborum": ("es-CL", "America/Santiago"),
-        "getonyboard": ("es-CL", "America/Santiago"), "computrabajo": ("es-CL", "America/Santiago"),
-        "linkedin": ("es-CL", "America/Santiago"), "chiletrabajos": ("es-CL", "America/Santiago"),
+        # Portales Chile — navegador en español para evitar detección
+        "indeed":        ("es-CL", "America/Santiago"),
+        "laborum":       ("es-CL", "America/Santiago"),
+        "getonyboard":   ("es-CL", "America/Santiago"),
+        "computrabajo":  ("es-CL", "America/Santiago"),
+        "linkedin":      ("es-CL", "America/Santiago"),
+        "chiletrabajos": ("es-CL", "America/Santiago"),
+        # Portales remotos internacionales — navegador en inglés
+        "weworkremotely": ("en-US", "America/New_York"),
+        "remotive":       ("en-US", "America/New_York"),
+        "remoteco":       ("en-US", "America/New_York"),
     }
     _locale, _tz = _PORTAL_LOCALE.get(portal_name, ("es-CL", "America/Santiago"))
 
@@ -2118,7 +2294,8 @@ def run_bot_multi_keywords(portal_name: str, dry_run: bool = False, headless: bo
             except (ImportError, Exception) as se:
                 log.warning("playwright-stealth no disponible (%s) — usando stealth manual", se)
 
-        total_applied    = 0
+        total_applied     = 0
+        _total_max_target = 0      # suma de max_offers de cada keyword (para PROGRESO_FINAL)
         _session_verified = False  # Se activa tras el primer pre-flight exitoso
 
         def _detect_linkedin_restriction(pg) -> str | None:
@@ -2149,136 +2326,223 @@ def run_bot_multi_keywords(portal_name: str, dry_run: bool = False, headless: bo
                  len(active_groups), len(KEYWORD_GROUPS))
         print(f"\n[KEYWORDS] {len(active_groups)} keywords activas para {portal_name.upper()}")
 
-        # Cola dinámica: se puede crecer durante el loop si se generan reemplazos
-        _kw_queue = list(active_groups)
-        _kw_index = 0
+        # ── Tiempo por keyword dinámico ────────────────────────────────────────
+        # Más keywords → menos tiempo por keyword para que todas reciban atención.
+        # Escala: ≤5→25 min, ≤10→20 min, ≤15→15 min, ≤20→10 min, >20→5 min
+        _n_kw = len(active_groups) or 1
+        if _n_kw <= 5:
+            _per_kw_minutes = 25
+        elif _n_kw <= 10:
+            _per_kw_minutes = 20
+        elif _n_kw <= 15:
+            _per_kw_minutes = 15
+        elif _n_kw <= 20:
+            _per_kw_minutes = 10
+        else:
+            _per_kw_minutes = 5
+        # Límite total de sesión = suma de budgets por keyword (mínimo 20 min)
+        _session_max_minutes = max(20, _n_kw * _per_kw_minutes)
+        print(f"[TIEMPO_KW] {_n_kw} keywords → {_per_kw_minutes} min/keyword "
+              f"(máx sesión: {_session_max_minutes} min)")
 
-        while _kw_index < len(_kw_queue):
-            group   = _kw_queue[_kw_index]
-            _kw_index += 1
-            keyword = group["keyword"]
-            mode    = group["mode"]
-            label   = group["label"]
+        # ── Retry loop: si 0 postulaciones → esperar y reintentar ───────────────
+        # Primer reintento: 15 min. Cada fallo siguiente resta 5 min (10→5→0→fin).
+        _retry_wait  = _RETRY_WAIT_INITIAL
+        _retry_count = 0
 
-            # GetOnBoard es plataforma 100% tech — no tiene ofertas de bodega/logística.
-            # Saltamos esos grupos para evitar búsquedas vacías.
-            if portal_name == "getonyboard" and label.lower() == "bodega":
-                log.info("[gob] Saltando keyword bodega '%s' — GetOnBoard es tech-only.", keyword)
-                print(f"  [SKIP] '{keyword}' omitido en GetOnBoard (plataforma tech-only)")
-                continue
+        while True:   # retry loop — sale con break en éxito o sin más reintentos
 
-            config  = build_config_for_keyword(portal_name, keyword)
-            profile = dict(USER_PROFILE)
-            profile["_mode"] = mode
-            max_offers = config.get("max_offers_per_run", 10)
+            # ── Chequeo de señal de parada (antes de cada intento) ────────────
+            if _should_stop():
+                print(f"\n[STOP] Señal de parada detectada. Cerrando {portal_name.upper()} limpiamente.")
+                sys.exit(0)
 
-            PortalClass    = PORTAL_REGISTRY.get(portal_name)
-            portal_handler = PortalClass(config, profile, dry_run) if PortalClass else None
+            # Reiniciar contadores para cada intento
+            total_applied     = 0
+            _total_max_target = 0
+            _session_verified = False   # re-verificar login en cada intento
+            _kw_queue         = list(active_groups)
+            _kw_index         = 0
+            _portal_start     = time.time()
 
-            log.info("=== Búsqueda atómica [%s] '%s' ===", label.upper(), keyword)
-            print(f"\n[BUSQUEDA] [{label.upper()}] Buscando: '{keyword}' en {portal_name.upper()}")
+            if _retry_count > 0:
+                print(f"\n[RETRY] {portal_name.upper()}: Intento #{_retry_count + 1} "
+                      f"({_per_kw_minutes} min/keyword)\n")
 
-            # Verificar / recuperar página — usar is_closed() y evaluate("1") en lugar
-            # de page.url (que puede devolver URL cacheada aunque el target esté muerto)
-            page_needs_recreation = False
-            try:
-                if page.is_closed():
-                    page_needs_recreation = True
-                else:
-                    page.evaluate("1")   # ping real al contexto del browser
-            except Exception:
-                page_needs_recreation = True
+            # ── Loop de keywords ──────────────────────────────────────────────
+            while _kw_index < len(_kw_queue):
 
-            if page_needs_recreation:
-                log.warning("Página cerrada/no responde entre keywords. Recreando...")
-                try:
-                    page = browser_ctx.new_page()
-                    if not using_cdp:
-                        apply_stealth(page)
-                except Exception as page_err:
-                    log.error("No se pudo recrear la página: %s", page_err)
+                # ── Chequeo de señal de parada (inicio de cada keyword) ───────
+                if _should_stop():
+                    print(f"\n[STOP] Señal de parada detectada en loop de keywords. "
+                          f"Cerrando {portal_name.upper()} limpiamente.")
+                    sys.exit(0)
+
+                # Límite total de sesión (seguridad — en caso de keywords dinámicas)
+                _elapsed = time.time() - _portal_start
+                if _elapsed >= _session_max_minutes * 60:
+                    print(f"\n[TIEMPO] {portal_name.upper()}: limite de sesión "
+                          f"{_session_max_minutes} min alcanzado ({_elapsed/60:.1f} min).")
+                    log.info("[TIEMPO] Limite sesion %d min alcanzado en %s",
+                             _session_max_minutes, portal_name)
                     break
 
-            # LinkedIn: verificar restricción antes de cada keyword
-            if portal_name == "linkedin":
-                restr_until = _detect_linkedin_restriction(page)
-                if restr_until:
-                    print(f"\n[LINKEDIN] ⛔ Cuenta restringida (hasta {restr_until}). "
-                          "Guardando restricción y saltando LinkedIn.")
-                    log.warning("LinkedIn restringido detectado en tiempo de ejecución: %s", restr_until)
-                    # Persistir restricción
-                    _restr_path = BASE_DIR / "data" / "portal_restrictions.json"
-                    _restr = {}
-                    if _restr_path.exists():
-                        try: _restr = json.load(open(_restr_path, encoding="utf-8"))
-                        except Exception: pass
-                    import datetime as _dt2
-                    # Calcular fecha aprox: si detectó "May 20, 2026" → parsear
-                    try:
-                        _until_dt = _dt2.datetime.strptime(restr_until + " 23:59", "%B %d, %Y %H:%M")
-                    except Exception:
-                        _until_dt = _dt2.datetime.now() + _dt2.timedelta(days=2)
-                    _restr["linkedin"] = {"restricted": True, "until": _until_dt.isoformat()}
-                    _restr_path.parent.mkdir(exist_ok=True)
-                    with open(_restr_path, "w", encoding="utf-8") as _f:
-                        json.dump(_restr, _f, ensure_ascii=False, indent=2)
-                    break  # salir del loop de keywords de LinkedIn
+                group   = _kw_queue[_kw_index]
+                _kw_index += 1
+                keyword = group["keyword"]
+                mode    = group["mode"]
+                label   = group["label"]
 
-            applied = _run_keyword_loop(
-                page, browser_ctx, portal_name, config, profile,
-                max_offers, dry_run, rate_limiter, portal_handler,
-                using_cdp=using_cdp,
-                session_verified=_session_verified,
-            )
-            _session_verified = True  # Pre-flight ya corrió, no repetir en keywords siguientes
-            total_applied += applied
+                # Portales tech-only: saltar keywords de bodega/logística
+                _TECH_ONLY_PORTALS = {"getonyboard", "weworkremotely", "remotive", "remoteco"}
+                if portal_name in _TECH_ONLY_PORTALS and label.lower() == "bodega":
+                    log.info("[%s] Saltando keyword bodega '%s' — portal tech-only.", portal_name, keyword)
+                    print(f"  [SKIP] '{keyword}' omitido en {portal_name.upper()} (plataforma tech-only)")
+                    continue
 
-            if applied == 0:
-                print(f"\n[AVISO] '{keyword}': 0 postulaciones — todas filtradas o ya en DB.")
-            print(f"\n[PORTAL_FINALIZADO] --- KEYWORD '{keyword}': {applied} postulaciones ---")
+                config  = build_config_for_keyword(portal_name, keyword)
+                profile = dict(USER_PROFILE)
+                profile["_mode"] = mode
+                max_offers = config.get("max_offers_per_run", 10)
+                _total_max_target += max_offers
 
-            # -- Registrar estadísticas y evaluar retiro -------------------------
-            new_kws = process_keyword_result(keyword, portal_name, applied)
-            if new_kws:
-                # Agregar reemplazos generados a la cola dinámica
-                for nk in new_kws:
-                    _kw_queue.append(nk)
-                print(f"  [🔄 REEMPLAZOS] {len(new_kws)} nuevas keywords añadidas a la cola.")
+                PortalClass    = PORTAL_REGISTRY.get(portal_name)
+                portal_handler = PortalClass(config, profile, dry_run) if PortalClass else None
 
-            # -- Guardia de sesión muerta ----------------------------------------
-            # Tras 5 keywords con 0 postulaciones totales → re-verificar sesión.
-            _KEYWORDS_BEFORE_SESSION_CHECK = 5
-            if (config.get("requires_login")
-                    and total_applied == 0
-                    and _kw_index % _KEYWORDS_BEFORE_SESSION_CHECK == 0
-                    and _kw_index > 0):
-                print(f"\n[SESION_CHECK] ⚠ {portal_name.upper()}: {_kw_index} keywords "
-                      f"sin postulaciones — verificando que la sesión sigue activa...")
-                log.warning("[SESION_CHECK] 0 postulaciones tras %d keywords — re-verificando login en %s",
-                            _kw_index, portal_name)
+                log.info("=== Busqueda atomica [%s] '%s' ===", label.upper(), keyword)
+                print(f"\n[BUSQUEDA] [{label.upper()}] Buscando: '{keyword}' en {portal_name.upper()}")
+
+                # Verificar / recuperar página
+                page_needs_recreation = False
                 try:
-                    _HOME_URLS_CHECK = {
-                        "chiletrabajos": "https://www.chiletrabajos.cl",
-                        "computrabajo":  "https://candidato.cl.computrabajo.com",
-                        "laborum":       "https://www.laborum.cl",
-                        "indeed":        "https://cl.indeed.com",
-                    }
-                    if portal_name in _HOME_URLS_CHECK:
-                        page.goto(_HOME_URLS_CHECK[portal_name],
-                                  wait_until="domcontentloaded", timeout=15_000)
-                        human_delay(1.5, 2.0)
-                        _wait_for_login_if_needed(page, portal_name, config)
-                        _session_verified = False  # Fuerza re-check en próxima keyword
-                except Exception as sc_err:
-                    log.warning("[SESION_CHECK] Error re-verificando: %s", sc_err)
+                    if page.is_closed():
+                        page_needs_recreation = True
+                    else:
+                        page.evaluate("1")
+                except Exception:
+                    page_needs_recreation = True
 
-            # -- Pausa anti-Cloudflare entre keywords --------------------------
-            if _kw_index < len(_kw_queue):
-                _strict = portal_name in ("linkedin", "indeed")
-                _kw_pause = random.uniform(8.0, 14.0) if _strict else random.uniform(3.0, 6.0)
-                log.info("Pausa inter-keyword: %.0fs...", _kw_pause)
-                print(f"\n[PAUSA] Esperando {_kw_pause:.0f}s antes de la próxima búsqueda...")
-                time.sleep(_kw_pause)
+                if page_needs_recreation:
+                    log.warning("Pagina cerrada/no responde entre keywords. Recreando...")
+                    try:
+                        page = browser_ctx.new_page()
+                        if not using_cdp:
+                            apply_stealth(page)
+                    except Exception as page_err:
+                        log.error("No se pudo recrear la pagina: %s", page_err)
+                        break
+
+                # LinkedIn: verificar restricción antes de cada keyword
+                if portal_name == "linkedin":
+                    restr_until = _detect_linkedin_restriction(page)
+                    if restr_until:
+                        print(f"\n[LINKEDIN] Cuenta restringida (hasta {restr_until}). Saltando.")
+                        log.warning("LinkedIn restringido: %s", restr_until)
+                        _restr_path = BASE_DIR / "data" / "portal_restrictions.json"
+                        _restr = {}
+                        if _restr_path.exists():
+                            try: _restr = json.load(open(_restr_path, encoding="utf-8"))
+                            except Exception: pass
+                        import datetime as _dt2
+                        try:
+                            _until_dt = _dt2.datetime.strptime(restr_until + " 23:59", "%B %d, %Y %H:%M")
+                        except Exception:
+                            _until_dt = _dt2.datetime.now() + _dt2.timedelta(days=2)
+                        _restr["linkedin"] = {"restricted": True, "until": _until_dt.isoformat()}
+                        _restr_path.parent.mkdir(exist_ok=True)
+                        with open(_restr_path, "w", encoding="utf-8") as _f:
+                            json.dump(_restr, _f, ensure_ascii=False, indent=2)
+                        break
+
+                _kw_deadline = time.time() + _per_kw_minutes * 60
+                applied, seen_titles = _run_keyword_loop(
+                    page, browser_ctx, portal_name, config, profile,
+                    max_offers, dry_run, rate_limiter, portal_handler,
+                    using_cdp=using_cdp,
+                    session_verified=_session_verified,
+                    deadline=_kw_deadline,
+                )
+                _session_verified = True
+                total_applied += applied
+
+                if applied == 0:
+                    print(f"\n[AVISO] '{keyword}': 0 postulaciones — filtradas o ya en DB.")
+                print(f"\n[PORTAL_FINALIZADO] --- KEYWORD '{keyword}': {applied} postulaciones ---")
+
+                # Extracción dinámica de keywords desde títulos vistos
+                if seen_titles:
+                    _existing_kws = {g["keyword"].lower().strip() for g in _kw_queue}
+                    scan_new_kws = extract_keywords_from_seen_titles(
+                        seen_titles, portal_name, existing_keywords=_existing_kws
+                    )
+                    for nk in scan_new_kws:
+                        _kw_queue.append(nk)
+
+                # Registrar estadísticas y evaluar retiro
+                new_kws = process_keyword_result(keyword, portal_name, applied, found=len(seen_titles) if seen_titles else 0)
+                if new_kws:
+                    for nk in new_kws:
+                        _kw_queue.append(nk)
+                    print(f"  [REEMPLAZOS] {len(new_kws)} nuevas keywords añadidas a la cola.")
+
+                # Guardia de sesión muerta cada 5 keywords sin postulaciones
+                _KEYWORDS_BEFORE_SESSION_CHECK = 5
+                if (config.get("requires_login")
+                        and total_applied == 0
+                        and _kw_index % _KEYWORDS_BEFORE_SESSION_CHECK == 0
+                        and _kw_index > 0):
+                    print(f"\n[SESION_CHECK] {portal_name.upper()}: {_kw_index} keywords "
+                          f"sin postulaciones — verificando sesion...")
+                    log.warning("[SESION_CHECK] 0 aplicadas tras %d kws en %s",
+                                _kw_index, portal_name)
+                    try:
+                        _HOME_URLS_CHECK = {
+                            "chiletrabajos": "https://www.chiletrabajos.cl",
+                            "computrabajo":  "https://candidato.cl.computrabajo.com",
+                            "laborum":       "https://www.laborum.cl",
+                            "indeed":        "https://cl.indeed.com",
+                            "getonyboard":   "https://www.getonbrd.com",
+                            "linkedin":      "https://www.linkedin.com/feed",
+                        }
+                        if portal_name in _HOME_URLS_CHECK:
+                            page.goto(_HOME_URLS_CHECK[portal_name],
+                                      wait_until="domcontentloaded", timeout=15_000)
+                            human_delay(1.5, 2.0)
+                            _wait_for_login_if_needed(page, portal_name, config)
+                            _session_verified = False
+                    except Exception as sc_err:
+                        log.warning("[SESION_CHECK] Error re-verificando: %s", sc_err)
+
+                # Pausa anti-Cloudflare entre keywords
+                if _kw_index < len(_kw_queue):
+                    _strict = portal_name in ("linkedin", "indeed")
+                    _kw_pause = random.uniform(8.0, 14.0) if _strict else random.uniform(3.0, 6.0)
+                    log.info("Pausa inter-keyword: %.0fs...", _kw_pause)
+                    print(f"\n[PAUSA] Esperando {_kw_pause:.0f}s antes de la proxima busqueda...")
+                    time.sleep(_kw_pause)
+            # ── Fin loop de keywords ──────────────────────────────────────────
+
+            # Progreso de este intento
+            print(f"[PROGRESO_FINAL] Aplicadas {total_applied}/{_total_max_target} en {portal_name.upper()}")
+
+            # ── Decisión de reintento ─────────────────────────────────────────
+            if total_applied == 0 and _retry_wait > 0:
+                wait_min = _retry_wait // 60
+                next_wait = max((_retry_wait - _RETRY_DECREMENT) // 60, 0)
+                print(f"\n[RETRY] {portal_name.upper()}: 0 postulaciones en esta tanda.")
+                print(f"  Reintentando en {wait_min} min "
+                      f"(siguiente espera: {next_wait} min | intento #{_retry_count + 2})")
+                _retry_countdown(_retry_wait, portal_name)
+                _retry_wait  -= _RETRY_DECREMENT
+                _retry_count += 1
+                continue   # volver al inicio del retry loop (nueva tanda)
+            else:
+                if total_applied > 0:
+                    log.info("[RETRY] %s: %d postulaciones. Sin reintento necesario.",
+                             portal_name, total_applied)
+                else:
+                    print(f"\n[RETRY] {portal_name.upper()}: 0 postulaciones. Sin mas reintentos.")
+                break   # salir del retry loop
 
         # En modo CDP solo cerramos la pestaña, NO el browser del usuario
         if using_cdp:
@@ -2298,16 +2562,21 @@ def run_bot_multi_keywords(portal_name: str, dry_run: bool = False, headless: bo
              total_applied, rate_limiter.current_count, rate_limiter.max_actions)
     log.info("Logs CSV: %s", LOGS_DIR)
 
-    if total_applied == 0:
-        print(f"\n[⚠ SIN POSTULACIONES] {portal_name.upper()} terminó con 0 postulaciones en {len(KEYWORD_GROUPS)} keywords.")
-        print(f"  → La sesión fue DESCARTADA (se necesita mínimo 1 postulación para guardar sesión).")
-        print(f"  Causas posibles:")
-        print(f"    • Todas las ofertas ya están registradas en la base de datos")
-        print(f"    • Los filtros de experiencia/horario/zona las descartaron")
-        print(f"    • La sesión expiró en algún punto del recorrido")
-        print(f"  Revisa los logs en http://127.0.0.1:5000 → pestaña Logs.")
+    # Emitir progreso final con flag finished=True para que el dashboard coloree
+    print(f"[PROGRESO_FINAL] Aplicadas {total_applied}/{_total_max_target} en {portal_name.upper()}")
+
+    if total_applied < MIN_APPLIES_TO_KEEP_SESSION:
+        print(f"\n[SIN POSTULACIONES] {portal_name.upper()} termino con {total_applied}/{_total_max_target} postulaciones reales "
+              f"(minimo requerido: {MIN_APPLIES_TO_KEEP_SESSION}).")
+        print(f"  - Sesion DESCARTADA — la proxima vez pedira login de nuevo.")
+        print(f"  - Causas posibles:")
+        print(f"    * Todas las ofertas ya estan en la base de datos (ya postuladas antes)")
+        print(f"    * Los filtros de experiencia/horario/zona las descartaron")
+        print(f"    * La sesion expiro durante el recorrido")
+        print(f"  - Revisa los logs en http://127.0.0.1:5000")
     else:
-        print(f"\n[✅ OK] {portal_name.upper()} — {total_applied} postulaciones realizadas. Sesión guardada.")
+        print(f"\n[OK] {portal_name.upper()} — {total_applied}/{_total_max_target} postulaciones reales. "
+              f"Sesion guardada.")
 
 
 def run_bot(
@@ -2426,7 +2695,7 @@ def run_bot(
             except:
                 pass
 
-        applied = _run_keyword_loop(
+        applied, _seen_titles_single = _run_keyword_loop(
             page, browser_ctx, portal_name, config, profile,
             max_offers, dry_run, rate_limiter, portal_handler,
             using_cdp=is_cdp,

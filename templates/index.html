@@ -873,24 +873,44 @@
                 </div>
             </div>
 
-            <!-- Panel de Preguntas (Acordeón — siempre visible si hay datos) -->
+            <!-- Panel Cola del Scan — ofertas que el bot postulará automáticamente -->
+            <div id="sq-panel" style="display:none; background:rgba(163,230,53,0.05); border:1px solid rgba(163,230,53,0.25); border-radius:10px; margin-bottom:0.75rem; overflow:hidden;">
+                <div onclick="toggleSqPanel()" style="display:flex;align-items:center;gap:0.5rem;padding:0.5rem 0.75rem;cursor:pointer;user-select:none;">
+                    <span style="font-size:0.85rem;">📋</span>
+                    <div style="flex:1;min-width:0;">
+                        <span style="font-size:0.78rem;font-weight:700;color:#a3e635;">Ofertas en cola</span>
+                        <span style="font-size:0.65rem;color:rgba(163,230,53,0.5);margin-left:0.4rem;">el bot las postula automático al hacer "Postular a todo"</span>
+                    </div>
+                    <span id="sq-count" style="font-size:0.72rem;color:#84cc16;font-weight:400;white-space:nowrap;"></span>
+                    <div onclick="event.stopPropagation()" style="display:flex;gap:0.4rem;align-items:center;">
+                        <button onclick="openAllScanQueue()" style="font-size:0.72rem;background:linear-gradient(135deg,#65a30d,#84cc16);color:white;border:none;border-radius:6px;padding:0.25rem 0.75rem;cursor:pointer;font-weight:700;white-space:nowrap;">Ver todas</button>
+                        <button onclick="clearScanQueue()" style="background:none;border:none;color:#a3e635;cursor:pointer;font-size:0.72rem;opacity:0.6;" title="Limpiar cola">🗑</button>
+                    </div>
+                    <span id="sq-chevron" style="color:#a3e635;font-size:0.75rem;transition:transform 0.2s;pointer-events:none;transform:rotate(-90deg);">▼</span>
+                </div>
+                <div id="sq-body" style="padding:0 0.75rem 0.5rem;display:none;flex-direction:column;gap:0.25rem;max-height:320px;overflow-y:auto;"></div>
+            </div>
+
+            <!-- Panel de Preguntas — responder para que el bot complete formularios -->
             <div id="pq-panel" style="display:none; background:rgba(139,92,246,0.08); border:1px solid rgba(139,92,246,0.35); border-radius:12px; margin-bottom:1rem; overflow:hidden;">
-                <!-- Cabecera acordeón (siempre visible) -->
                 <div id="pq-header" onclick="togglePqPanel()"
                     style="display:flex; align-items:center; gap:0.6rem; padding:0.75rem 1rem; cursor:pointer; user-select:none;">
                     <span style="font-size:1rem;">❓</span>
-                    <strong style="color:#a78bfa; font-size:0.88rem; flex:1;">Preguntas del Scan</strong>
+                    <div style="flex:1;min-width:0;">
+                        <strong style="color:#a78bfa; font-size:0.88rem;">Preguntas del formulario</strong>
+                        <div style="font-size:0.65rem;color:rgba(167,139,250,0.5);">respóndelas una vez — el bot las reutiliza en todas las postulaciones</div>
+                    </div>
                     <span id="pq-badge-answered" style="background:#065f46; color:#6ee7b7; border-radius:20px; padding:0.1rem 0.5rem; font-size:0.7rem; font-weight:700;">0 ✓</span>
                     <span id="pq-badge" style="background:#7c3aed; color:white; border-radius:20px; padding:0.1rem 0.5rem; font-size:0.7rem; font-weight:700; display:none;">0 ⚠</span>
                     <button id="pq-autofill-btn" onclick="event.stopPropagation(); autoFillFromCV()"
                         style="background:linear-gradient(135deg,#0891b2,#06b6d4);border:none;color:white;border-radius:6px;padding:0.25rem 0.65rem;cursor:pointer;font-size:0.72rem;font-weight:700;"
-                        title="Responder automáticamente usando los datos de tu CV y perfil">🧠 Responder desde CV</button>
+                        title="Responder automáticamente usando los datos de tu CV y perfil">🧠 Auto-responder</button>
                     <button onclick="event.stopPropagation(); loadPendingQuestions()"
                         style="background:none;border:none;color:var(--text-dim);cursor:pointer;font-size:0.72rem;" title="Actualizar">↻</button>
-                    <span id="pq-chevron" style="color:var(--text-dim); font-size:0.8rem; transition:transform 0.2s;">▼</span>
+                    <span id="pq-chevron" style="color:var(--text-dim); font-size:0.8rem; transition:transform 0.2s; transform:rotate(-90deg);">▼</span>
                 </div>
                 <!-- Cuerpo colapsable -->
-                <div id="pq-body" style="padding:0 1rem 0.75rem; display:flex; flex-direction:column; gap:0.6rem;">
+                <div id="pq-body" style="padding:0 1rem 0.75rem; display:none; flex-direction:column; gap:0.6rem;">
                     <div id="pq-list"></div>
                     <p style="font-size:0.72rem; color:var(--text-dim); margin:0.25rem 0 0;">
                         ✏️ Las respuestas se guardan automáticamente al escribir. Se reusan en futuras sesiones.
@@ -913,18 +933,20 @@
                 <div onclick="toggleQuickLinks()" style="display:flex; align-items:center; justify-content:space-between; padding:0.5rem 0.75rem; cursor:pointer; user-select:none; gap:0.5rem;">
                     <div style="display:flex;align-items:center;gap:0.5rem;flex:1;min-width:0;">
                         <span style="font-size:0.9rem;">🚀</span>
-                        <span style="font-size:0.78rem; font-weight:700; color:#34d399; white-space:nowrap;">Postulación rápida</span>
-                        <span id="quick-links-count" style="font-size:0.72rem;color:#6ee7b7;font-weight:400;"></span>
-                        <span style="font-size:0.65rem;color:rgba(110,231,183,0.6);font-style:italic;display:none;" id="ql-hint">abre ofertas que el bot no puede postular solo</span>
+                        <div style="min-width:0;">
+                            <span style="font-size:0.78rem; font-weight:700; color:#34d399; white-space:nowrap;">Postulación rápida</span>
+                            <span id="quick-links-count" style="font-size:0.72rem;color:#6ee7b7;font-weight:400;margin-left:0.3rem;"></span>
+                            <div style="font-size:0.63rem;color:rgba(52,211,153,0.5);">ATS externos — el bot no puede postular solo, ábrelas tú</div>
+                        </div>
                     </div>
                     <div style="display:flex;align-items:center;gap:0.4rem;" onclick="event.stopPropagation()">
                         <button id="apply-all-btn" onclick="applyAllQuickLinks()" style="font-size:0.72rem;background:linear-gradient(135deg,#059669,#10b981);color:white;border:none;border-radius:6px;padding:0.25rem 0.75rem;cursor:pointer;font-weight:700;white-space:nowrap;box-shadow:0 2px 8px rgba(16,185,129,0.3);">Postular a todo</button>
                         <button onclick="clearQuickLinks()" style="background:none;border:none;color:#34d399;cursor:pointer;font-size:0.72rem;opacity:0.6;" title="Limpiar todo">🗑</button>
                     </div>
-                    <span id="ql-chevron" style="color:#34d399;font-size:0.75rem;transition:transform 0.2s;display:inline-block;pointer-events:none;">▼</span>
+                    <span id="ql-chevron" style="color:#34d399;font-size:0.75rem;transition:transform 0.2s;display:inline-block;pointer-events:none;transform:rotate(-90deg);">▼</span>
                 </div>
                 <!-- Cuerpo colapsable -->
-                <div id="quick-links-body" style="padding:0 0.75rem 0.5rem; display:flex; flex-direction:column; gap:0.3rem;"></div>
+                <div id="quick-links-body" style="padding:0 0.75rem 0.5rem; display:none; flex-direction:column; gap:0.3rem;"></div>
             </div>
 
             <!-- Panel Registros Históricos -->
@@ -996,32 +1018,43 @@
         // ── Portales ───────────────────────────────────────────────────────────
         // Orden: primero los portales locales/principales, luego globales
         // Indeed excluido: bloqueado por Cloudflare Turnstile (no automatizable)
-        const PORTALS = ['chiletrabajos', 'laborum', 'getonyboard', 'computrabajo', 'linkedin'];
+        // Portales locales (Chile) + remotos internacionales
+        const PORTALS = [
+            'chiletrabajos', 'laborum', 'getonyboard', 'computrabajo', 'linkedin',
+            'weworkremotely', 'remotive', 'remoteco',
+        ];
 
-        // Portales activados por defecto al cargar el dashboard
+        // Portales activados por defecto — solo locales Chile
         const DEFAULT_PORTALS = new Set(['chiletrabajos', 'laborum', 'getonyboard', 'computrabajo', 'linkedin']);
 
         const PORTAL_ICONS = {
-            linkedin: '💼', indeed: '🔍', computrabajo: '🏢',
-            getonyboard: '🚀', chiletrabajos: '🇨🇱', laborum: '📋'
+            linkedin:       '💼', indeed: '🔍', computrabajo: '🏢',
+            getonyboard:    '🚀', chiletrabajos: '🇨🇱', laborum: '📋',
+            weworkremotely: '🌎', remotive: '🌐', remoteco: '🛸',
         };
 
         const PORTAL_LABELS = {
-            linkedin: 'LinkedIn',
-            indeed: 'Indeed',
-            computrabajo: 'Computrabajo',
-            getonyboard: 'GetOnBoard',
-            chiletrabajos: 'ChileTrabajos',
-            laborum: 'Laborum'
+            linkedin:       'LinkedIn',
+            indeed:         'Indeed',
+            computrabajo:   'Computrabajo',
+            getonyboard:    'GetOnBoard',
+            chiletrabajos:  'ChileTrabajos',
+            laborum:        'Laborum',
+            weworkremotely: 'We Work Remotely',
+            remotive:       'Remotive',
+            remoteco:       'Remote.co',
         };
 
         const PORTAL_URLS = {
-            linkedin:      'https://www.linkedin.com/jobs/',
-            indeed:        'https://cl.indeed.com/',
-            computrabajo:  'https://cl.computrabajo.com/',
-            getonyboard:   'https://www.getonbrd.com/jobs-desarrollador-junior',
-            chiletrabajos: 'https://www.chiletrabajos.cl/',
-            laborum:       'https://www.laborum.cl/'
+            linkedin:       'https://www.linkedin.com/jobs/',
+            indeed:         'https://cl.indeed.com/',
+            computrabajo:   'https://cl.computrabajo.com/',
+            getonyboard:    'https://www.getonbrd.com/jobs-desarrollador-junior',
+            chiletrabajos:  'https://www.chiletrabajos.cl/',
+            laborum:        'https://www.laborum.cl/',
+            weworkremotely: 'https://weworkremotely.com/categories/remote-programming-jobs',
+            remotive:       'https://remotive.com/remote-jobs/software-dev',
+            remoteco:       'https://remote.co/remote-jobs/developer/',
         };
 
         function portalLabel(portal) {
@@ -1223,7 +1256,7 @@
             const inp = document.getElementById('kw-add-input');
             const val = inp.value.trim();
             if (!val) return;
-            if (!_kwGroups['Custom']) _kwGroups['Custom'] = { open: true, keywords: [] };
+            if (!_kwGroups['Custom']) _kwGroups['Custom'] = { open: false, keywords: [] };
             const already = _kwGroups['Custom'].keywords.find(k => k.kw.toLowerCase() === val.toLowerCase());
             if (!already) {
                 _kwGroups['Custom'].keywords.push({ kw: val, active: true, custom: true });
@@ -1243,9 +1276,6 @@
                     if (!_kwGroups[cat]) _kwGroups[cat] = { open: false, keywords: [] };
                     _kwGroups[cat].keywords.push({ kw: g.keyword || g, active: true, custom: false });
                 });
-                // Abrir la primera categoría por defecto
-                const first = Object.keys(_kwGroups)[0];
-                if (first) _kwGroups[first].open = true;
                 renderKwAccordion();
             } catch (e) { }
         }
@@ -1305,7 +1335,6 @@
 
                 // Abrir la sección de perfil automáticamente si detectó algo
                 if (count > 0) {
-                    document.getElementById('profile-details').open = true;
                     document.getElementById('profile-arrow').innerText = '▼';
                     badge.style.display = 'inline';
                     badge.innerText = count + ' detectados';
@@ -1402,11 +1431,16 @@
             refreshSessionSummary();
         }
 
+        function _setStatus(text, color) {
+            const el = document.getElementById('stat-status');
+            if (!el) return;
+            el.innerText = text;
+            el.style.color = color || '';
+        }
+
         function setBotControls(mode) {
-            const statusEl = document.getElementById('stat-status');
             if (mode === 'running') {
-                statusEl.innerText = 'Activo';
-                statusEl.style.color = 'var(--success)';
+                _setStatus('Activo', 'var(--success)');
                 scanBtn.disabled     = true;
                 postularBtn.disabled = true;
                 stopBtn.disabled     = false;
@@ -1414,8 +1448,7 @@
                 return;
             }
             if (mode === 'stopping') {
-                statusEl.innerText = 'Deteniendo...';
-                statusEl.style.color = 'var(--warning)';
+                _setStatus('Deteniendo...', 'var(--warning)');
                 scanBtn.disabled     = true;
                 postularBtn.disabled = true;
                 stopBtn.disabled     = true;
@@ -1423,54 +1456,24 @@
                 return;
             }
             if (mode === 'finished') {
-                statusEl.innerText = '✓ Completado';
-                statusEl.style.color = 'var(--success)';
+                _setStatus('✓ Completado', 'var(--success)');
                 scanBtn.disabled     = false;
                 postularBtn.disabled = false;
                 stopBtn.disabled     = true;
                 setOps(opsState, 'Proceso finalizado', 'ok');
                 setTimeout(() => {
-                    statusEl.innerText = 'Listo';
-                    statusEl.style.color = 'var(--text-dim)';
+                    _setStatus('Listo', 'var(--text-dim)');
                     setOps(opsState, 'Listo para iniciar', 'ok');
                 }, 8000);
                 return;
             }
             // idle / default
-            statusEl.innerText = 'Inactivo';
-            statusEl.style.color = 'var(--text-dim)';
+            _setStatus('Inactivo', 'var(--text-dim)');
             scanBtn.disabled     = false;
             postularBtn.disabled = false;
             stopBtn.disabled     = true;
             setOps(opsState, 'Listo para iniciar', 'ok');
         }
-
-        socket.on('bot_status', (data) => {
-            const statusEl = document.getElementById('stat-status');
-            if (data.status === 'already_running') {
-                // El servidor ya está ocupado — desbloquear UI y avisar
-                unlockBtns();
-                _botMode = null;
-                setScanStatus('⚠️ El bot ya está en ejecución. Usa Detener si quieres reiniciarlo.');
-                setBotControls('running');
-                setAction('Bot ya en ejecución (sesión anterior)');
-            } else if (data.running || data.status === 'started' || data.status === 'starting') {
-                setBotControls('running');
-                setAction('Bot en ejecución...');
-            } else {
-                const wasStopped = data.status === 'stopped';
-                setBotControls(wasStopped ? 'idle' : 'finished');
-                hideIntervention(); hideCaptchaModal();
-                setOps(opsIntervention, 'Ninguna', 'info');
-                setAction(wasStopped ? 'Detenido por el usuario' : '✓ Proceso completado');
-            }
-            if (data.stats) updateStats(data.stats);
-            if (data.current_portal) updatePortalUI(data.current_portal);
-            if (data.intervention) showIntervention(data.intervention.type, data.intervention.portal);
-            if (data.logs && logContainer.innerHTML === '') {
-                data.logs.forEach(msg => appendLogLine(msg));
-            }
-        });
 
         socket.on('portal_change', (data) => updatePortalUI(data.portal));
         socket.on('keyword_update', (data) => {
@@ -1478,9 +1481,25 @@
         });
         socket.on('portal_progress', (data) => {
             const el = document.getElementById(`pc-${data.portal}`);
-            if (el) el.innerText = `${data.applied}/${data.max}`;
+            if (el) {
+                el.innerText = `${data.applied}/${data.max}`;
+                // Verde si avanzó, rojo si terminó con 0
+                if (data.finished) {
+                    el.style.color = data.applied > 0 ? '#4ade80' : '#f87171';
+                } else {
+                    el.style.color = data.applied > 0 ? '#4ade80' : '';
+                }
+            }
             const statusEl = document.getElementById(`ps-${data.portal}`);
-            if (statusEl) statusEl.innerText = `${data.applied} aplicadas`;
+            if (statusEl) {
+                if (data.finished && data.applied === 0) {
+                    statusEl.innerText = '⚠ Sin postulaciones';
+                    statusEl.style.color = '#f87171';
+                } else {
+                    statusEl.innerText = data.applied > 0 ? `${data.applied} aplicadas` : 'Procesando...';
+                    statusEl.style.color = '';
+                }
+            }
         });
 
         socket.on('job_applied', (data) => {
@@ -1496,8 +1515,7 @@
             hideCaptchaModal();
             setOps(opsIntervention, 'Login resuelto', 'ok');
             setAction('Login detectado — continuando...');
-            document.getElementById('stat-status').innerText = 'Activo';
-            document.getElementById('stat-status').style.color = 'var(--success)';
+            _setStatus('Activo', 'var(--success)');
         });
 
         function updatePortalUI(portal) {
@@ -1671,7 +1689,7 @@
         });
 
         // ── Quick Links Bodega ────────────────────────────────────────────────
-        let _qlOpen = true;
+        let _qlOpen = false;
         function toggleQuickLinks() {
             _qlOpen = !_qlOpen;
             const body = document.getElementById('quick-links-body');
@@ -1699,16 +1717,20 @@
                 list.innerHTML = '';
                 data.forEach(item => {
                     const row = document.createElement('div');
+                    row.dataset.url = item.url;
                     row.style.cssText = 'display:flex;align-items:center;gap:0.4rem;background:rgba(16,185,129,0.08);border:1px solid rgba(16,185,129,0.15);border-radius:7px;padding:0.3rem 0.5rem;';
                     const portalBadge = `<span style="font-size:0.65rem;background:rgba(16,185,129,0.2);color:#34d399;border-radius:4px;padding:1px 5px;white-space:nowrap;">${item.portal || ''}</span>`;
                     const title = document.createElement('span');
                     title.style.cssText = 'flex:1;font-size:0.75rem;color:#f8fafc;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
                     title.textContent   = item.title || item.url;
+                    // ✅ <a> real con target="_blank" — bypassa popup blocker
                     const openBtn = document.createElement('a');
                     openBtn.href        = item.url;
+                    openBtn.target      = '_blank';
+                    openBtn.rel         = 'noreferrer';
                     openBtn.textContent = 'Postular';
                     openBtn.style.cssText = 'font-size:0.72rem;background:linear-gradient(135deg,#059669,#10b981);color:white;border:none;border-radius:6px;padding:0.25rem 0.6rem;cursor:pointer;text-decoration:none;white-space:nowrap;font-weight:600;';
-                    openBtn.onclick = (e) => { e.preventDefault(); window.open(item.url, '_blank', 'noopener'); dismissQuickLink(item.url); row.remove(); checkQuickLinksEmpty(); };
+                    openBtn.onclick = () => { dismissQuickLink(item.url); setTimeout(()=>{ row.remove(); checkQuickLinksEmpty(); }, 300); };
                     const dismissBtn = document.createElement('button');
                     dismissBtn.textContent = '✕';
                     dismissBtn.title       = 'Descartar';
@@ -1728,32 +1750,31 @@
             catch(e) {}
         }
 
-        async function applyAllQuickLinks() {
+        function applyAllQuickLinks() {
             const btn  = document.getElementById('apply-all-btn');
             const list = document.getElementById('quick-links-body');
-            const rows = [...list.querySelectorAll('a')];
+            const rows = [...list.querySelectorAll('[data-url]')];
             if (!rows.length) return;
 
-            const total = rows.length;
-            btn.disabled = true;
-            btn.textContent = `Abriendo ${total}...`;
+            // ✅ Clicks síncronos dentro del user gesture — no await, no setTimeout
+            // El browser permite abrir tabs desde <a>.click() en el mismo gesture
+            rows.forEach(row => {
+                const url = row.dataset.url;
+                if (!url) return;
+                const a = document.createElement('a');
+                a.href   = url;
+                a.target = '_blank';
+                a.rel    = 'noreferrer';
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                dismissQuickLink(url);
+                row.remove();
+            });
 
-            // Abrir todas en nuevas pestañas con pausa para evitar bloqueo de popups
-            for (let i = 0; i < rows.length; i++) {
-                const a   = rows[i];
-                const url = a.href || a.getAttribute('href');
-                if (!url) continue;
-                window.open(url, '_blank', 'noopener');
-                const row = a.closest('div[style*="border-radius:7px"]');
-                if (row) row.remove();
-                await dismissQuickLink(url);
-                btn.textContent = `Abriendo ${i + 1}/${total}...`;
-                await new Promise(r => setTimeout(r, 250));
-            }
-
+            btn.textContent = `Listo — ${rows.length} tabs abiertos`;
+            setTimeout(() => { btn.textContent = 'Postular a todo'; }, 2500);
             checkQuickLinksEmpty();
-            btn.disabled = false;
-            btn.textContent = 'Postular a todo';
         }
 
         async function clearQuickLinks() {
@@ -1776,7 +1797,7 @@
             }
         }
 
-        let _pqOpen = true; // acordeón abierto por defecto
+        let _pqOpen = false; // cerrado por defecto — se abre solo si hay preguntas
         function togglePqPanel() {
             _pqOpen = !_pqOpen;
             const body = document.getElementById('pq-body');
@@ -1784,16 +1805,116 @@
             if (body) body.style.display = _pqOpen ? 'flex' : 'none';
             if (chev) chev.style.transform = _pqOpen ? 'rotate(0deg)' : 'rotate(-90deg)';
         }
+        function openPqPanel() {
+            // no auto-abre — el usuario lo abre manualmente
+        }
 
-        async function loadScanQueueCount() {
+        // ── Cola del Scan — panel de ofertas clicables ────────────────────────
+        let _sqOpen = false;
+        function toggleSqPanel() {
+            _sqOpen = !_sqOpen;
+            const body = document.getElementById('sq-body');
+            const chev = document.getElementById('sq-chevron');
+            if (body) body.style.display = _sqOpen ? 'flex' : 'none';
+            if (chev) chev.style.transform = _sqOpen ? 'rotate(0deg)' : 'rotate(-90deg)';
+        }
+
+        async function loadScanQueue() {
             try {
-                const res = await fetch('/api/scan-queue');
+                const res  = await fetch('/api/scan-queue');
                 const data = await res.json();
                 const count = data.count || 0;
-                const el = document.getElementById('scan-result-queue');
-                if (el) el.textContent = `${count} oferta${count !== 1 ? 's' : ''} en cola`;
+                const items = data.items || [];
+
+                // Actualizar banner superior
+                const bannerEl = document.getElementById('scan-result-queue');
+                if (bannerEl) bannerEl.textContent = `${count} oferta${count !== 1 ? 's' : ''} en cola`;
+
+                // Mostrar/ocultar panel
+                const panel = document.getElementById('sq-panel');
+                const body  = document.getElementById('sq-body');
+                const cntEl = document.getElementById('sq-count');
+                if (!panel || !body) return count;
+
+                if (!count) { panel.style.display = 'none'; return 0; }
+
+                panel.style.display = 'block';
+                if (cntEl) cntEl.textContent = `— ${count} oferta${count !== 1 ? 's' : ''}`;
+
+                body.innerHTML = '';
+                items.forEach(item => {
+                    const row = document.createElement('div');
+                    row.dataset.url = item.url;
+                    row.style.cssText = 'display:flex;align-items:center;gap:0.4rem;background:rgba(163,230,53,0.06);border:1px solid rgba(163,230,53,0.12);border-radius:6px;padding:0.25rem 0.5rem;';
+                    const badge = `<span style="font-size:0.62rem;background:rgba(163,230,53,0.15);color:#a3e635;border-radius:4px;padding:1px 4px;white-space:nowrap;">${item.portal||''}</span>`;
+                    const ttl = document.createElement('span');
+                    ttl.style.cssText = 'flex:1;font-size:0.73rem;color:#f1f5f9;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
+                    ttl.textContent = item.title || item.url;
+                    // ✅ <a> real — nunca bloqueado por popup blocker
+                    const aBtn = document.createElement('a');
+                    aBtn.href    = item.url;
+                    aBtn.target  = '_blank';
+                    aBtn.rel     = 'noreferrer';
+                    aBtn.textContent = 'Abrir';
+                    aBtn.style.cssText = 'font-size:0.7rem;background:rgba(132,204,22,0.2);color:#a3e635;border:1px solid rgba(163,230,53,0.3);border-radius:5px;padding:0.2rem 0.5rem;text-decoration:none;white-space:nowrap;font-weight:600;cursor:pointer;';
+                    aBtn.onclick = () => { dismissSqItem(item.url); setTimeout(() => { row.remove(); updateSqCount(); }, 300); };
+                    const xBtn = document.createElement('button');
+                    xBtn.textContent = '✕';
+                    xBtn.style.cssText = 'background:none;border:none;color:rgba(255,255,255,0.25);cursor:pointer;font-size:0.72rem;padding:0 0.15rem;';
+                    xBtn.onclick = () => { dismissSqItem(item.url); row.remove(); updateSqCount(); };
+                    row.innerHTML = badge;
+                    row.appendChild(ttl);
+                    row.appendChild(aBtn);
+                    row.appendChild(xBtn);
+                    body.appendChild(row);
+                });
                 return count;
             } catch { return 0; }
+        }
+
+        async function dismissSqItem(url) {
+            try { await fetch('/api/scan-queue/dismiss', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url})}); } catch{}
+        }
+
+        function updateSqCount() {
+            const body  = document.getElementById('sq-body');
+            const panel = document.getElementById('sq-panel');
+            const cntEl = document.getElementById('sq-count');
+            const n = body ? body.children.length : 0;
+            if (!n && panel) panel.style.display = 'none';
+            if (cntEl) cntEl.textContent = n ? `— ${n} oferta${n!==1?'s':''}` : '';
+        }
+
+        function openAllScanQueue() {
+            const body = document.getElementById('sq-body');
+            const rows = [...(body?.querySelectorAll('[data-url]') || [])];
+            if (!rows.length) return;
+            // Clicks síncronos — dentro del user gesture
+            rows.forEach(row => {
+                const url = row.dataset.url;
+                if (!url) return;
+                const a = document.createElement('a');
+                a.href = url; a.target = '_blank'; a.rel = 'noreferrer';
+                document.body.appendChild(a); a.click(); document.body.removeChild(a);
+                dismissSqItem(url);
+                row.remove();
+            });
+            updateSqCount();
+        }
+
+        async function clearScanQueue() {
+            try {
+                const body = document.getElementById('sq-body');
+                if (body) {
+                    const rows = [...body.querySelectorAll('[data-url]')];
+                    await Promise.all(rows.map(r => dismissSqItem(r.dataset.url)));
+                }
+            } catch{}
+            document.getElementById('sq-panel').style.display = 'none';
+        }
+
+        async function loadScanQueueCount() {
+            return await loadScanQueue();
         }
 
         async function loadPendingQuestions() {
@@ -1868,10 +1989,10 @@
                     list.appendChild(item);
                 });
 
-                // Si se abrió post-scan, expand el acordeón
-                if (unanswered.length > 0 && !_pqOpen) { togglePqPanel(); }
-                // Ocultar panel si no hay nada que mostrar
-                if (panel) panel.style.display = (total > 0 || unanswered.length > 0) ? 'block' : 'none';
+                // Mostrar panel si hay preguntas
+                if (panel) panel.style.display = total > 0 ? 'block' : 'none';
+                // Auto-abrir si hay preguntas sin responder
+                if (unanswered.length > 0) openPqPanel();
 
             } catch (e) { console.warn('loadPendingQuestions error', e); }
         }
@@ -2102,7 +2223,7 @@
             // Eliminar timestamp al inicio si existe (HH:MM:SS)
             const mClean = m.replace(/^\d{2}:\d{2}:\d{2}\s+/, '');
 
-            const portalMatch = mClean.match(/\b(linkedin|indeed|computrabajo|getonyboard|chiletrabajos|laborum)\b/i);
+            const portalMatch = mClean.match(/\b(linkedin|indeed|computrabajo|getonyboard|chiletrabajos|laborum|weworkremotely|remotive|remoteco)\b/i);
             const portal = portalMatch ? portalLabel(portalMatch[1]) : '';
 
             // ── Eventos con etiqueta ────────────────────────────────────────
@@ -2210,7 +2331,7 @@
                     playSound(523, 0.4, 'triangle');
                     // Marcar portal como completado en el grid
                     const portalMatch = m.match(/portal completado:\s*(\w+)/i) ||
-                        m.match(/\b(linkedin|indeed|computrabajo|getonyboard|chiletrabajos|laborum)\b/i);
+                        m.match(/\b(linkedin|indeed|computrabajo|getonyboard|chiletrabajos|laborum|weworkremotely|remotive|remoteco)\b/i);
                     if (portalMatch) {
                         const p = (portalMatch[1] || '').toLowerCase();
                         const pEl = document.getElementById(`p-${p}`);
@@ -2309,9 +2430,7 @@
             }
 
             // Actualizar barra de estado
-            const statusEl = document.getElementById('stat-status');
-            statusEl.innerText = type === 'login' ? 'Login...' : 'CAPTCHA...';
-            statusEl.style.color = type === 'login' ? '#818cf8' : 'var(--warning)';
+            _setStatus(type === 'login' ? 'Login...' : 'CAPTCHA...', type === 'login' ? '#818cf8' : 'var(--warning)');
             setOps(
                 opsIntervention,
                 type === 'login' ? `Login en ${(portal || 'portal').toUpperCase()}` : `CAPTCHA en ${(portal || 'portal').toUpperCase()}`,
@@ -2437,12 +2556,21 @@
         }
 
         // ── Controles ─────────────────────────────────────────────────────────
-        stopBtn.onclick = () => {
+        stopBtn.onclick = async () => {
             setBotControls('stopping');
-            socket.emit('stop_master');
             hideIntervention();
             hideCaptchaModal();
             setAction('Deteniendo...');
+            // Doble garantía: SocketIO + HTTP fallback
+            socket.emit('stop_master');
+            try { await fetch('/api/stop', { method: 'POST' }); } catch(e) {}
+            // Si en 4s el estado no cambia → forzar UI reset
+            setTimeout(() => {
+                if (stopBtn.disabled === false) return; // ya se actualizó
+                unlockBtns();
+                setAction('Detenido manualmente');
+                setScanStatus('');
+            }, 4000);
         };
 
         // ── Scan & Postular — independientes, memoria compartida ──────────────
@@ -2451,7 +2579,7 @@
 
         function getSelectedPortals() {
             const sel = Array.from(document.querySelectorAll('.portal-checkbox:checked')).map(c => c.value);
-            return sel.length ? sel : ['laborum','computrabajo','chiletrabajos','getonyboard','linkedin'];
+            return sel.length ? sel : ['laborum','computrabajo','chiletrabajos','getonyboard','linkedin'];  // default: solo portales Chile
         }
 
         function setScanStatus(text, cls = '') {
@@ -2526,9 +2654,11 @@
 
             _botMode = 'postular';
 
-            // Reset contadores de portales
+            // Reset contadores de portales — mostrar 0/max desde el inicio
+            const _maxLabel = maxOffers ? `0/${maxOffers}` : '0';
             PORTALS.forEach(p => {
-                const pc = document.getElementById(`pc-${p}`); if (pc) pc.innerText = '0';
+                const pc = document.getElementById(`pc-${p}`);
+                if (pc) { pc.innerText = _maxLabel; pc.style.color = ''; }
                 const ps = document.getElementById(`ps-${p}`); if (ps) ps.innerText = sessionCache[p] ? 'Sesión guardada' : 'Puede pedir login';
                 const pe = document.getElementById(`p-${p}`);
                 if (pe) { pe.classList.remove('active', 'done'); }
@@ -2547,7 +2677,17 @@
 
         // ── Estado del proceso — scan y apply independientes ──────────────────
         socket.on('bot_status', (data) => {
-            // ── Scan terminó ──
+            // ── Sesión anterior ya corriendo ──
+            if (data.status === 'already_running') {
+                unlockBtns();
+                _botMode = null;
+                setScanStatus('⚠️ El bot ya está en ejecución. Usa Detener si quieres reiniciarlo.');
+                setBotControls('running');
+                setAction('Bot ya en ejecución (sesión anterior)');
+                return;
+            }
+
+            // ── Scan terminó (normal o detenido) ──
             if (data.status === 'scan_finished' || (data.status === 'stopped' && _botMode === 'scan')) {
                 unlockScan();
                 if (_botMode === 'scan') {
@@ -2562,12 +2702,14 @@
                     if (Notification.permission === 'granted')
                         new Notification('ApplyJob — Scan listo', { body: 'Pulsa 🚀 Postular a todo.' });
                 }
-                // Si apply también terminó → controles idle
+                hideIntervention(); hideCaptchaModal();
+                setOps(opsIntervention, 'Ninguna', 'info');
+                setAction(data.status === 'stopped' ? 'Detenido por el usuario' : '✓ Scan completado');
                 if (!data.apply_active) setBotControls('idle');
                 return;
             }
 
-            // ── Apply terminó ──
+            // ── Apply terminó (normal o detenido) ──
             if (data.status === 'finished' || (data.status === 'stopped' && _botMode === 'postular')) {
                 unlockApply();
                 if (_botMode === 'postular') {
@@ -2579,29 +2721,37 @@
                     if (Notification.permission === 'granted')
                         new Notification('ApplyJob — Completado', { body: 'Todas las ofertas fueron procesadas.' });
                 }
-                if (!data.scan_active) setBotControls('idle');
+                hideIntervention(); hideCaptchaModal();
+                setOps(opsIntervention, 'Ninguna', 'info');
+                setAction(data.status === 'stopped' ? 'Detenido por el usuario' : '✓ Proceso completado');
+                if (!data.scan_active) setBotControls(data.status === 'finished' ? 'finished' : 'idle');
                 return;
             }
 
-            // ── Ambos detenidos ──
+            // ── Stop global (ningún modo activo, o ambos detenidos) ──
             if (data.status === 'stopped') {
                 _botMode = null;
                 unlockBtns();
                 setBotControls('idle');
                 hideIntervention(); hideCaptchaModal();
+                setOps(opsIntervention, 'Ninguna', 'info');
+                setAction('Detenido por el usuario');
                 return;
             }
 
-            // ── En ejecución: actualizar controles ──
-            if (data.scan_active || data.apply_active) {
+            // ── En ejecución ──
+            if (data.running || data.scan_active || data.apply_active ||
+                data.status === 'started' || data.status === 'starting' || data.status === 'scan_started') {
                 setBotControls('running');
                 if (data.scan_active)  lockScan();
                 if (data.apply_active) lockApply();
+                if (data.status === 'started' || data.status === 'starting') setAction('Bot en ejecución...');
             }
 
-            if (data.stats)           updateStats(data.stats);
-            if (data.current_portal)  updatePortalUI(data.current_portal);
-            if (data.intervention)    showIntervention(data.intervention.type, data.intervention.portal);
+            // ── Actualizaciones de datos (cualquier estado) ──
+            if (data.stats)        updateStats(data.stats);
+            if (data.current_portal) updatePortalUI(data.current_portal);
+            if (data.intervention) showIntervention(data.intervention.type, data.intervention.portal);
             if (data.logs && logContainer.innerHTML === '') {
                 data.logs.forEach(msg => appendLogLine(msg));
             }

@@ -36,8 +36,9 @@ log = logging.getLogger("applyjob.keyword_optimizer")
 _STATS_PATH = Path(__file__).parent.parent / "data" / "keyword_stats.json"
 
 # ── Umbrales ────────────────────────────────────────────────────────────────
-MIN_RUNS_TO_RETIRE  = 3   # corridas con 0 resultados en un mismo portal para retirar
-REPLACEMENTS_PER_KW = 2   # keywords nuevas a generar al retirar una de un portal
+MAX_ACTIVE_KEYWORDS = 20  # máximo de keywords activas por portal en cada run
+MIN_RUNS_TO_RETIRE  = 1   # 1 run con found=0 → retirar del portal (sin piedad)
+REPLACEMENTS_PER_KW = 2   # keywords nuevas a generar al retirar una
 
 # ── Vocabulario para generación ──────────────────────────────────────────────
 _IT_BASES = [
@@ -101,6 +102,7 @@ def _portal_entry(stats: dict, key: str, portal: str) -> dict:
     if portal not in stats[key]["portals"]:
         stats[key]["portals"][portal] = {
             "applied":    0,
+            "found":      0,   # ofertas crudas encontradas en la página (antes de filtros)
             "runs":       0,
             "status":     "active",
             "retired_at": None,
@@ -110,34 +112,41 @@ def _portal_entry(stats: dict, key: str, portal: str) -> dict:
 
 # ── Estadísticas ─────────────────────────────────────────────────────────────
 
-def update_keyword_stat(keyword: str, portal: str, applied: int) -> None:
+def update_keyword_stat(keyword: str, portal: str, applied: int, found: int = 0) -> None:
     """
-    Registra el resultado de una keyword en un portal específico.
-    applied = postulaciones logradas en esta corrida.
+    Registra el resultado de una keyword en un portal.
+    found   = ofertas brutas encontradas en la página (antes de filtros).
+    applied = postulaciones efectivas en esta corrida.
     """
     stats = _load_stats()
     key   = keyword.lower().strip()
     pe    = _portal_entry(stats, key, portal)
 
     pe["applied"] += applied
+    pe["found"]    = pe.get("found", 0) + found
     pe["runs"]    += 1
 
     _save_stats(stats)
-    log.debug("[KW_STATS] '%s' @ %s: +%d postulaciones (total=%d, runs=%d)",
-              key, portal, applied, pe["applied"], pe["runs"])
+    log.debug("[KW_STATS] '%s' @ %s: found=%d applied=%d (total_found=%d runs=%d)",
+              key, portal, found, applied, pe["found"], pe["runs"])
 
 
 def should_retire(keyword: str, portal: str) -> bool:
     """
-    True si la keyword debe retirarse DEL PORTAL ESPECÍFICO.
-    Condición: MIN_RUNS_TO_RETIRE corridas consecutivas con 0 postulaciones en ese portal.
+    True si la keyword debe retirarse del portal.
+    Condición: ≥ MIN_RUNS_TO_RETIRE runs con found=0 (ninguna oferta cruda en el portal).
+    Si found nunca fue registrado, cae a applied=0 como fallback.
     """
     stats = _load_stats()
     key   = keyword.lower().strip()
     pe    = stats.get(key, {}).get("portals", {}).get(portal)
     if not pe or pe.get("status") != "active":
         return False
-    return pe["runs"] >= MIN_RUNS_TO_RETIRE and pe["applied"] == 0
+    runs  = pe.get("runs", 0)
+    found = pe.get("found", None)
+    # Usar found si está disponible; si no, usar applied como proxy
+    signal = found if found is not None else pe.get("applied", 0)
+    return runs >= MIN_RUNS_TO_RETIRE and signal == 0
 
 
 def retire_keyword_from_portal(keyword: str, portal: str) -> None:
@@ -238,38 +247,73 @@ def _infer_label(base: str) -> str:
     return "Desarrollo"
 
 
+# ── Scoring ──────────────────────────────────────────────────────────────────
+
+def get_keyword_score(keyword: str, portal: str) -> float:
+    """
+    Score de rendimiento para ordenar keywords (mayor = mejor).
+
+    0.5  → keyword nueva / sin historial → prioridad media
+    >0.5 → encontró ofertas o aplicó con éxito → primero
+    <0.5 → encontró pocas/nulas ofertas → al final (pero no retirada aún)
+    """
+    stats = _load_stats()
+    key   = keyword.lower().strip()
+    pe    = stats.get(key, {}).get("portals", {}).get(portal)
+    if not pe:
+        return 0.5  # nueva → prioridad media
+
+    runs    = pe.get("runs", 0)
+    found   = pe.get("found", None)
+    applied = pe.get("applied", 0)
+
+    if runs == 0:
+        return 0.5
+
+    # Si nunca se registró found, estimar desde applied
+    if found is None:
+        found = applied
+
+    find_rate  = found / runs                                    # cuántas ofertas por run
+    apply_rate = (applied / found) if found > 0 else 0.0        # conversión a postulación
+
+    # Score compuesto: 70% cobertura de ofertas + 30% conversión
+    raw = find_rate * 0.7 + apply_rate * 0.3
+    # Normalizar: clamp entre 0 y 1 (find_rate puede superar 1 si hay muchas ofertas)
+    return min(1.0, raw / max(1.0, find_rate)) if find_rate > 0 else 0.01
+
+
 # ── API principal ─────────────────────────────────────────────────────────────
 
 def get_active_groups(base_groups: list[dict], portal: str) -> list[dict]:
     """
-    Devuelve las keywords activas PARA ESE PORTAL:
-      - Quita las que están retiradas en ese portal específico
-      - Agrega keywords generadas automáticamente que aún no corrieron en ese portal
+    Devuelve las keywords activas para este portal, ordenadas por rendimiento
+    y limitadas a MAX_ACTIVE_KEYWORDS.
+
+    Orden:
+      1. Keywords con historial positivo (found > 0) → score alto → primero
+      2. Keywords nuevas sin historial                → score 0.5  → medio
+      3. Keywords con found=0 pero no retiradas aún   → score bajo → último
+
+    Las retiradas (found=0 tras MIN_RUNS_TO_RETIRE runs) se excluyen.
     """
     stats = _load_stats()
 
-    # Keywords retiradas solo en ESTE portal
     retired_in_portal = {
         k for k, v in stats.items()
         if v.get("portals", {}).get(portal, {}).get("status") == "retired"
     }
 
-    # Filtrar base_groups
     active = [g for g in base_groups
               if g["keyword"].lower().strip() not in retired_in_portal]
 
-    # Agregar keywords generadas que nunca corrieron en este portal
+    # Agregar keywords generadas / extraídas del scan que no estén ya en la lista
     active_keys = {g["keyword"].lower().strip() for g in active}
     for kw_key, entry in stats.items():
         if entry.get("source", "base") == "base":
-            continue  # ya está en base_groups
-        if not entry.get("source", "").startswith("generated_from:"):
             continue
-        if kw_key in retired_in_portal:
+        if kw_key in retired_in_portal or kw_key in active_keys:
             continue
-        if kw_key in active_keys:
-            continue
-        # Keyword generada que aún no está en la lista activa → agregar
         is_bodega = _is_bodega_keyword(kw_key)
         active.append({
             "label":   "Bodega" if is_bodega else _infer_label(kw_key),
@@ -279,33 +323,224 @@ def get_active_groups(base_groups: list[dict], portal: str) -> list[dict]:
         })
         active_keys.add(kw_key)
 
-    retired_count   = len(base_groups) - sum(
+    # Ordenar por score descendente: ganadores primero, cero-resultados al final
+    active.sort(key=lambda g: get_keyword_score(g["keyword"], portal), reverse=True)
+
+    retired_count = len(base_groups) - sum(
         1 for g in base_groups if g["keyword"].lower().strip() not in retired_in_portal
     )
-    generated_count = len(active) - len(base_groups) + retired_count
-    if retired_count or generated_count:
-        log.info("[KW_OPTIMIZER] Portal=%s | activas=%d | retiradas=%d | generadas=%d",
-                 portal, len(active), retired_count, generated_count)
+
+    # Limitar a MAX_ACTIVE_KEYWORDS — conservar solo los mejores
+    if len(active) > MAX_ACTIVE_KEYWORDS:
+        log.info("[KW_OPTIMIZER] Recortando %d → %d keywords (portal=%s)",
+                 len(active), MAX_ACTIVE_KEYWORDS, portal)
+        print(f"[KEYWORDS] {portal.upper()}: {len(active)} disponibles → "
+              f"usando top {MAX_ACTIVE_KEYWORDS} por rendimiento "
+              f"({retired_count} retiradas)")
+        active = active[:MAX_ACTIVE_KEYWORDS]
+    elif retired_count:
         print(f"[KEYWORDS] {portal.upper()}: {len(active)} activas "
-              f"({retired_count} retiradas en este portal, {generated_count} generadas)")
+              f"({retired_count} retiradas, ordenadas por rendimiento)")
 
     return active
 
 
 def process_keyword_result(keyword: str, portal: str,
-                            applied: int) -> list[dict]:
+                            applied: int, found: int = 0) -> list[dict]:
     """
     Registra el resultado de una keyword en un portal.
-    Si corresponde retirarla de ese portal, genera reemplazos.
-    Devuelve lista de nuevas keywords generadas (vacía si no hubo retiro).
+    found   = ofertas crudas vistas en la página (antes de filtros).
+    applied = postulaciones efectivas.
+    Si found=0 tras MIN_RUNS_TO_RETIRE runs → retira y genera reemplazos.
     """
-    update_keyword_stat(keyword, portal, applied)
+    update_keyword_stat(keyword, portal, applied, found)
 
     if should_retire(keyword, portal):
         retire_keyword_from_portal(keyword, portal)
         return generate_replacements(keyword)
 
     return []
+
+
+# ── Extracción dinámica de keywords desde títulos vistos ─────────────────────
+#
+# Cuando el bot recorre las páginas de ofertas extrae los títulos de los cards.
+# Esta función analiza esos títulos y genera nuevas keywords que aún no están en
+# la cola, incorporándolas al run actual para mejor cobertura.
+#
+# Ejemplo:  "Desarrollador React Native Junior (Chile, Remoto)"
+#           → detecta "react native" → genera "react native developer junior"
+
+# Mapa: fragmento encontrado en el título → término de búsqueda base
+_TECH_PATTERN_MAP: list[tuple[str, str]] = [
+    # Frontend específico
+    ("react native",      "react native developer"),
+    ("react",             "react developer"),
+    ("vue.js",            "vue developer"),
+    ("vue ",              "vue developer"),
+    ("angular",           "angular developer"),
+    ("next.js",           "nextjs developer"),
+    ("nextjs",            "nextjs developer"),
+    ("svelte",            "svelte developer"),
+    ("flutter",           "flutter developer"),
+    # Backend específico
+    ("django",            "django developer"),
+    ("flask",             "flask developer"),
+    ("fastapi",           "fastapi developer"),
+    ("spring boot",       "spring developer"),
+    ("spring",            "spring developer"),
+    ("laravel",           "laravel developer"),
+    ("nestjs",            "nestjs developer"),
+    ("express",           "node developer"),
+    ("ruby on rails",     "rails developer"),
+    ("rails",             "rails developer"),
+    # Mobile
+    ("android",           "android developer"),
+    ("ios developer",     "ios developer"),
+    ("kotlin",            "kotlin developer"),
+    ("swift",             "swift developer"),
+    ("xamarin",           "mobile developer"),
+    # Data / BI / ML
+    ("data engineer",     "data engineer"),
+    ("data scientist",    "data scientist"),
+    ("machine learning",  "machine learning engineer"),
+    ("deep learning",     "machine learning engineer"),
+    ("inteligencia artificial", "machine learning engineer"),
+    ("power bi",          "power bi analyst"),
+    ("tableau",           "tableau analyst"),
+    ("looker",            "data analyst"),
+    ("databricks",        "data engineer"),
+    ("spark",             "data engineer"),
+    # Cloud / DevOps
+    ("devops",            "devops engineer"),
+    ("sre",               "devops engineer"),
+    ("cloud engineer",    "cloud engineer"),
+    ("aws",               "aws developer"),
+    ("azure",             "azure developer"),
+    ("gcp",               "cloud engineer"),
+    ("kubernetes",        "devops engineer"),
+    ("terraform",         "devops engineer"),
+    # QA / Testing
+    ("qa automation",     "qa automation"),
+    ("automatizacion",    "qa automation"),
+    ("automatización",    "qa automation"),
+    ("selenium",          "qa automation"),
+    ("cypress",           "qa automation"),
+    ("playwright",        "qa automation"),
+    ("quality assurance", "qa engineer"),
+    # Seguridad
+    ("ciberseguridad",    "cybersecurity analyst"),
+    ("cybersecurity",     "cybersecurity analyst"),
+    ("seguridad informatica", "cybersecurity analyst"),
+    # ERP / SAP
+    ("sap",               "sap analyst"),
+    ("oracle apex",       "oracle developer"),
+    ("salesforce",        "salesforce developer"),
+    ("odoo",              "odoo developer"),
+    # Infraestructura / Redes
+    ("administrador de redes", "network administrator"),
+    ("soporte de redes",  "network support"),
+    ("linux",             "linux administrator"),
+    # Fullstack / Stack específico
+    ("fullstack",         "fullstack developer"),
+    ("full stack",        "fullstack developer"),
+    ("mern",              "fullstack developer"),
+    ("mean",              "fullstack developer"),
+    ("python",            "python developer"),
+    ("javascript",        "javascript developer"),
+    ("typescript",        "typescript developer"),
+    ("java ",             "java developer"),
+    ("c#",                "dotnet developer"),
+    (".net",              "dotnet developer"),
+    ("golang",            "golang developer"),
+    ("php",               "php developer"),
+    ("sql server",        "database developer"),
+    ("postgresql",        "backend developer"),
+    ("mongodb",           "backend developer"),
+]
+
+# Portales 100% remotos internacionales — nivel en inglés
+_INTL_PORTALS = {"weworkremotely", "remotive", "remoteco"}
+
+
+def _normalize(text: str) -> str:
+    """Normaliza texto para comparación: minúsculas + quitar tildes básicas."""
+    return (text.lower()
+            .replace("á","a").replace("é","e").replace("í","i")
+            .replace("ó","o").replace("ú","u").replace("ñ","n"))
+
+
+def extract_keywords_from_seen_titles(
+    titles: list[str],
+    portal: str,
+    existing_keywords: set[str] | None = None,
+) -> list[dict]:
+    """
+    Extrae nuevas keywords de los títulos de ofertas vistas en el run actual.
+
+    Analiza cada título, detecta tecnologías/roles específicos y genera
+    entradas de keyword con formato KEYWORD_GROUPS.
+
+    Args:
+        titles           : lista de títulos de ofertas vistas (pueden repetirse)
+        portal           : nombre del portal (para saber si usar ES o EN)
+        existing_keywords: set de keywords ya conocidas — no se duplican
+
+    Returns:
+        Lista de dicts {label, keyword, mode, scan} listos para _kw_queue
+    """
+    if not titles:
+        return []
+
+    stats   = _load_stats()
+    known   = set(stats.keys()) | (existing_keywords or set())
+    intl    = portal in _INTL_PORTALS
+    level   = "entry level" if intl else "junior"
+
+    # Contar cuántas veces aparece cada tech en los títulos (mínimo 2 para generar)
+    tech_counter: dict[str, int] = {}
+    for title in titles:
+        norm = _normalize(title)
+        for fragment, base_term in _TECH_PATTERN_MAP:
+            if fragment in norm:
+                tech_counter[base_term] = tech_counter.get(base_term, 0) + 1
+
+    generated: list[dict] = []
+    for base_term, count in sorted(tech_counter.items(), key=lambda x: -x[1]):
+        if count < 1:          # al menos 1 oferta con esta tech
+            continue
+        candidate     = f"{base_term} {level}"
+        candidate_key = candidate.lower().strip()
+        if candidate_key in known:
+            continue
+
+        # Registrar en stats con source='scan_extracted'
+        if candidate_key not in stats:
+            stats[candidate_key] = {
+                "source": f"scan_extracted:{portal}",
+                "added":  str(date.today()),
+                "portals": {},
+            }
+        known.add(candidate_key)
+
+        label = _infer_label(base_term)
+        generated.append({
+            "label":   label,
+            "keyword": candidate,
+            "mode":    "it",
+            "scan":    True,
+        })
+        log.info("[KW_SCAN_EXTRACT] '%s' extraida de %d titulos en %s",
+                 candidate, count, portal)
+        print(f"  [KW_SCAN] '{candidate}' detectada en {count} oferta(s) -- añadida a la cola")
+
+        if len(generated) >= 5:   # máximo 5 nuevas keywords por run de keyword
+            break
+
+    if generated:
+        _save_stats(stats)
+
+    return generated
 
 
 # ── Resumen estadístico (para dashboard / logs) ───────────────────────────────

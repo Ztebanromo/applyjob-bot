@@ -190,6 +190,9 @@ Ejemplos:
         portal_list = list(SITE_CONFIG.keys())
     elif args.portal:
         portal_list = [p.strip() for p in args.portal.split(",") if p.strip()]
+    elif args.multi_keyword:
+        # Sin --portal explícito en modo multi-keyword → usar todos los portales activos
+        portal_list = list(_ALL_PORTALS)
 
     if portal_list:
         print(f"\n[SISTEMA] Iniciando ejecución para: {', '.join(portal_list).upper()}\n")

@@ -111,7 +111,7 @@ SITE_CONFIG = {
         "selector_titulo_oferta":    "h1.gb-landing-cover__title, h1[class*='title'], h1",
         "tipo_postulacion":          "externa",
         "max_offers_per_run":        15,
-        "requires_login":            False,
+        "requires_login":            True,   # Siempre verificar sesión antes de buscar
     },
     "chiletrabajos": {
         # ChileTrabajos requiere cuenta gratuita para postular.
@@ -142,6 +142,57 @@ SITE_CONFIG = {
         "tipo_postulacion":          "directa",
         "max_offers_per_run":        15,
         "requires_login":            True,
+    },
+
+    # ── Portales remotos internacionales ──────────────────────────────────────
+    # Sin login, postulación siempre externa al ATS de la empresa.
+    # Filtros de horario/zona NO aplican (son 100% remote worldwide).
+
+    "weworkremotely": {
+        # El portal de trabajo remoto más grande del mundo (~200k visitas/mes).
+        # HTML estático (no SPA) — selectores muy estables.
+        # Categoría IT: /categories/remote-programming-jobs
+        # Búsqueda: /remote-jobs/search?term=<keyword>
+        "url_busqueda":              "https://weworkremotely.com/remote-jobs/search?term=junior+developer",
+        "selector_oferta":           "section.jobs li a[href*='/remote-jobs/']",
+        "selector_boton_aplicar":    "a.button:has-text('Apply'), a:has-text('Apply for this Job')",
+        "selector_siguiente_pagina": None,
+        "selector_titulo_oferta":    "h2.listing-header-container, h2[class*='listing'], h1",
+        "tipo_postulacion":          "externa",
+        "max_offers_per_run":        20,
+        "requires_login":            False,
+        "remote_intl":               True,   # skip filtros de zona/horario Chile
+        "lang":                      "en",
+    },
+    "remotive": {
+        # Directorio curado 100% remoto, fuerte en IT/Dev/QA.
+        # Next.js SSR — espera networkidle antes de extraer cards.
+        # Categorías: /remote-jobs/software-dev  /remote-jobs/qa  /remote-jobs/devops-sysadmin
+        "url_busqueda":              "https://remotive.com/remote-jobs/software-dev?query=junior+developer",
+        "selector_oferta":           "li[data-id] a, a[href*='/remote-jobs/software-dev/']",
+        "selector_boton_aplicar":    "a:has-text('Apply for this job'), a:has-text('Apply Now')",
+        "selector_siguiente_pagina": None,   # scroll infinito en SPA — una sola página
+        "selector_titulo_oferta":    "h1",
+        "tipo_postulacion":          "externa",
+        "max_offers_per_run":        20,
+        "requires_login":            False,
+        "remote_intl":               True,
+        "lang":                      "en",
+    },
+    "remoteco": {
+        # Curado por humanos, alta calidad, acepta LATAM explícitamente.
+        # WordPress + WP Job Manager — HTML muy estable.
+        # Marcado por región: "Worldwide" / "Latin America" / "USA Only" (se filtra USA-only).
+        "url_busqueda":              "https://remote.co/remote-jobs/search/?search_keywords=junior+developer",
+        "selector_oferta":           ".job_listing",
+        "selector_boton_aplicar":    "a.application_button, a:has-text('Apply For Job')",
+        "selector_siguiente_pagina": "a.next, a[rel='next']",
+        "selector_titulo_oferta":    "h1.job_title, h1",
+        "tipo_postulacion":          "externa",
+        "max_offers_per_run":        15,
+        "requires_login":            False,
+        "remote_intl":               True,
+        "lang":                      "en",
     },
 }
 
@@ -670,6 +721,80 @@ def _gob_slug_url(keyword: str) -> str:
     return f"https://www.getonbrd.com/{slug}"
 
 
+# ---------------------------------------------------------------------------
+# Conversor de keywords Spanish → English para portales internacionales
+# ---------------------------------------------------------------------------
+_ES_TO_EN_KW: dict[str, str] = {
+    # Desarrollo general
+    "desarrollador":            "developer",
+    "programador":              "programmer",
+    "developer":                "developer",
+    "ingeniero de software":    "software engineer",
+    "software developer":       "software developer",
+    # Stack / lenguajes
+    "python":                   "python",
+    "javascript":               "javascript",
+    "sql":                      "sql",
+    "desarrollador web":        "web developer",
+    "desarrollador backend":    "backend developer",
+    "desarrollador frontend":   "frontend developer",
+    "desarrollador fullstack":  "fullstack developer",
+    "desarrollador react":      "react developer",
+    "desarrollador node":       "node.js developer",
+    # Analista
+    "analista programador":     "software developer",
+    "analista de sistemas":     "systems analyst",
+    "analista funcional":       "functional analyst",
+    "analista sap":             "sap analyst",
+    "analista erp":             "erp analyst",
+    "ingeniero en sistemas":    "systems engineer",
+    # Datos
+    "analista de datos":        "data analyst",
+    "analista bi":              "bi analyst",
+    "data analyst":             "data analyst",
+    # Soporte
+    "soporte tecnico":          "technical support",
+    "soporte ti":               "it support",
+    "help desk":                "help desk",
+    "mesa de ayuda":            "help desk",
+    "tecnico informatica":      "it technician",
+    # QA
+    "qa":                       "qa engineer",
+    "tester":                   "qa tester",
+    "quality assurance":        "quality assurance",
+    # Egresados → entry level
+    "egresado informatica":     "junior developer",
+    "egresado ti":              "junior it",
+    "egresado analista programador": "junior software developer",
+    "recien egresado sistemas": "entry level developer",
+    "recien egresado informatica": "entry level developer",
+}
+
+def _to_en_keyword(keyword: str) -> str:
+    """
+    Convierte un keyword en español a su equivalente en inglés
+    para portales internacionales (We Work Remotely, Remotive, Remote.co).
+    Mantiene 'junior' / 'entry level' al final.
+    """
+    kw_low = keyword.strip().lower()
+    # Buscar la coincidencia más larga primero
+    best_en = None
+    for es_term, en_term in sorted(_ES_TO_EN_KW.items(), key=lambda x: -len(x[0])):
+        if es_term in kw_low:
+            best_en = en_term
+            break
+    if best_en is None:
+        # Fallback: limpiar término y agregar junior
+        base = kw_low.replace("junior", "").replace("trainee", "").replace("sin experiencia", "").strip()
+        best_en = base if base else "developer"
+    # Agregar nivel de experiencia
+    level = "junior" if "junior" in kw_low or "trainee" in kw_low else "entry level"
+    # Evitar duplicados ("junior developer junior")
+    if level in best_en.lower():
+        return best_en
+    return f"{best_en} {level}"
+
+
 def build_config_for_keyword(portal_key: str, keyword: str) -> dict:
     """
     Devuelve una copia de SITE_CONFIG[portal_key] con la URL reconstruida
@@ -694,6 +819,10 @@ def build_config_for_keyword(portal_key: str, keyword: str) -> dict:
     exp_suffix_laborum = "-sin-experiencia" if is_bodega else "-seniority-junior-sin-experiencia"
     exp_ct_query       = "sin+experiencia"  if is_bodega else "junior+sin+experiencia"
 
+    # Portales internacionales: keyword en inglés
+    en_kw         = _to_en_keyword(keyword)
+    en_kw_encoded = quote_plus(en_kw)
+
     url_map = {
         "indeed":        f"https://cl.indeed.com/jobs?q={kw_encoded}{exp_indeed}&l=Santiago%2C+Regi%C3%B3n+Metropolitana&radius=25&explvl=entry_level&sort=date",
         "computrabajo":  f"https://cl.computrabajo.com/trabajo-de-{kw_dash}{exp_suffix_ct}",
@@ -703,10 +832,12 @@ def build_config_for_keyword(portal_key: str, keyword: str) -> dict:
         # ChileTrabajos: URL de búsqueda directa por keyword
         "chiletrabajos": f"https://www.chiletrabajos.cl/empleos?q={kw_encoded}&experiencia=sin-experiencia",
         # GetOnBoard: usa URLs tipo slug (/jobs-{slug}), no soporta ?q= ni seniority en URL.
-        # El mapa cubre exactamente los keywords IT del KEYWORD_GROUPS.
-        # El filtro de seniority se aplica en el bot (getonyboard.py) leyendo el texto del card.
         "getonyboard":   _gob_slug_url(keyword),
         "linkedin":      f"https://www.linkedin.com/jobs/search/?keywords={kw_encoded}&location=Santiago%2C+Regi%C3%B3n+Metropolitana%2C+Chile&f_AL=true&f_E=2%2C3",
+        # Portales remotos internacionales — usar keyword en inglés
+        "weworkremotely": f"https://weworkremotely.com/remote-jobs/search?term={en_kw_encoded}",
+        "remotive":       f"https://remotive.com/remote-jobs/software-dev?query={en_kw_encoded}",
+        "remoteco":       f"https://remote.co/remote-jobs/search/?search_keywords={en_kw_encoded}",
     }
     if portal_key in url_map:
         config["url_busqueda"] = url_map[portal_key]

@@ -28,6 +28,32 @@ socketio = SocketIO(
 # Asegurar directorios
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 
+# ── Archivo señal de parada (compartido con engine.py) ────────────────────────
+# gui_server escribe este archivo; engine.py lo detecta y cierra el browser limpio
+_BASE_DIR        = os.path.dirname(os.path.abspath(__file__))
+_DATA_DIR        = os.path.join(_BASE_DIR, "data")
+STOP_SIGNAL_PATH = os.path.join(_DATA_DIR, "STOP_SIGNAL")
+os.makedirs(_DATA_DIR, exist_ok=True)
+
+def _write_stop_signal():
+    """Escribe el archivo señal para que engine.py cierre el browser limpiamente."""
+    try:
+        with open(STOP_SIGNAL_PATH, "w") as f:
+            f.write(str(os.getpid()))
+    except Exception:
+        pass
+
+def _clear_stop_signal():
+    """Elimina el archivo señal tras confirmar que el proceso murió."""
+    try:
+        if os.path.exists(STOP_SIGNAL_PATH):
+            os.remove(STOP_SIGNAL_PATH)
+    except Exception:
+        pass
+
+# Limpiar señal residual al iniciar (por si el servidor se reinició abruptamente)
+_clear_stop_signal()
+
 # Estado global thread-safe
 class BotState:
     def __init__(self):
@@ -149,9 +175,19 @@ class BotState:
             prog_match = re.search(r"Aplicadas (\d+)/(\d+) en (\w+)", message)
             if prog_match:
                 socketio.emit('portal_progress', {
-                    "portal": prog_match.group(3).lower(),
-                    "applied": int(prog_match.group(1)),
-                    "max": int(prog_match.group(2)),
+                    "portal":   prog_match.group(3).lower(),
+                    "applied":  int(prog_match.group(1)),
+                    "max":      int(prog_match.group(2)),
+                    "finished": False,
+                }, namespace='/bot')
+        elif "[PROGRESO_FINAL]" in message:
+            prog_match = re.search(r"Aplicadas (\d+)/(\d+) en (\w+)", message)
+            if prog_match:
+                socketio.emit('portal_progress', {
+                    "portal":   prog_match.group(3).lower(),
+                    "applied":  int(prog_match.group(1)),
+                    "max":      int(prog_match.group(2)),
+                    "finished": True,
                 }, namespace='/bot')
 
     def _portal_from_message(self, message):
@@ -197,15 +233,45 @@ class BotState:
             }
 
     def _kill_proc(self, proc):
-        try:
-            subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)],
-                           capture_output=True, timeout=5)
-        except Exception:
-            pass
-        try:
-            proc.kill()
-        except Exception:
-            pass
+        """
+        Mata el proceso y todos sus hijos.
+        1. Escribe archivo señal → engine.py cierra browser Playwright limpiamente
+        2. Espera hasta 2s para shutdown limpio
+        3. Si aún vive: taskkill /F /T + terminate + kill (forzado)
+        4. Limpia el archivo señal
+        """
+        _write_stop_signal()
+        pid = getattr(proc, 'pid', None)
+
+        # Dar 2 segundos para que engine.py detecte la señal y cierre solo
+        import time as _t
+        for _ in range(10):            # 10 x 200ms = 2s
+            if proc.poll() is not None:
+                break
+            _t.sleep(0.2)
+
+        # Si todavía vive → kill forzado
+        if proc.poll() is None:
+            if pid:
+                try:
+                    subprocess.run(
+                        ["taskkill", "/F", "/T", "/PID", str(pid)],
+                        capture_output=True, timeout=5
+                    )
+                except Exception:
+                    pass
+            try:
+                proc.terminate()
+            except Exception:
+                pass
+            try:
+                _t.sleep(0.3)
+                if proc.poll() is None:
+                    proc.kill()
+            except Exception:
+                pass
+
+        _clear_stop_signal()
 
     def stop_process(self):
         procs = []
@@ -272,7 +338,12 @@ class BotState:
 state = BotState()
 
 _SESSIONS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'sessions')
-_KNOWN_PORTALS = ['chiletrabajos', 'laborum', 'getonyboard', 'computrabajo', 'linkedin']
+_KNOWN_PORTALS = [
+    # Portales Chile
+    'chiletrabajos', 'laborum', 'getonyboard', 'computrabajo', 'linkedin',
+    # Portales remotos internacionales (sin login, postulación externa)
+    'weworkremotely', 'remotive', 'remoteco',
+]
 # Indeed excluido: bloqueado por Cloudflare Turnstile
 _PERSISTED_ENV_KEYS = {
     'USER_KEYWORDS',
@@ -394,21 +465,7 @@ def run_bot_thread(portals, runtime_env=None):
                 env=child_env
             )
             state.set_process(process)
-            
-            for line in iter(process.stdout.readline, ""):
-                if line:
-                    state.add_log(line)
-                if state.stop_requested:
-                    try: process.kill()
-                    except: pass
-                    break
-            
-            process.stdout.close()
-            rc = process.wait()
-            
-            if rc != 0 and not state.stop_requested:
-                state.add_log(f"\n[FALLO] La ejecución unificada terminó con error (código {rc}).\n")
-            
+            _stream_process(process, "", lambda: None)
         except Exception as e:
             state.add_log(f"\n[FALLO] Error crítico en ejecución: {str(e)}\n")
     finally:
@@ -456,17 +513,64 @@ def _make_child_env(extra=None):
         e.update({k: v for k, v in extra.items() if v})
     return e
 
-def _stream_process(proc, on_stop_check, on_finish_log, finish_cb):
-    """Lee stdout del proceso línea a línea. Mata si stop_requested."""
-    for line in iter(proc.stdout.readline, ""):
-        if line:
-            state.add_log(line)
-        if on_stop_check():
+def _stream_process(proc, finish_log: str, finish_cb, stop_check=None):
+    """
+    Lee stdout sin bloquear el thread principal.
+    Usa un reader-thread + queue para que el check de stop_requested
+    corra cada 200ms sin importar si el proceso está imprimiendo o no.
+    """
+    import queue as _queue
+
+    q = _queue.Queue()
+
+    def _reader():
+        try:
+            for line in iter(proc.stdout.readline, ""):
+                q.put(line)
+        except Exception:
+            pass
+        finally:
+            q.put(None)          # sentinel — proceso terminó
+
+    threading.Thread(target=_reader, daemon=True).start()
+
+    _stop = stop_check or (lambda: state.stop_requested)
+
+    while True:
+        if _stop():
             state._kill_proc(proc)
+            # Vaciar la queue para no dejar el reader-thread colgado
+            while True:
+                try: q.get_nowait()
+                except: break
             break
-    proc.stdout.close()
-    proc.wait()
-    state.add_log(on_finish_log)
+        try:
+            line = q.get(timeout=0.2)
+            if line is None:        # proceso terminó normalmente
+                break
+            if line:
+                state.add_log(line)
+        except:
+            if proc.poll() is not None:   # proceso ya murió
+                # Drenar lo que quede
+                while True:
+                    try:
+                        line = q.get_nowait()
+                        if line and line is not None:
+                            state.add_log(line)
+                    except:
+                        break
+                break
+
+    try:
+        proc.stdout.close()
+    except Exception:
+        pass
+    try:
+        proc.wait(timeout=3)
+    except Exception:
+        pass
+    state.add_log(finish_log)
     finish_cb()
 
 
@@ -490,18 +594,13 @@ def api_scan():
                                     text=True, encoding='utf-8', errors='replace', bufsize=1,
                                     env=_make_child_env())
             state.set_scan_process(proc)
-            for line in iter(proc.stdout.readline, ""):
-                if line:
-                    state.add_log(line)
-                if state.stop_requested:
-                    state._kill_proc(proc)
-                    break
-            proc.stdout.close()
-            proc.wait()
-        finally:
-            state.add_log("\n[SCAN] Escaneo completado.\n")
-            if state.finish_scan(run_id):
-                socketio.emit('bot_status', state.get_status() | {"status": "scan_finished"}, namespace='/bot')
+            def _finish():
+                if state.finish_scan(run_id):
+                    socketio.emit('bot_status', state.get_status() | {"status": "scan_finished"}, namespace='/bot')
+            _stream_process(proc, "\n[SCAN] Escaneo completado.\n", _finish)
+        except Exception as e:
+            state.add_log(f"\n[SCAN] Error: {e}\n")
+            state.finish_scan(run_id)
 
     threading.Thread(target=_run, daemon=True).start()
     return jsonify({'ok': True, 'msg': f'Scan iniciado para {label}'})
@@ -532,18 +631,13 @@ def api_postular():
                                     text=True, encoding='utf-8', errors='replace', bufsize=1,
                                     env=_make_child_env(runtime_env))
             state.set_apply_process(proc)
-            for line in iter(proc.stdout.readline, ""):
-                if line:
-                    state.add_log(line)
-                if state.stop_requested:
-                    state._kill_proc(proc)
-                    break
-            proc.stdout.close()
-            proc.wait()
-        finally:
-            state.add_log("\n[POSTULAR] Postulación completada.\n")
-            if state.finish_apply(run_id):
-                socketio.emit('bot_status', state.get_status() | {"status": "finished"}, namespace='/bot')
+            def _finish():
+                if state.finish_apply(run_id):
+                    socketio.emit('bot_status', state.get_status() | {"status": "finished"}, namespace='/bot')
+            _stream_process(proc, "\n[POSTULAR] Postulación completada.\n", _finish)
+        except Exception as e:
+            state.add_log(f"\n[POSTULAR] Error: {e}\n")
+            state.finish_apply(run_id)
 
     threading.Thread(target=_run, daemon=True).start()
     return jsonify({'ok': True, 'msg': f'Postulación iniciada para {label}'})
@@ -569,18 +663,13 @@ def api_apply_queue():
                                     text=True, encoding='utf-8', errors='replace', bufsize=1,
                                     env=_make_child_env())
             state.set_apply_process(proc)
-            for line in iter(proc.stdout.readline, ""):
-                if line:
-                    state.add_log(line)
-                if state.stop_requested:
-                    state._kill_proc(proc)
-                    break
-            proc.stdout.close()
-            proc.wait()
-        finally:
-            state.add_log("\n[APPLY-QUEUE] Completado.\n")
-            if state.finish_apply(run_id):
-                socketio.emit('bot_status', state.get_status() | {"status": "finished"}, namespace='/bot')
+            def _finish():
+                if state.finish_apply(run_id):
+                    socketio.emit('bot_status', state.get_status() | {"status": "finished"}, namespace='/bot')
+            _stream_process(proc, "\n[APPLY-QUEUE] Completado.\n", _finish)
+        except Exception as e:
+            state.add_log(f"\n[APPLY-QUEUE] Error: {e}\n")
+            state.finish_apply(run_id)
 
     threading.Thread(target=_run, daemon=True).start()
     return jsonify({'ok': True, 'msg': f'Apply-queue iniciado para {label}'})
@@ -1020,16 +1109,42 @@ _SCAN_QUEUE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'dat
 
 @app.route('/api/scan-queue')
 def api_scan_queue():
-    """Devuelve cantidad y primeras entradas de la cola de ofertas pendientes."""
+    """Devuelve todos los items de la cola de scan para mostrar en el panel."""
     try:
         if not os.path.exists(_SCAN_QUEUE_PATH):
             return jsonify({"count": 0, "items": []})
         with open(_SCAN_QUEUE_PATH, encoding='utf-8') as f:
             queue = json.load(f)
-        items = [{"url": e.get("url",""), "title": e.get("title",""), "portal": e.get("portal","")} for e in queue[:10]]
-        return jsonify({"count": len(queue), "items": items})
+        items = [
+            {
+                "url":    e.get("url", ""),
+                "title":  e.get("title", "") or e.get("url", ""),
+                "portal": e.get("portal", ""),
+                "unanswered": e.get("unanswered_questions", []),
+            }
+            for e in queue if e.get("url")
+        ]
+        return jsonify({"count": len(items), "items": items})
     except Exception as e:
         return jsonify({"count": 0, "items": [], "error": str(e)})
+
+
+@app.route('/api/scan-queue/dismiss', methods=['POST'])
+def api_scan_queue_dismiss():
+    """Elimina una URL de la cola de scan."""
+    url = (request.json or {}).get('url', '').strip()
+    if not url:
+        return jsonify({'ok': False}), 400
+    try:
+        if os.path.exists(_SCAN_QUEUE_PATH):
+            with open(_SCAN_QUEUE_PATH, encoding='utf-8') as f:
+                queue = json.load(f)
+            queue = [e for e in queue if e.get('url') != url]
+            with open(_SCAN_QUEUE_PATH, 'w', encoding='utf-8') as f:
+                json.dump(queue, f, ensure_ascii=False, indent=2)
+        return jsonify({'ok': True})
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e)}), 500
 
 
 @app.route('/api/pending-questions')
@@ -1233,31 +1348,42 @@ def handle_start(data):
                                     text=True, encoding='utf-8', errors='replace', bufsize=1,
                                     env=_make_child_env(runtime_env))
             state.set_apply_process(proc)
-            for line in iter(proc.stdout.readline, ""):
-                if line:
-                    state.add_log(line)
-                if state.stop_requested:
-                    state._kill_proc(proc)
-                    break
-            proc.stdout.close()
-            proc.wait()
-        finally:
-            state.add_log("\n[POSTULAR] Postulación completada.\n")
-            if state.finish_apply(run_id):
-                socketio.emit('bot_status', state.get_status() | {"status": "finished"}, namespace='/bot')
+            def _finish():
+                if state.finish_apply(run_id):
+                    socketio.emit('bot_status', state.get_status() | {"status": "finished"}, namespace='/bot')
+            # _stream_process verifica stop_requested cada 200ms — garantiza stop responsivo
+            _stream_process(proc, "\n[POSTULAR] Postulación completada.\n", _finish)
+        except Exception as e:
+            state.add_log(f"\n[POSTULAR] Error crítico: {e}\n")
+            state.finish_apply(run_id)
 
     threading.Thread(target=_run, daemon=True).start()
     socketio.emit('bot_status', state.get_status() | {"status": "starting"}, namespace='/bot')
 
-@socketio.on('stop_master', namespace='/bot')
-def handle_stop():
+def _do_stop():
+    """Lógica compartida de stop (usada por HTTP y SocketIO)."""
     killed = state.stop_process()
     state.add_log("\n[SISTEMA] Deteniendo ejecución a solicitud del usuario.\n")
-    # Pequeña pausa para que los procesos hijos terminen antes de notificar al frontend
     def _emit_stopped():
-        time.sleep(1.2)
+        time.sleep(0.8)
+        # Limpiar stop_requested para que el próximo run no quede pegado
+        with state.lock:
+            state.stop_requested = False
         socketio.emit('bot_status', state.get_status() | {"status": "stopped"}, namespace='/bot')
     threading.Thread(target=_emit_stopped, daemon=True).start()
+    return killed
+
+
+@socketio.on('stop_master', namespace='/bot')
+def handle_stop():
+    _do_stop()
+
+
+@app.route('/api/stop', methods=['POST'])
+def api_stop():
+    """Endpoint HTTP de stop — fallback por si el SocketIO no llega."""
+    killed = _do_stop()
+    return jsonify({'ok': True, 'killed': killed})
 
 if __name__ == '__main__':
     port = 5000
