@@ -1338,12 +1338,21 @@ def handle_start(data):
     if data.get('max_offers'):
         runtime_env['USER_MAX_OFFERS'] = clean_form_value(data.get('max_offers'))
 
+    persistent = bool(data.get('persistent', True))  # persistente por defecto
+    min_per    = int(data.get('min_per_portal', 1))
+
     def _run():
         run_id = state.start_apply()
         socketio.emit('bot_status', state.get_status() | {"status": "started"}, namespace='/bot')
         try:
-            cmd = [sys.executable, "-u", "main.py", "--multi-keyword",
-                   "--portal", ",".join(portals)]
+            if persistent:
+                cmd = [sys.executable, "-u", "main.py",
+                       "--persistent",
+                       "--portal", ",".join(portals),
+                       "--min-per-portal", str(min_per)]
+            else:
+                cmd = [sys.executable, "-u", "main.py", "--multi-keyword",
+                       "--portal", ",".join(portals)]
             proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                     text=True, encoding='utf-8', errors='replace', bufsize=1,
                                     env=_make_child_env(runtime_env))

@@ -28,7 +28,7 @@ if sys.stderr.encoding and sys.stderr.encoding.lower() != "utf-8":
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 
 from bot.config import SITE_CONFIG
-from bot.engine import run_bot, run_bot_multi_keywords, run_scan_pass, run_apply_queue
+from bot.engine import run_bot, run_bot_multi_keywords, run_scan_pass, run_apply_queue, run_persistent_session
 from bot.logger import configure_logging
 
 
@@ -121,6 +121,10 @@ Ejemplos:
         help="Pasada 1: escanea ofertas y recolecta preguntas SIN postular. Usa con --portal.")
     parser.add_argument("--apply-queue", action="store_true",
         help="Pasada 2: aplica a ofertas en cola con preguntas ya respondidas. Usa con --portal.")
+    parser.add_argument("--persistent", action="store_true",
+        help="Cicla portales hasta que TODOS tengan ≥1 postulación. Usa con --portal o --run-all.")
+    parser.add_argument("--min-per-portal", type=int, default=1,
+        help="Mínimo de postulaciones por portal para parar en modo --persistent (default: 1)")
 
     args = parser.parse_args()
 
@@ -198,7 +202,21 @@ Ejemplos:
         print(f"\n[SISTEMA] Iniciando ejecución para: {', '.join(portal_list).upper()}\n")
         total_global = 0
 
-        if args.multi_keyword:
+        if args.persistent:
+            # ── Modo persistente: cicla portales hasta ≥min_per_portal en cada uno ──
+            valid_portals = [p for p in portal_list if p in SITE_CONFIG]
+            if args.max is not None:
+                for p in valid_portals:
+                    SITE_CONFIG[p]["max_offers_per_run"] = args.max
+            result = run_persistent_session(
+                portals         = valid_portals,
+                dry_run         = args.dry_run,
+                headless        = args.headless,
+                min_per_portal  = args.min_per_portal,
+            )
+            total_global = sum(result.values())
+
+        elif args.multi_keyword:
             # multi-keyword: cada portal abre su propio sync_playwright internamente
             for portal in portal_list:
                 if portal not in SITE_CONFIG:
@@ -208,11 +226,12 @@ Ejemplos:
                 try:
                     if args.max is not None:
                         SITE_CONFIG[portal]["max_offers_per_run"] = args.max
-                    run_bot_multi_keywords(
+                    applied = run_bot_multi_keywords(
                         portal_name = portal,
                         dry_run     = args.dry_run,
                         headless    = args.headless,
                     )
+                    total_global += (applied or 0)
                 except Exception as e:
                     print(f"Error crítico en portal {portal}: {e}")
         else:

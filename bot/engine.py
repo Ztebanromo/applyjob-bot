@@ -2217,10 +2217,19 @@ def _retry_countdown(wait_secs: int, portal: str) -> None:
         print(f"  [RETRY] {portal.upper()}: esperando {mins0} min antes de reintentar...", flush=True)
 
 
-def run_bot_multi_keywords(portal_name: str, dry_run: bool = False, headless: bool = False) -> None:
+def run_bot_multi_keywords(
+    portal_name: str,
+    dry_run: bool = False,
+    headless: bool = False,
+    no_retry: bool = False,
+) -> int:
     """
     Abre el browser UNA VEZ y ejecuta una búsqueda por cada keyword del KEYWORD_GROUPS.
     Al compartir el contexto del browser, Cloudflare/login solo se resuelve una vez.
+
+    no_retry=True: desactiva el retry interno (esperas de 15→10→5 min).
+    Úsalo en modo persistente donde el loop externo maneja los reintentos
+    pasando al siguiente portal en lugar de esperar.
 
     Tiempo por keyword dinámico: ≤5→25 min, ≤10→20 min, ≤15→15 min, ≤20→10 min, >20→5 min.
     Si termina con 0 postulaciones → reintenta tras 15 min, luego 10 min, luego 5 min.
@@ -2396,7 +2405,8 @@ def run_bot_multi_keywords(portal_name: str, dry_run: bool = False, headless: bo
 
         # ── Retry loop: si 0 postulaciones → esperar y reintentar ───────────────
         # Primer reintento: 15 min. Cada fallo siguiente resta 5 min (10→5→0→fin).
-        _retry_wait  = _RETRY_WAIT_INITIAL
+        # En modo no_retry el loop corre una sola vez y sale inmediatamente.
+        _retry_wait  = 0 if no_retry else _RETRY_WAIT_INITIAL
         _retry_count = 0
 
         while True:   # retry loop — sale con break en éxito o sin más reintentos
@@ -2613,6 +2623,7 @@ def run_bot_multi_keywords(portal_name: str, dry_run: bool = False, headless: bo
 
     # Emitir progreso final con flag finished=True para que el dashboard coloree
     print(f"[PROGRESO_FINAL] Aplicadas {total_applied}/{_total_max_target} en {portal_name.upper()}")
+    return total_applied
 
     if total_applied < MIN_APPLIES_TO_KEEP_SESSION:
         print(f"\n[SIN POSTULACIONES] {portal_name.upper()} termino con {total_applied}/{_total_max_target} postulaciones reales "
@@ -2626,6 +2637,119 @@ def run_bot_multi_keywords(portal_name: str, dry_run: bool = False, headless: bo
     else:
         print(f"\n[OK] {portal_name.upper()} — {total_applied}/{_total_max_target} postulaciones reales. "
               f"Sesion guardada.")
+
+
+def run_persistent_session(
+    portals: list[str],
+    dry_run: bool = False,
+    headless: bool = False,
+    min_per_portal: int = 1,
+    max_cycles: int = 10,
+) -> dict:
+    """
+    Loop persistente de postulaciones:
+    - Cicla por los portales seleccionados hasta que TODOS tengan ≥ min_per_portal postulaciones.
+    - Si un portal da 0 → pasa al siguiente SIN esperar (no_retry=True).
+    - Después de cada ciclo completo:
+        · Las keywords con found=0 ya fueron retiradas automáticamente por el optimizer.
+        · Se reporta estado por portal.
+        · Si no quedan keywords activas → para.
+    - Para cuando todos los portales alcanzan el mínimo, se detecta señal STOP
+      o se agotan los ciclos máximos.
+    """
+    from .config import KEYWORD_GROUPS
+    from .keyword_optimizer import get_active_groups
+
+    applied_per_portal: dict[str, int] = {p: 0 for p in portals}
+    scan_base = [g for g in KEYWORD_GROUPS if g.get("scan", True)]
+
+    print(f"\n{'='*55}")
+    print(f"[PERSISTENTE] Iniciando sesión persistente")
+    print(f"  Portales : {', '.join(p.upper() for p in portals)}")
+    print(f"  Mínimo   : {min_per_portal} postulación/portal para parar")
+    print(f"  Máx ciclos: {max_cycles}")
+    print(f"{'='*55}\n")
+
+    for cycle in range(1, max_cycles + 1):
+        if _should_stop():
+            print("[PERSISTENTE] Señal de parada detectada. Saliendo.")
+            break
+
+        # Portales que aún no alcanzan el mínimo
+        pending = [p for p in portals if applied_per_portal[p] < min_per_portal]
+        if not pending:
+            break   # todos tienen el mínimo → salir
+
+        print(f"\n{'─'*55}")
+        print(f"[CICLO {cycle}/{max_cycles}] Portales pendientes: {', '.join(p.upper() for p in pending)}")
+        completados = [p for p in portals if p not in pending]
+        if completados:
+            print(f"  ✅ Ya listos: {', '.join(p.upper() for p in completados)}")
+        print(f"{'─'*55}")
+
+        any_keywords_left = False
+        for portal in pending:
+            if _should_stop():
+                break
+
+            # Verificar que el portal tiene keywords activas antes de lanzar el browser
+            active_kws = get_active_groups(scan_base, portal)
+            if not active_kws:
+                print(f"  [CICLO {cycle}] {portal.upper()}: sin keywords activas — saltando.")
+                continue
+            any_keywords_left = True
+
+            print(f"\n  [CICLO {cycle}] ▶ {portal.upper()} — {len(active_kws)} keywords activas")
+            try:
+                portal_applied = run_bot_multi_keywords(
+                    portal_name=portal,
+                    dry_run=dry_run,
+                    headless=headless,
+                    no_retry=True,   # el loop externo maneja el retry pasando al siguiente portal
+                )
+            except SystemExit:
+                print(f"  [CICLO {cycle}] {portal.upper()}: detenido por señal.")
+                break
+            except Exception as exc:
+                log.error("[PERSISTENTE] Error en portal %s ciclo %d: %s", portal, cycle, exc)
+                print(f"  [CICLO {cycle}] {portal.upper()}: error — {exc}")
+                portal_applied = 0
+
+            applied_per_portal[portal] += (portal_applied or 0)
+            emoji = "✅" if applied_per_portal[portal] >= min_per_portal else "⏳"
+            print(f"  {emoji} {portal.upper()}: +{portal_applied or 0} esta vuelta "
+                  f"(acumulado: {applied_per_portal[portal]}/{min_per_portal})")
+
+        if not any_keywords_left:
+            print("\n[PERSISTENTE] Sin keywords activas en ningún portal pendiente. Fin.")
+            break
+
+        # Resumen al final del ciclo
+        done_now  = [p for p in portals if applied_per_portal[p] >= min_per_portal]
+        still_pnd = [p for p in portals if applied_per_portal[p] < min_per_portal]
+        print(f"\n[CICLO {cycle}] Resumen:")
+        for p in portals:
+            cnt = applied_per_portal[p]
+            estado = "✅ LISTO" if cnt >= min_per_portal else f"⏳ {cnt}/{min_per_portal}"
+            print(f"  {p.upper():<18} {estado}")
+
+        if not still_pnd:
+            print(f"\n[PERSISTENTE] ✅ Todos los portales tienen ≥{min_per_portal} postulación. Fin.")
+            break
+
+        if _should_stop():
+            break
+
+    # Resumen final
+    print(f"\n{'='*55}")
+    print("[PERSISTENTE] Sesión terminada:")
+    total = sum(applied_per_portal.values())
+    for p, cnt in applied_per_portal.items():
+        estado = "✅" if cnt >= min_per_portal else "⚠️ "
+        print(f"  {estado} {p.upper():<18} {cnt} postulaciones")
+    print(f"  TOTAL: {total} postulaciones")
+    print(f"{'='*55}\n")
+    return applied_per_portal
 
 
 def run_bot(
