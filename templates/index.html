@@ -865,7 +865,7 @@
                     <span style="color:var(--text-dim);">·</span>
                     <span id="scan-result-questions" style="color:#c4b5fd; font-weight:600;">— preguntas</span>
                     <span id="scan-result-cta" style="margin-left:auto; display:none;">
-                        <button onclick="document.getElementById('postularBtn').click()"
+                        <button onclick="postularQueue()"
                             style="background:linear-gradient(135deg,#059669,#10b981);color:white;border:none;border-radius:7px;padding:0.3rem 0.9rem;cursor:pointer;font-size:0.8rem;font-weight:700;box-shadow:0 2px 8px rgba(16,185,129,0.35);">
                             🚀 Postular a todo
                         </button>
@@ -2637,6 +2637,32 @@
                 _botMode = null;
             }
         };
+
+        // ── POSTULAR QUEUE: aplica SOLO lo que está en scan_queue (pasada 2) ────
+        async function postularQueue() {
+            if (postularBtn.disabled) {
+                setScanStatus('⚠️ Ya hay una postulación en curso. Espera que termine.');
+                return;
+            }
+            const portals = getSelectedPortals();
+            _botMode = 'postular';
+            lockApply();
+            setScanStatus('🚀 Aplicando cola de ofertas escaneadas…');
+            setAction('Apply-queue en progreso…');
+            try {
+                const res = await fetch('/api/apply_queue', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ portals })
+                });
+                const d = await res.json();
+                if (!d.ok) throw new Error(d.msg || 'Error al iniciar apply-queue');
+            } catch(e) {
+                setScanStatus('❌ ' + e.message);
+                unlockApply();
+                _botMode = null;
+            }
+        }
 
         // ── POSTULAR: aplica directamente usando la memoria compartida ────────
         postularBtn.onclick = () => {
