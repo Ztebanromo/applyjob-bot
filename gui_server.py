@@ -1388,6 +1388,43 @@ def handle_stop():
     _do_stop()
 
 
+@app.route('/api/reset-all', methods=['POST'])
+def api_reset_all():
+    """
+    Limpia todo el estado persistente:
+    - Cola de scan (scan_queue.json)
+    - Quick links (quick_links.json)
+    - Restricciones de portales (portal_restrictions.json)
+    - Stats del optimizer de keywords (keyword_stats.json)
+    - Señal de stop (STOP_SIGNAL) si quedó colgada
+    No toca: .env, sessions/, uploads/, logs/, ni la DB de postulaciones.
+    """
+    if state.is_active:
+        return jsonify({'ok': False, 'msg': 'Detén el bot antes de limpiar.'}), 409
+
+    cleared = []
+    errors  = []
+
+    _files = [
+        (_SCAN_QUEUE_PATH,   'Cola de scan'),
+        (_QUICK_LINKS_PATH,  'Quick links'),
+        (_RESTRICTIONS_PATH, 'Restricciones de portales'),
+        (STOP_SIGNAL_PATH,   'Señal de stop'),
+        (os.path.join(_DATA_DIR, 'keyword_stats.json'), 'Stats de keywords'),
+    ]
+    for path, label in _files:
+        try:
+            if os.path.exists(path):
+                os.remove(path)
+                cleared.append(label)
+        except Exception as e:
+            errors.append(f'{label}: {e}')
+
+    state.clear_logs()
+    socketio.emit('bot_status', state.get_status() | {'status': 'reset'}, namespace='/bot')
+    return jsonify({'ok': True, 'cleared': cleared, 'errors': errors})
+
+
 @app.route('/api/stop', methods=['POST'])
 def api_stop():
     """Endpoint HTTP de stop — fallback por si el SocketIO no llega."""

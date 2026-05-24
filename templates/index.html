@@ -806,6 +806,12 @@
                 <div style="display:flex; gap:0.4rem;">
                     <button type="button" class="toolbar-btn" id="selectAllPortalsBtn">Todos</button>
                     <button type="button" class="toolbar-btn" id="clearPortalsBtn">Limpiar</button>
+                    <button type="button" class="toolbar-btn" id="resetAllBtn"
+                        onclick="resetAll()"
+                        style="background:rgba(239,68,68,0.15);color:#f87171;border-color:rgba(239,68,68,0.4);"
+                        title="Limpia colas, estadísticas y deja todo en cero">
+                        🗑 Reset
+                    </button>
                 </div>
             </div>
 
@@ -2701,8 +2707,59 @@
             });
         };
 
+        // ── Reset completo ────────────────────────────────────────────────────
+        async function resetAll() {
+            if (!confirm('⚠️ ¿Limpiar TODO?\n\nEsto eliminará:\n• Cola de ofertas (scan_queue)\n• Quick links\n• Restricciones de portales\n• Estadísticas de keywords\n• Señal de stop\n\nLos contadores y el log se reiniciarán en pantalla.\n¿Continuar?')) return;
+
+            const resetBtn = document.getElementById('resetAllBtn');
+            resetBtn.disabled = true;
+            resetBtn.innerText = '⏳ Limpiando...';
+
+            try {
+                const res = await fetch('/api/reset-all', { method: 'POST' });
+                const data = await res.json();
+                if (data.ok) {
+                    // Reset contadores visuales
+                    ['stat-applied','stat-external','stat-filtered','stat-nonav','stat-errors'].forEach(id => {
+                        const el = document.getElementById(id);
+                        if (el) el.innerText = '0';
+                    });
+                    // Ocultar paneles de scan/cola
+                    const banner = document.getElementById('scan-result-banner');
+                    if (banner) banner.style.display = 'none';
+                    const sqPanel = document.getElementById('sq-panel');
+                    if (sqPanel) sqPanel.style.display = 'none';
+                    const pqPanel = document.getElementById('pq-panel');
+                    if (pqPanel) pqPanel.style.display = 'none';
+                    // Limpiar terminal
+                    logContainer.innerHTML = '';
+                    appendLogLine('[RESET] Sistema limpiado. Todo en cero.');
+                    setScanStatus('🗑 Reset completado — sistema en cero.');
+                    setAction('Reset completado');
+                    setOps(opsState, 'Listo para iniciar', 'ok');
+                    setOps(opsIntervention, 'Ninguna', 'info');
+                    _botMode = null;
+                    setBotControls('idle');
+                } else {
+                    alert('Error al limpiar: ' + (data.error || 'desconocido'));
+                }
+            } catch(e) {
+                alert('Error de red al limpiar: ' + e.message);
+            } finally {
+                resetBtn.disabled = false;
+                resetBtn.innerText = '🗑 Reset';
+            }
+        }
+
         // ── Estado del proceso — scan y apply independientes ──────────────────
         socket.on('bot_status', (data) => {
+            // ── Reset completado desde el backend ──
+            if (data.status === 'reset') {
+                _botMode = null;
+                setBotControls('idle');
+                return;
+            }
+
             // ── Sesión anterior ya corriendo ──
             if (data.status === 'already_running') {
                 unlockBtns();
