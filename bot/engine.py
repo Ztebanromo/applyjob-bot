@@ -679,7 +679,11 @@ _LOGIN_SIGNALS = {
         "input[type='password']",
     ],
     "computrabajo": [
-        # Solo señales de login que NO aparecen en footer cuando logueado
+        # Botón del nav cuando NO hay sesión (más fiable que esperar el form)
+        "a:has-text('Iniciar sesión')",
+        "button:has-text('Iniciar sesión')",
+        "a:has-text('Ingresar')",
+        # Señales del form de login (si navega a la página de login)
         "input[name='email'][placeholder*='mail']",
         "input[type='password']",
         "form[action*='login']",
@@ -716,12 +720,10 @@ _LOGGED_IN_SIGNALS = {
         # — se verifica por ausencia en _is_logged_in con lógica extra
     ],
     "computrabajo": [
-        # Nav del usuario logueado — visible en candidato.cl.computrabajo.com
+        # Solo señales del área privada — NO usar href*/candidato/ (aparece en links públicos)
         "a:has-text('Mi área')",
         "a:has-text('Mi currículum')",
-        "a:has-text('Mis postulaciones')",
         "a:has-text('Mis alertas')",
-        "a[href*='/candidato/']",
         "a[href*='/mis-postulaciones']",
         "a[href*='/mi-curriculum']",
     ],
@@ -759,16 +761,14 @@ _LOGGED_IN_SIGNALS = {
         "a[href*='/myjobs']",
     ],
     "getonyboard": [
-        # Nav logueado en GetOnBoard — avatar o link al perfil del usuario
+        # Solo señales inequívocas de sesión activa (no deben aparecer sin login)
         "a[href*='/workers/me']",
-        "a[href*='/profile']",
-        "img[class*='avatar']",
-        "img[class*='Avatar']",
+        "a[href*='/postulations']",
+        "a:has-text('Mis postulaciones')",
+        "a:has-text('Mi perfil')",
         "div[class*='user-menu']",
         "div[class*='UserMenu']",
-        "a:has-text('Mi perfil')",
-        "a:has-text('Mis postulaciones')",
-        "a:has-text('Ver perfil')",
+        # OJO: NO usar "a[href*='/profile']" — matchea perfiles de empresa en footer
     ],
 }
 
@@ -895,7 +895,43 @@ def _wait_for_login_if_needed(page, portal_name: str, config: dict) -> None:
                     return True
             except Exception:
                 pass
-        # 6. Computrabajo: detectar por presencia de nav del área privada
+        # 6. GetOnBoard: lógica combinada — presencia de nav privado + ausencia de "Ingresa"
+        if portal_name == "getonyboard":
+            try:
+                cur = page.url
+                if "getonbrd.com" in cur:
+                    # Señales POSITIVAS de sesión activa (solo visibles cuando logueado)
+                    for pos_sel in [
+                        "a[href*='/workers/me']",
+                        "a[href*='/postulations']",
+                        "a:has-text('Mis postulaciones')",
+                        "a:has-text('Mi perfil')",
+                        "div[class*='UserMenu']",
+                        "div[class*='user-menu']",
+                    ]:
+                        try:
+                            el = page.query_selector(pos_sel)
+                            if el and el.is_visible():
+                                return True
+                        except Exception:
+                            pass
+                    # Señal NEGATIVA: botón "Ingresa" visible → definitivamente no logueado
+                    for neg_sel in [
+                        "a:has-text('Ingresa')",
+                        "a[href*='/auth/sign_in']",
+                        "a[href*='/auth/sign']",
+                    ]:
+                        try:
+                            el = page.query_selector(neg_sel)
+                            if el and el.is_visible():
+                                return False
+                        except Exception:
+                            pass
+                    # Sin señales claras → asumir no logueado (más seguro que el contrario)
+                    return False
+            except Exception:
+                pass
+        # 7. Computrabajo: detectar por presencia de nav del área privada
         # OJO: el dominio es computrabajo.com (no .cl) — cl. es subdomain
         if portal_name == "computrabajo":
             try:
@@ -905,8 +941,9 @@ def _wait_for_login_if_needed(page, portal_name: str, config: dict) -> None:
                     for pos_sel in [
                         "a:has-text('Mi área')",
                         "a:has-text('Mi currículum')",
-                        "a:has-text('Mis postulaciones')",
-                        "a[href*='/candidato/']",
+                        "a:has-text('Mis alertas')",
+                        "a[href*='/mis-postulaciones']",
+                        "a[href*='/mi-curriculum']",
                     ]:
                         try:
                             el = page.query_selector(pos_sel)
@@ -914,7 +951,19 @@ def _wait_for_login_if_needed(page, portal_name: str, config: dict) -> None:
                                 return True
                         except Exception:
                             pass
-                    # Si ninguna señal positiva → no logueado
+                    # Señal NEGATIVA: botón "Iniciar sesión" visible en el nav → no logueado
+                    for neg_sel in [
+                        "a:has-text('Iniciar sesión')",
+                        "button:has-text('Iniciar sesión')",
+                        "a:has-text('Ingresar')",
+                    ]:
+                        try:
+                            el = page.query_selector(neg_sel)
+                            if el and el.is_visible():
+                                return False
+                        except Exception:
+                            pass
+                    # Sin señales claras → asumir no logueado
                     return False
             except Exception:
                 pass
