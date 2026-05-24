@@ -1320,7 +1320,7 @@ def handle_connect():
 @socketio.on('start_master', namespace='/bot')
 def handle_start(data):
     """Botón Postular → postulación directa independiente (no necesita scan previo)."""
-    print(f"[DEBUG] Solicitud postular recibida: {data}")
+    log.debug("start_master recibido: portals=%s", data.get('portals', []))
     if state.apply_active:
         emit('bot_status', state.get_status() | {"status": "already_running"})
         return
