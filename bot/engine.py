@@ -2182,13 +2182,12 @@ def run_apply_queue(portal_name: str, headless: bool = False) -> None:
         print(f"\n  Quedan en cola: {remaining} — responde el panel naranja y vuelve a correr --apply-queue")
 
 
-# ── Límite de tiempo por portal y retry ─────────────────────────────────────
-# MAX_PORTAL_MINUTES: tiempo máximo por sesión de portal (configurable via .env)
-# RETRY_WAIT_INITIAL: si 0 postulaciones → esperar X min y reintentar
-# RETRY_DECREMENT   : reducir la espera en cada reintento fallido
+# ── Límite de tiempo por portal ──────────────────────────────────────────────
+# El retry-wait fue eliminado: en modo persistente el loop externo pasa al
+# siguiente portal en lugar de esperar. No hay esperas entre portales.
 MAX_PORTAL_MINUTES   = int(os.getenv("MAX_PORTAL_MINUTES", "25"))
-_RETRY_WAIT_INITIAL  = 15 * 60   # 15 min primer reintento
-_RETRY_DECREMENT     = 5  * 60   # -5 min por cada reintento
+_RETRY_WAIT_INITIAL  = 0   # sin espera — el ciclo persistente maneja los reintentos
+_RETRY_DECREMENT     = 0
 
 
 def _retry_countdown(wait_secs: int, portal: str) -> None:
@@ -2584,24 +2583,12 @@ def run_bot_multi_keywords(
             # Progreso de este intento
             print(f"[PROGRESO_FINAL] Aplicadas {total_applied}/{_total_max_target} en {portal_name.upper()}")
 
-            # ── Decisión de reintento ─────────────────────────────────────────
-            if total_applied == 0 and _retry_wait > 0:
-                wait_min = _retry_wait // 60
-                next_wait = max((_retry_wait - _RETRY_DECREMENT) // 60, 0)
-                print(f"\n[RETRY] {portal_name.upper()}: 0 postulaciones en esta tanda.")
-                print(f"  Reintentando en {wait_min} min "
-                      f"(siguiente espera: {next_wait} min | intento #{_retry_count + 2})")
-                _retry_countdown(_retry_wait, portal_name)
-                _retry_wait  -= _RETRY_DECREMENT
-                _retry_count += 1
-                continue   # volver al inicio del retry loop (nueva tanda)
+            # ── Salida inmediata — sin espera, el ciclo persistente reintenta ────
+            if total_applied == 0:
+                print(f"\n[CICLO] {portal_name.upper()}: 0 postulaciones en esta vuelta → siguiente portal.")
             else:
-                if total_applied > 0:
-                    log.info("[RETRY] %s: %d postulaciones. Sin reintento necesario.",
-                             portal_name, total_applied)
-                else:
-                    print(f"\n[RETRY] {portal_name.upper()}: 0 postulaciones. Sin mas reintentos.")
-                break   # salir del retry loop
+                log.info("[CICLO] %s: %d postulaciones. Sesión completada.", portal_name, total_applied)
+            break   # salir siempre — sin espera
 
         # En modo CDP solo cerramos la pestaña, NO el browser del usuario
         if using_cdp:
@@ -2637,6 +2624,49 @@ def run_bot_multi_keywords(
     else:
         print(f"\n[OK] {portal_name.upper()} — {total_applied}/{_total_max_target} postulaciones reales. "
               f"Sesion guardada.")
+
+
+def _keyword_cycle_report(portals: list, scan_base: list, cycle: int) -> None:
+    """
+    Imprime un resumen estadístico de keywords después de cada ciclo:
+    - Top performers (score > 0.5)
+    - Retiradas este ciclo (found=0 → eliminadas por optimizer)
+    - Total activas restantes
+    """
+    from .keyword_optimizer import get_active_groups, get_keyword_score, _load_stats
+
+    stats = _load_stats()
+    print(f"\n[KEYWORDS ciclo {cycle}] Análisis estadístico:")
+
+    for portal in portals:
+        active = get_active_groups(scan_base, portal)
+        n_active = len(active)
+
+        # Retiradas: keywords con status=retired en este portal
+        retired_this_cycle = [
+            kw for kw, v in stats.items()
+            if v.get("portals", {}).get(portal, {}).get("status") == "retired"
+        ]
+
+        # Top performers (score > 0.5 = encontraron algo)
+        scored = sorted(
+            [(g["keyword"], get_keyword_score(g["keyword"], portal)) for g in active],
+            key=lambda x: x[1], reverse=True
+        )
+        top = [(kw, s) for kw, s in scored if s > 0.5][:5]
+        zero = [(kw, s) for kw, s in scored if s <= 0.3]
+
+        print(f"\n  {portal.upper()} — {n_active} keywords activas:")
+        if top:
+            print(f"    🏆 Top: " + " | ".join(f"{kw} ({s:.2f})" for kw, s in top))
+        if zero:
+            print(f"    ⚠️  Sin resultados: " + ", ".join(kw for kw, _ in zero[:5]))
+        if retired_this_cycle:
+            recent = retired_this_cycle[-5:]
+            print(f"    🗑  Retiradas total: {len(retired_this_cycle)} "
+                  f"(últimas: {', '.join(recent)})")
+        if n_active == 0:
+            print(f"    ❌ Sin keywords activas — este portal no se procesará más.")
 
 
 def run_persistent_session(
@@ -2724,14 +2754,16 @@ def run_persistent_session(
             print("\n[PERSISTENTE] Sin keywords activas en ningún portal pendiente. Fin.")
             break
 
-        # Resumen al final del ciclo
-        done_now  = [p for p in portals if applied_per_portal[p] >= min_per_portal]
+        # ── Resumen al final del ciclo ────────────────────────────────────────
         still_pnd = [p for p in portals if applied_per_portal[p] < min_per_portal]
-        print(f"\n[CICLO {cycle}] Resumen:")
+        print(f"\n[CICLO {cycle}] Resumen de portales:")
         for p in portals:
             cnt = applied_per_portal[p]
             estado = "✅ LISTO" if cnt >= min_per_portal else f"⏳ {cnt}/{min_per_portal}"
             print(f"  {p.upper():<18} {estado}")
+
+        # ── Reporte estadístico de keywords post-ciclo ────────────────────────
+        _keyword_cycle_report(portals, scan_base, cycle)
 
         if not still_pnd:
             print(f"\n[PERSISTENTE] ✅ Todos los portales tienen ≥{min_per_portal} postulación. Fin.")
