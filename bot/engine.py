@@ -1440,6 +1440,16 @@ def _run_keyword_loop(
                     except Exception:
                         pass
 
+                    # -- Filtro 0: relevancia — descartar si no matchea keywords --
+                    if _RELEVANCE_THRESHOLD > 0.0:
+                        _kw_labels = [g.get("keyword", "") for g in
+                                      config.get("_active_groups", [])]
+                        _rscore = _relevance_score(card_text[:200], _kw_labels)
+                        if _rscore < _RELEVANCE_THRESHOLD:
+                            log.debug("  [RELEVANCIA] Score %.2f < %.2f — descartada",
+                                      _rscore, _RELEVANCE_THRESHOLD)
+                            continue
+
                     # -- Filtro 1: horario — descartar turno noche / finde -----
                     if not schedule_ok(card_text):
                         log.info("  [FILTRO/SCHED] Descartado por horario: %s",
@@ -1555,6 +1565,19 @@ def _run_keyword_loop(
                 )
 
                 visited += 1  # siempre cuenta visita
+
+                # Deduplicación cross-portal: saltar si ya se vio el mismo título
+                # en otro portal durante los últimos 60 días
+                if title and title not in ("unknown", ""):
+                    try:
+                        from .dedup import is_duplicate, mark_seen
+                        if is_duplicate(title):
+                            log.info("  [DEDUP] Oferta ya vista en otro portal: '%s'", title[:55])
+                            print(f"  [DEDUP] Ya postulado en otro portal: {title[:55]}")
+                            continue
+                        mark_seen(title, portal=portal_name)
+                    except Exception as _ded_err:
+                        log.debug("[DEDUP] Error: %s", _ded_err)
                 # Recolectar título para extracción dinámica de keywords
                 if title and title not in ("unknown", ""):
                     _seen_titles.append(title)
@@ -2348,10 +2371,17 @@ def run_bot_multi_keywords(
             print(f"[AVISO] Usa iniciar_bot.bat para abrir Chrome correctamente.")
             print(f"[AVISO] Lanzando Chromium propio — puede pedir login manualmente.")
             log.info("Modo fallback — lanzando Chromium propio")
+            # Bloquear un UA consistente para toda la sesión (evita fingerprint rotativo
+            # que algunos portales detectan como bot entre requests del mismo contexto)
+            from .stealth_utils import lock_session_ua, reset_session_ua
+            reset_session_ua()
+            _session_user_agent = lock_session_ua()
+            log.info("[UA] Session UA bloqueado: %s...", _session_user_agent[:60])
+
             launch_kwargs = dict(
                 user_data_dir = session_dir,
                 headless      = headless,
-                user_agent    = random_user_agent(),
+                user_agent    = _session_user_agent,
                 viewport      = random_viewport(),
                 locale        = _locale,
                 timezone_id   = _tz,
@@ -2898,10 +2928,15 @@ def run_bot(
             log.info("Modo CDP — usando Chrome real del usuario (puerto %d)", _CDP_PORT)
         else:
             # Fallback: lanzar Chrome propio (sin sesiones reales)
+            from .stealth_utils import lock_session_ua, reset_session_ua
+            reset_session_ua()
+            _session_user_agent = lock_session_ua()
+            log.info("[UA] Session UA bloqueado: %s...", _session_user_agent[:60])
+
             launch_kwargs = dict(
                 user_data_dir = session_dir,
                 headless      = headless,
-                user_agent    = random_user_agent(),
+                user_agent    = _session_user_agent,
                 viewport      = random_viewport(),
                 locale        = _locale,
                 timezone_id   = _tz,

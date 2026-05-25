@@ -115,13 +115,22 @@ def _word_overlap(a: str, b: str) -> float:
 def _match_qa(label: str) -> Optional[str]:
     """
     Busca coincidencia en question_answers.json para el label dado.
-    Prioridad: exacta > substring largo (>=15 chars) > overlap de palabras >= 60%.
+    Prioridad: qa_cache (hash) > exacta > substring largo (>=15 chars) > overlap >= 60%.
 
     Regla de especificidad: si la pregunta menciona una tecnología concreta
     (python, sql, java, excel…) solo se acepta un match que también la mencione.
     Evita que "cuántos años de experiencia en Python" matchee con la entrada
     genérica "cuántos años de experiencia tienes -> 0".
     """
+    # 0. Lookup rápido por hash en qa_cache.json (aprendidas en ejecución)
+    try:
+        from .qa_cache import get_answer as _qc_get
+        _cached = _qc_get(label)
+        if _cached is not None:
+            return _cached
+    except Exception:
+        pass
+
     qa = _load_qa()
     norm = _normalize(label)
 
