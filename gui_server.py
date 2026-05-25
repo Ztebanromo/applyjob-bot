@@ -467,6 +467,7 @@ _SESSIONS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'sessio
 _KNOWN_PORTALS = [
     # Portales Chile
     'chiletrabajos', 'laborum', 'getonyboard', 'computrabajo', 'linkedin',
+    'trabajando', 'infojobs',
     # Portales remotos internacionales (sin login, postulación externa)
     'weworkremotely', 'remotive', 'remoteco',
 ]

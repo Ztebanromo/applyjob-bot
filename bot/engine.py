@@ -58,6 +58,26 @@ def _should_stop() -> bool:
     """Retorna True si gui_server solicitó detener la ejecución."""
     return os.path.exists(_STOP_SIGNAL_PATH)
 
+
+# ── Relevance score ───────────────────────────────────────────────────────────
+_RELEVANCE_THRESHOLD = float(os.getenv("RELEVANCE_THRESHOLD", "0.0"))
+# 0.0 = desactivado (acepta todo). 0.3 = requiere que al menos 1 keyword
+# aparezca en el título de la oferta. Se configura en .env.
+
+
+def _relevance_score(title: str, keywords: list) -> float:
+    """
+    Fracción de keywords que aparecen (substring) en el título normalizado.
+    Retorna 1.0 si keywords está vacío (sin filtro → aceptar todo).
+    """
+    if not keywords:
+        return 1.0
+    t = title.lower()
+    for a, b in [("á","a"),("é","e"),("í","i"),("ó","o"),("ú","u"),("ñ","n")]:
+        t = t.replace(a, b)
+    hits = sum(1 for kw in keywords if kw.lower() in t)
+    return hits / len(keywords)
+
 # ---------------------------------------------------------------------------
 # Auto-detección del ejecutable de Chrome/Chromium
 # ---------------------------------------------------------------------------

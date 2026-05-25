@@ -123,6 +123,36 @@ def random_viewport() -> dict:
     return random.choice(VIEWPORTS)
 
 
+# ── Per-session UA lock ───────────────────────────────────────────────────────
+# Garantiza que un mismo browser context use SIEMPRE el mismo UA,
+# evitando que múltiples llamadas a random_user_agent() den UAs distintos.
+
+_SESSION_UA: str | None = None
+
+
+def lock_session_ua() -> str:
+    """
+    Elige un UA aleatorio para la sesión actual y lo fija.
+    Llamar UNA VEZ al abrir el BrowserContext.
+    """
+    global _SESSION_UA
+    _SESSION_UA = random.choice(USER_AGENTS)
+    return _SESSION_UA
+
+
+def get_session_ua() -> str:
+    """Retorna el UA fijo de la sesión. Si aún no se llamó lock_session_ua(), lo hace ahora."""
+    if _SESSION_UA is None:
+        return lock_session_ua()
+    return _SESSION_UA
+
+
+def reset_session_ua() -> None:
+    """Resetea el UA de sesión. Llamar al cerrar el BrowserContext."""
+    global _SESSION_UA
+    _SESSION_UA = None
+
+
 def _portal_profile(portal: str) -> dict:
     """Retorna el perfil de timing para el portal dado."""
     key = (portal or "").lower().split(".")[0]

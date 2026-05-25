@@ -194,6 +194,36 @@ SITE_CONFIG = {
         "remote_intl":               True,
         "lang":                      "en",
     },
+    "trabajando": {
+        # Trabajando.com — uno de los portales laborales más grandes de Chile.
+        # Postulación externa: redirige al formulario del empleador.
+        "url_busqueda": (
+            f"https://www.trabajando.com/trabajo/{DASH_KEYWORDS}/"
+            "?pais=chile&orden=fecha"
+        ),
+        "selector_oferta":           "div.item-trabajo a.item-title, li.job-card a",
+        "selector_boton_aplicar":    "a:has-text('Postular'), button:has-text('Postular')",
+        "selector_siguiente_pagina": "a[rel='next'], a.next-page",
+        "selector_titulo_oferta":    "h1.title-offer, h1",
+        "tipo_postulacion":          "external",
+        "max_offers_per_run":        15,
+        "requires_login":            False,
+    },
+    "infojobs": {
+        # InfoJobs Chile — portal con ofertas formales, requiere cuenta.
+        # Tipo redirect: modal de InfoJobs o redirige al empleador.
+        "url_busqueda": (
+            f"https://cl.infojobs.net/ofertas-trabajo/trabajo_{DASH_KEYWORDS}/"
+            "?sortBy=PUBLICATION_DATE"
+        ),
+        "selector_oferta":           "li.ij-OfferCardContent, article.ij-OfferCard",
+        "selector_boton_aplicar":    "a.btn-apply, button:has-text('Inscribirme')",
+        "selector_siguiente_pagina": "a[data-testid='pagination-next'], a[rel='next']",
+        "selector_titulo_oferta":    "h1.ij-OfferDetailHeader-title, h1",
+        "tipo_postulacion":          "redirect",
+        "max_offers_per_run":        15,
+        "requires_login":            True,
+    },
 }
 
 # Respetar USER_MAX_OFFERS del .env como límite global de postulaciones por búsqueda

@@ -147,7 +147,8 @@ Ejemplos:
         sys.exit(0)
 
     # Indeed excluido: bloqueado por Cloudflare Turnstile (requiere Chrome real + CDP)
-    _ALL_PORTALS = ["laborum", "computrabajo", "chiletrabajos", "getonyboard", "linkedin"]
+    _ALL_PORTALS = ["laborum", "computrabajo", "chiletrabajos", "getonyboard", "linkedin",
+                    "trabajando", "infojobs"]
 
     if args.scan:
         portals = _ALL_PORTALS if not args.portal else [p.strip() for p in args.portal.split(",") if p.strip()]
