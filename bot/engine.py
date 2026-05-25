@@ -781,14 +781,21 @@ _LOGGED_IN_SIGNALS = {
         "a[href*='/myjobs']",
     ],
     "getonyboard": [
-        # Solo señales inequívocas de sesión activa (no deben aparecer sin login)
+        # Señales inequívocas de sesión activa
         "a[href*='/workers/me']",
+        "a[href*='/workers/']",           # login vía LinkedIn → slug del usuario
         "a[href*='/postulations']",
         "a:has-text('Mis postulaciones')",
         "a:has-text('Mi perfil')",
         "div[class*='user-menu']",
         "div[class*='UserMenu']",
-        # OJO: NO usar "a[href*='/profile']" — matchea perfiles de empresa en footer
+        # Avatar visible en navbar cuando se loguea con LinkedIn
+        "nav img[src*='linkedin']",
+        "nav img[src*='cloudfront']",
+        "nav img[src*='gravatar']",
+        "header img[alt]",
+        "[class*='gb-navbar'] img",
+        "[class*='NavBar'] img",
     ],
 }
 
@@ -920,14 +927,22 @@ def _wait_for_login_if_needed(page, portal_name: str, config: dict) -> None:
             try:
                 cur = page.url
                 if "getonbrd.com" in cur:
-                    # Señales POSITIVAS de sesión activa (solo visibles cuando logueado)
+                    # Señales POSITIVAS de sesión activa (incluye login vía LinkedIn)
                     for pos_sel in [
                         "a[href*='/workers/me']",
+                        "a[href*='/workers/']",          # login vía LinkedIn → slug del usuario
                         "a[href*='/postulations']",
                         "a:has-text('Mis postulaciones')",
                         "a:has-text('Mi perfil')",
                         "div[class*='UserMenu']",
                         "div[class*='user-menu']",
+                        "nav img[src*='linkedin']",       # avatar LinkedIn en navbar
+                        "nav img[src*='cloudfront']",     # foto de perfil CDN
+                        "nav img[src*='gravatar']",
+                        "header img[alt]",                # cualquier avatar en header
+                        "[class*='gb-navbar'] img",       # foto en navbar GetOnBoard
+                        "[class*='NavBar'] img",
+                        "[class*='navbar'] img[alt]",
                     ]:
                         try:
                             el = page.query_selector(pos_sel)
@@ -947,8 +962,9 @@ def _wait_for_login_if_needed(page, portal_name: str, config: dict) -> None:
                                 return False
                         except Exception:
                             pass
-                    # Sin señales claras → asumir no logueado (más seguro que el contrario)
-                    return False
+                    # Sin botón "Ingresa" visible → asumir logueado (login vía LinkedIn
+                    # puede no dejar selectores estándar, pero sí oculta el botón de acceso)
+                    return True
             except Exception:
                 pass
         # 7. Computrabajo: detectar por presencia de nav del área privada
