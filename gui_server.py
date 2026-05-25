@@ -129,7 +129,10 @@ def _clear_stop_signal():
 _clear_stop_signal()
 
 # Max seconds a bot subprocess may run before the watchdog kills it
-PORTAL_TIMEOUT_S = int(os.getenv("PORTAL_TIMEOUT_S", "600"))  # 10 min default
+# Scan / apply-queue: 600s es suficiente (pocas ofertas, < 10 min)
+# Master (--persistent / --multi-keyword): necesita horas → 7200s = 2 h
+PORTAL_TIMEOUT_S       = int(os.getenv("PORTAL_TIMEOUT_S",        "600"))   # scan / cola
+MASTER_TIMEOUT_S       = int(os.getenv("MASTER_TIMEOUT_S",       "7200"))   # run maestro (2h)
 
 
 def _start_watchdog(process: subprocess.Popen, timeout_s: int, label: str) -> threading.Thread:
@@ -774,7 +777,7 @@ def api_postular():
                                     text=True, encoding='utf-8', errors='replace', bufsize=1,
                                     env=_make_child_env(runtime_env))
             state.set_apply_process(proc)
-            _start_watchdog(proc, PORTAL_TIMEOUT_S, f"postular-{portals or 'all'}")
+            _start_watchdog(proc, MASTER_TIMEOUT_S, f"postular-{portals or 'all'}")
             def _finish():
                 if state.finish_apply(run_id):
                     socketio.emit('bot_status', state.get_status() | {"status": "finished"}, namespace='/bot')
@@ -1524,7 +1527,7 @@ def handle_start(data):
                                     text=True, encoding='utf-8', errors='replace', bufsize=1,
                                     env=_make_child_env(runtime_env))
             state.set_apply_process(proc)
-            _start_watchdog(proc, PORTAL_TIMEOUT_S, f"master-{','.join(portals)}")
+            _start_watchdog(proc, MASTER_TIMEOUT_S, f"master-{','.join(portals)}")
             # _stream_process verifica stop_requested cada 200ms — garantiza stop responsivo
             _stream_process(proc, "\n[POSTULAR] Búsqueda con keywords completada.\n", lambda: None)
 
