@@ -1469,14 +1469,24 @@ def handle_connect():
 @socketio.on('start_master', namespace='/bot')
 def handle_start(data):
     """Botón Postular → postulación directa independiente (no necesita scan previo)."""
-    log.debug("start_master recibido: portals=%s", data.get('portals', []))
+    _log.info("start_master recibido: portals=%s apply_active=%s", data.get('portals', []), state.apply_active)
     if state.apply_active:
-        emit('bot_status', state.get_status() | {"status": "already_running"})
-        return
+        # Verificar si el proceso aún vive — si murió, limpiar el estado colgado
+        with state.lock:
+            proc = state.apply_process
+            if proc is None or proc.poll() is not None:
+                _log.warning("apply_active=True pero proceso muerto — limpiando estado.")
+                state.apply_active  = False
+                state.apply_process = None
+            else:
+                state.add_log("\n[SISTEMA] ⚠️ Ya hay una postulación activa. Detén el bot antes de iniciar otra.\n")
+                emit('bot_status', state.get_status() | {"status": "already_running"})
+                return
     portals = _validate_portals(data.get('portals', []))
     if not portals:
-        emit('bot_status', state.get_status() | {"status": "idle"})
-        return
+        # Sin portales seleccionados → usar todos los habilitados por defecto
+        portals = [p for p in _KNOWN_PORTALS if p != 'indeed']
+        state.add_log("\n[SISTEMA] Sin portales seleccionados — usando todos los disponibles.\n")
     runtime_env = {
         key: clean_form_value(value)
         for key, value in (data.get('profile') or {}).items()
