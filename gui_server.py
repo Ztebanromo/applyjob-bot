@@ -128,6 +128,16 @@ def _clear_stop_signal():
 # Limpiar señal residual al iniciar (por si el servidor se reinició abruptamente)
 _clear_stop_signal()
 
+# Limpiar caché de scan al iniciar — el scan_queue es solo para la sesión actual
+_scan_q_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data', 'scan_queue.json')
+try:
+    if os.path.exists(_scan_q_path):
+        with open(_scan_q_path, 'w', encoding='utf-8') as _f:
+            _f.write('[]')
+        _log.info("scan_queue.json limpiado al arrancar servidor.")
+except Exception as _sqe:
+    _log.warning("No se pudo limpiar scan_queue: %s", _sqe)
+
 # Max seconds a bot subprocess may run before the watchdog kills it
 # Scan / apply-queue: 600s es suficiente (pocas ofertas, < 10 min)
 # Master (--persistent / --multi-keyword): necesita horas → 7200s = 2 h

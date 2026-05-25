@@ -1,274 +1,123 @@
 """
-Persistencia de estado via SQLite.
+Estado en memoria para la sesión actual.
 
-Responsabilidades:
-  - Deduplicación: evitar postular dos veces a la misma oferta
-  - Historial: registro permanente de todas las postulaciones
-  - Estadísticas: resumen por portal y estado
-  - Limpieza: purge automático de registros viejos
+Diseño simplificado:
+  - Deduplicación IN-MEMORY: evita postular dos veces en la misma sesión.
+    Al reiniciar el servidor se borra → cada sesión arranca fresca.
+  - Sin historial persistente entre sesiones (no SQLite para postulaciones).
+  - Se preserva: keyword_stats.json (rendimiento) y qa_cache.json (preguntas).
 
-Esquema de la base de datos:
-    applications (
-        id         INTEGER PK AUTOINCREMENT,
-        url        TEXT UNIQUE NOT NULL,   -- URL canónica de la oferta
-        portal     TEXT NOT NULL,          -- "linkedin", "indeed", etc.
-        title      TEXT DEFAULT '',        -- título del puesto
-        status     TEXT NOT NULL,          -- "applied", "skipped_*", "error: ..."
-        applied_at TEXT NOT NULL           -- ISO timestamp
-    )
-
-Archivo: data/applyjob.db (excluido de git por .gitignore)
+Datos permanentes (JSON, no tocar aquí):
+  data/keyword_stats.json  — keywords más efectivas por portal
+  data/qa_cache.json       — respuestas a preguntas de formularios
 """
-import sqlite3
 import datetime
 import logging
-from pathlib import Path
-from contextlib import contextmanager
+import threading
+from collections import defaultdict
 
-log     = logging.getLogger("applyjob.state")
-DB_PATH = Path(__file__).parent.parent / "data" / "applyjob.db"
+log = logging.getLogger("applyjob.state")
+
+# ---------------------------------------------------------------------------
+# Estado en memoria — se limpia al reiniciar el proceso
+# ---------------------------------------------------------------------------
+_lock = threading.Lock()
+
+# URLs vistas esta sesión → bloquea re-visita dentro del mismo run
+_seen: set[str] = set()
+
+# Log de postulaciones de esta sesión (para stats en consola/dashboard)
+_session_log: list[dict] = []
 
 
 # ---------------------------------------------------------------------------
-# Inicialización y contexto de conexión
-# ---------------------------------------------------------------------------
-
-def _init_db(conn: sqlite3.Connection) -> None:
-    """Crea la tabla y el índice si no existen."""
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS applications (
-            id          INTEGER PRIMARY KEY AUTOINCREMENT,
-            url         TEXT    NOT NULL UNIQUE,
-            portal      TEXT    NOT NULL,
-            title       TEXT    DEFAULT '',
-            status      TEXT    NOT NULL,
-            applied_at  TEXT    NOT NULL
-        )
-    """)
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_url ON applications(url)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_portal ON applications(portal)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_applied_at ON applications(applied_at)")
-    conn.commit()
-
-
-@contextmanager
-def _conn():
-    """Context manager que abre, inicializa y cierra la conexión SQLite."""
-    DB_PATH.parent.mkdir(exist_ok=True)
-    con = sqlite3.connect(str(DB_PATH))
-    con.row_factory = sqlite3.Row
-    try:
-        _init_db(con)
-        yield con
-    finally:
-        con.close()
-
-
-# ---------------------------------------------------------------------------
-# Operaciones principales
+# API pública (misma interfaz que antes — compatible con el resto del código)
 # ---------------------------------------------------------------------------
 
 def already_applied(url: str) -> bool:
     """
-    Retorna True solo si la oferta fue ENVIADA realmente.
-
-    Status que bloquean re-intento:
-      - 'applied'                  -> enviado con éxito
-      - 'skipped_already_applied'  -> LinkedIn mismo dice "ya postulaste"
-
-    Status que permiten re-intento (no bloquean):
-      - 'dry_run'            -> nunca se envió, solo simulación
-      - 'error: *'           -> falló, vale la pena reintentar
-      - 'skipped_no_easy_apply'   -> puede aparecer Easy Apply en otro run
-      - 'skipped_complex_*'       -> modal muy largo, puede cambiar
-      - 'skipped_captcha'         -> CAPTCHA temporal
-
-    Args:
-        url: URL canónica de la oferta
-
-    Returns:
-        bool
+    True si la URL ya fue procesada en esta sesión.
+    Se resetea al reiniciar el servidor.
     """
-    with _conn() as con:
-        row = con.execute(
-            """SELECT id FROM applications
-               WHERE url = ?
-                 AND (
-                     status IN (
-                         'applied',
-                         'skipped_already_applied',
-                         'skipped_topic',
-                         'skipped_experience',
-                         'skipped_schedule',
-                         'skipped_practica',
-                         'skipped_no_apply',
-                         'skipped_404'
-                     )
-                     OR status LIKE 'external%'
-                     OR status LIKE 'filled%'
-                 )""",
-            (url,),
-        ).fetchone()
-        return row is not None
+    with _lock:
+        return url in _seen
 
 
 def save_application(url: str, portal: str, title: str, status: str) -> None:
     """
-    Inserta o actualiza el registro de una oferta (upsert atómico).
-
-    Si la URL ya existe, actualiza status y applied_at.
-    Esto permite que un "error" del run anterior sea sobreescrito
-    con "applied" si se reintenta manualmente.
-
-    Args:
-        url    : URL canónica de la oferta
-        portal : nombre del portal
-        title  : título del puesto (puede ser vacío)
-        status : resultado de la postulación
+    Marca la URL como vista y registra el resultado en el log de sesión.
+    No persiste en disco — solo vive mientras el proceso esté corriendo.
     """
     now = datetime.datetime.now().isoformat(timespec="seconds")
-    with _conn() as con:
-        con.execute(
-            """
-            INSERT INTO applications (url, portal, title, status, applied_at)
-            VALUES (?, ?, ?, ?, ?)
-            ON CONFLICT(url) DO UPDATE SET
-                status     = excluded.status,
-                applied_at = excluded.applied_at
-            """,
-            (url, portal, title, status, now),
-        )
-        con.commit()
-    log.debug("Guardado: %s -> %s", url[:60], status)
+    with _lock:
+        _seen.add(url)
+        _session_log.append({
+            "url":        url,
+            "portal":     portal,
+            "title":      title,
+            "status":     status,
+            "applied_at": now,
+        })
+    log.debug("Sesión: %s -> %s", url[:60], status)
 
 
 # ---------------------------------------------------------------------------
-# Consultas y estadísticas
+# Estadísticas de sesión
 # ---------------------------------------------------------------------------
 
 def get_stats() -> dict:
-    """
-    Retorna un resumen de postulaciones agrupado por portal y estado.
+    """Resumen de la sesión actual agrupado por portal y estado."""
+    with _lock:
+        log_copy = list(_session_log)
 
-    Returns:
-        {
-            "total": int,
-            "by_portal": {
-                "linkedin": {"applied": 23, "skipped_no_easy_apply": 8, ...},
-                ...
-            }
-        }
-    """
-    with _conn() as con:
-        rows = con.execute("""
-            SELECT portal, status, COUNT(*) as cnt
-            FROM applications
-            GROUP BY portal, status
-            ORDER BY portal, cnt DESC
-        """).fetchall()
-        total = con.execute("SELECT COUNT(*) FROM applications").fetchone()[0]
+    total = len(log_copy)
+    by_portal: dict = defaultdict(lambda: defaultdict(int))
+    for r in log_copy:
+        by_portal[r["portal"]][r["status"]] += 1
 
-    stats: dict = {"total": total, "by_portal": {}}
-    for row in rows:
-        p = row["portal"]
-        if p not in stats["by_portal"]:
-            stats["by_portal"][p] = {}
-        stats["by_portal"][p][row["status"]] = row["cnt"]
-    return stats
+    return {
+        "total":    total,
+        "by_portal": {p: dict(s) for p, s in by_portal.items()},
+    }
 
 
 def get_recent(limit: int = 20) -> list[dict]:
-    """
-    Retorna las últimas N postulaciones ordenadas por fecha descendente.
-
-    Args:
-        limit: máximo de registros a retornar (default: 20)
-
-    Returns:
-        Lista de dicts con keys: portal, title, status, applied_at, url
-    """
-    with _conn() as con:
-        rows = con.execute(
-            """SELECT portal, title, status, applied_at, url
-               FROM applications ORDER BY applied_at DESC LIMIT ?""",
-            (limit,),
-        ).fetchall()
-    return [dict(r) for r in rows]
+    """Últimas N entradas de la sesión, más recientes primero."""
+    with _lock:
+        return list(reversed(_session_log[-limit:]))
 
 
 def get_errors(portal: str = "") -> list[dict]:
-    """
-    Retorna postulaciones con status que empieza con 'error'.
-    Útil para identificar qué re-intentar manualmente.
+    """Entradas con status que empieza con 'error' en esta sesión."""
+    with _lock:
+        rows = [r for r in _session_log if r["status"].startswith("error")]
+    if portal:
+        rows = [r for r in rows if r["portal"] == portal]
+    return rows
 
-    Args:
-        portal: filtrar por portal (vacío = todos)
 
-    Returns:
-        Lista de dicts
-    """
-    with _conn() as con:
-        if portal:
-            rows = con.execute(
-                "SELECT * FROM applications WHERE status LIKE 'error%' AND portal = ? "
-                "ORDER BY applied_at DESC",
-                (portal,),
-            ).fetchall()
-        else:
-            rows = con.execute(
-                "SELECT * FROM applications WHERE status LIKE 'error%' "
-                "ORDER BY applied_at DESC"
-            ).fetchall()
-    return [dict(r) for r in rows]
+def reset_session() -> None:
+    """Limpia el estado de la sesión (útil entre runs del bot)."""
+    with _lock:
+        _seen.clear()
+        _session_log.clear()
+    log.info("Estado de sesión reiniciado.")
 
 
 # ---------------------------------------------------------------------------
-# Limpieza / Purge
+# Stubs de compatibilidad (usados en otros módulos — no hacen nada)
 # ---------------------------------------------------------------------------
 
 def purge_old(days: int = 90) -> int:
-    """
-    Elimina registros con applied_at más antiguo que `days` días.
+    """No-op: sin datos persistentes que purgar."""
+    return 0
 
-    Solo elimina registros con status 'skipped_*', 'dry_run' o 'external:*'.
-    Los registros 'applied' y 'error' se conservan indefinidamente como historial.
-
-    Args:
-        days: antigüedad mínima en días para eliminar (default: 90)
-
-    Returns:
-        Cantidad de registros eliminados
-    """
-    cutoff = (datetime.datetime.now() - datetime.timedelta(days=days)).isoformat()
-    with _conn() as con:
-        result = con.execute(
-            """
-            DELETE FROM applications
-            WHERE applied_at < ?
-              AND (
-                  status LIKE 'skipped%'
-                  OR status = 'dry_run'
-                  OR status LIKE 'external%'
-              )
-            """,
-            (cutoff,),
-        )
-        con.commit()
-        deleted = result.rowcount
-    if deleted:
-        log.info("Purge: eliminados %d registros anteriores a %d días", deleted, days)
-    return deleted
-
-
-# ---------------------------------------------------------------------------
-# Output de consola
-# ---------------------------------------------------------------------------
 
 def print_stats() -> None:
-    """Imprime estadísticas formateadas en consola."""
+    """Imprime estadísticas de la sesión en consola."""
     stats = get_stats()
     print(f"\n{'='*52}")
-    print(f"  ApplyJob Stats  —  Total: {stats['total']}")
+    print(f"  Sesión actual  —  Procesadas: {stats['total']}")
     print(f"{'='*52}")
     for portal, statuses in stats["by_portal"].items():
         print(f"\n  {portal}")
@@ -277,7 +126,7 @@ def print_stats() -> None:
             print(f"    {status:<28} {cnt:>3}  {bar}")
     recent = get_recent(5)
     if recent:
-        print(f"\n  Últimas 5 postulaciones:")
+        print(f"\n  Últimas 5 procesadas:")
         for r in recent:
             print(f"    [{r['applied_at'][:10]}] {r['portal']:<14} "
                   f"{r['status']:<20} {r['title'][:35]}")
