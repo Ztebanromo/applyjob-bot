@@ -511,6 +511,39 @@ def practica_ok(text: str) -> bool:
     return True
 
 
+# ---------------------------------------------------------------------------
+# Filtro de contrato — rechaza part-time, plazo fijo, freelance
+# El usuario quiere trabajo FIJO (contrato indefinido / jornada completa)
+# ---------------------------------------------------------------------------
+_CONTRACT_BLACKLIST = frozenset({
+    # Contratos temporales / a plazo
+    "a plazo fijo", "contrato a plazo", "plazo determinado",
+    "contrato temporal", "trabajo temporal",
+    "por temporada", "por campaña",
+    # Tiempo parcial
+    "part time", "part-time", "media jornada", "medio tiempo",
+    "jornada parcial", "horas semanales",
+    # Freelance / por proyecto
+    "freelance", "por proyecto", "por obra",
+    # Honorarios (Chile: trabajo independiente sin contrato)
+    "honorarios",
+})
+
+
+def contract_ok(text: str) -> bool:
+    """
+    Retorna False si la oferta es claramente temporal, part-time o freelance.
+    True si no hay señal (beneficio de la duda → incluir).
+    """
+    if not text:
+        return True
+    low = text.lower()
+    for phrase in _CONTRACT_BLACKLIST:
+        if phrase in low:
+            return False
+    return True
+
+
 # Categorias/rubros que NO son IT — el bot solo busca trabajo IT/bodega
 _OFF_TOPIC_SUBSTRINGS = [
     # RRHH / Recursos Humanos
@@ -645,6 +678,15 @@ def _gen_it(label: str, bases: list, mods=("junior", "sin experiencia"), scan=Tr
     return rows
 
 
+def _gen_bodega(label: str, bases: list, mods=("sin experiencia",), scan=True):
+    """Genera combinaciones para bodega/logística. Modifier: sin experiencia."""
+    rows = []
+    for base in bases:
+        for mod in mods:
+            rows.append({"label": label, "keyword": f"{base} {mod}", "mode": "bodega", "scan": scan})
+    return rows
+
+
 KEYWORD_GROUPS = (
     # ── Desarrollo general ────────────────────────────────────────────────────
     _gen_it("Desarrollo", [
@@ -685,8 +727,16 @@ KEYWORD_GROUPS = (
         {"label": "Egresado", "keyword": "egresado analista programador", "mode": "it", "scan": True},
         {"label": "Egresado", "keyword": "recien egresado sistemas",      "mode": "it", "scan": True},
         {"label": "Egresado", "keyword": "recien egresado informatica",   "mode": "it", "scan": True},
-    ]
-    # Nota: bodega/logística eliminado — solo IT en adelante
+    ] +
+    # ── Operario / Bodega / Logística — turno am, lunes a viernes, sin exp ────
+    # Filtros de horario (schedule_ok) y contrato (contract_ok) se aplican en engine
+    _gen_bodega("Bodega", [
+        "operario bodega",
+        "auxiliar bodega",
+        "bodeguero",
+        "operario logistica",
+        "auxiliar logistica",
+    ])
 )
 
 

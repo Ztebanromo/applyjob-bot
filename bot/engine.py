@@ -122,7 +122,7 @@ def _try_cdp_connect(pw, port: int = None):
         log.debug("CDP no disponible (%s) — usando perfil separado.", exc)
         return None
 
-from .config import SITE_CONFIG, USER_PROFILE, location_score, schedule_ok, experience_ok, practica_ok, topic_ok, topic_ok_it
+from .config import SITE_CONFIG, USER_PROFILE, location_score, schedule_ok, experience_ok, practica_ok, topic_ok, topic_ok_it, contract_ok
 from .state import already_applied, save_application
 from .stealth_utils import (
     apply_stealth, human_delay, human_scroll, human_click,
@@ -628,6 +628,10 @@ def _process_offer_generic(
             log.info("  [FILTRO/TOPIC] Oferta descartada por rubro no-IT en titulo: '%s'", title)
             print(f"  [FILTRO] Rubro no-IT detectado en pagina — saltando: {title}")
             return title, "skipped: rubro_no_it"
+        if not contract_ok(page_text[:500]):
+            log.info("  [FILTRO/CONTRACT] Oferta descartada por contrato temp/PT: '%s'", title)
+            print(f"  [FILTRO] Contrato temporal/part-time — saltando: {title}")
+            return title, "skipped: contract_temp"
 
         if dry_run:
             log.info("  [dry_run] Llenando formulario para verificación visual...")
@@ -1558,6 +1562,13 @@ def _run_keyword_loop(
                         skipped_topic += 1
                         continue
 
+                    # -- Filtro 5: contrato — descartar part-time/plazo fijo/freelance --
+                    if not contract_ok(card_text):
+                        log.info("  [FILTRO/CONTRACT] Descartado (contrato temporal/PT): %s",
+                                 card_text[:80].strip().replace("\n", " "))
+                        skipped_topic += 1  # reutiliza contador skipped_topic
+                        continue
+
                     # Intentar leer texto de ubicación del card
                     loc_text = ""
                     if loc_sel:
@@ -1995,6 +2006,8 @@ def run_scan_pass(portal_name: str, headless: bool = False) -> None:
                     skipped_f += 1; continue
                 # Scan estricto: topic_ok_it exige señal IT en el card
                 if not topic_ok_it(card_text):
+                    skipped_f += 1; continue
+                if not contract_ok(card_text):
                     skipped_f += 1; continue
                 loc_text = card_text
                 score = location_score(loc_text)

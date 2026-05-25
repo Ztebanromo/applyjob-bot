@@ -63,7 +63,12 @@ _IT_BASES = [
 # Solo junior y sin experiencia — lo que realmente convierte
 _IT_MODS = ["junior", "sin experiencia"]
 
-# Bodega eliminado — solo IT de ahora en adelante
+# Bodega: solo sin experiencia (junior no aplica al rubro)
+_BODEGA_BASES = [
+    "operario bodega", "auxiliar bodega", "bodeguero",
+    "operario logistica", "auxiliar logistica",
+]
+_BODEGA_MODS = ["sin experiencia"]
 
 # ── I/O ──────────────────────────────────────────────────────────────────────
 
@@ -173,16 +178,37 @@ def _is_bodega_keyword(keyword: str) -> bool:
 def generate_replacements(retired_keyword: str,
                           n: int = REPLACEMENTS_PER_KW) -> list[dict]:
     """
-    Genera hasta n keywords IT nuevas como reemplazo de una retirada.
-    Siempre usa "junior" y "sin experiencia" — nunca genera bodega.
+    Genera hasta n keywords nuevas como reemplazo de una retirada.
+    Bodega retirada → genera nuevo bodega sin experiencia.
+    IT retirada     → genera nuevo IT junior/sin experiencia.
     """
     stats = _load_stats()
     known = _all_known_keywords(stats)
 
-    # Si la keyword retirada era bodega, no generar nada — solo IT de ahora en adelante
+    # Si era bodega, generar reemplazo bodega (no IT)
     if _is_bodega_keyword(retired_keyword):
-        log.info("[KW_GEN] Keyword bodega retirada '%s' — no se genera reemplazo.", retired_keyword)
-        return []
+        import random as _rnd
+        bases = _BODEGA_BASES[:]
+        _rnd.shuffle(bases)
+        generated: list[dict] = []
+        for base in bases:
+            if len(generated) >= n:
+                break
+            for mod in _BODEGA_MODS:
+                candidate = f"{base} {mod}"
+                ckey = candidate.lower().strip()
+                if ckey in known:
+                    continue
+                stats[ckey] = {"source": f"generated_from:{retired_keyword}",
+                               "added": str(date.today()), "portals": {}}
+                known.add(ckey)
+                generated.append({"label": "Bodega", "keyword": candidate,
+                                   "mode": "bodega", "scan": True})
+                log.info("[KW_NEW] bodega '%s' generada (reemplaza '%s')", candidate, retired_keyword)
+                if len(generated) >= n:
+                    break
+        _save_stats(stats)
+        return generated
 
     bases     = _IT_BASES[:]
     random.shuffle(bases)
@@ -297,19 +323,18 @@ def get_active_groups(base_groups: list[dict], portal: str) -> list[dict]:
               if g["keyword"].lower().strip() not in retired_in_portal]
 
     # Agregar keywords generadas / extraídas del scan que no estén ya en la lista
-    # NUNCA incluir keywords bodega — solo IT
     active_keys = {g["keyword"].lower().strip() for g in active}
     for kw_key, entry in stats.items():
         if entry.get("source", "base") == "base":
             continue
         if kw_key in retired_in_portal or kw_key in active_keys:
             continue
-        if _is_bodega_keyword(kw_key):
-            continue   # bodega eliminado del flujo
+        mode  = "bodega" if _is_bodega_keyword(kw_key) else "it"
+        label = "Bodega"  if mode == "bodega" else _infer_label(kw_key)
         active.append({
-            "label":   _infer_label(kw_key),
+            "label":   label,
             "keyword": kw_key,
-            "mode":    "it",
+            "mode":    mode,
             "scan":    True,
         })
         active_keys.add(kw_key)

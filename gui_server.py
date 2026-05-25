@@ -1503,7 +1503,15 @@ def handle_start(data):
     def _run():
         run_id = state.start_apply()
         socketio.emit('bot_status', state.get_status() | {"status": "started"}, namespace='/bot')
+
+        def _final_finish():
+            state.add_log("\n[POSTULAR] Postulación completada.\n")
+            if state.finish_apply(run_id):
+                socketio.emit('bot_status', state.get_status() | {"status": "finished"}, namespace='/bot')
+                socketio.emit('session_status', get_session_status(), namespace='/bot')
+
         try:
+            # ── Paso 1: Búsqueda multi-keyword / persistente ─────────────────
             if persistent:
                 cmd = [sys.executable, "-u", "main.py",
                        "--persistent",
@@ -1517,14 +1525,38 @@ def handle_start(data):
                                     env=_make_child_env(runtime_env))
             state.set_apply_process(proc)
             _start_watchdog(proc, PORTAL_TIMEOUT_S, f"master-{','.join(portals)}")
-            def _finish():
-                if state.finish_apply(run_id):
-                    socketio.emit('bot_status', state.get_status() | {"status": "finished"}, namespace='/bot')
             # _stream_process verifica stop_requested cada 200ms — garantiza stop responsivo
-            _stream_process(proc, "\n[POSTULAR] Postulación completada.\n", _finish)
+            _stream_process(proc, "\n[POSTULAR] Búsqueda con keywords completada.\n", lambda: None)
+
+            # ── Paso 2: Procesar cola de scan acumulado ───────────────────────
+            if not state.stop_requested:
+                try:
+                    if os.path.exists(_SCAN_QUEUE_PATH):
+                        with open(_SCAN_QUEUE_PATH, encoding='utf-8') as _qf:
+                            _queue = json.load(_qf)
+                        if _queue:
+                            state.add_log(
+                                f"\n[APPLY-QUEUE] ⏳ {len(_queue)} ofertas en cola "
+                                f"— procesando ahora...\n"
+                            )
+                            cmd2 = [sys.executable, "-u", "main.py", "--apply-queue",
+                                    "--portal", ",".join(portals)]
+                            proc2 = subprocess.Popen(
+                                cmd2, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                text=True, encoding='utf-8', errors='replace', bufsize=1,
+                                env=_make_child_env(runtime_env)
+                            )
+                            state.set_apply_process(proc2)
+                            _start_watchdog(proc2, PORTAL_TIMEOUT_S,
+                                            f"apply-queue-{','.join(portals)}")
+                            _stream_process(proc2, "\n[APPLY-QUEUE] Cola procesada.\n",
+                                            lambda: None)
+                except Exception as _qe:
+                    state.add_log(f"\n[APPLY-QUEUE] Error procesando cola: {_qe}\n")
         except Exception as e:
             state.add_log(f"\n[POSTULAR] Error crítico: {e}\n")
-            state.finish_apply(run_id)
+        finally:
+            _final_finish()
 
     threading.Thread(target=_run, daemon=True).start()
     socketio.emit('bot_status', state.get_status() | {"status": "starting"}, namespace='/bot')
