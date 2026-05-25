@@ -87,8 +87,9 @@ SITE_CONFIG = {
         "requires_login":            True,
     },
     "computrabajo": {
+        # ?ordenar=2 = más recientes primero → evita ver siempre las mismas ofertas ya aplicadas
         "url_busqueda": (
-            f"https://cl.computrabajo.com/trabajo-de-{DASH_KEYWORDS}-sin-experiencia"
+            f"https://cl.computrabajo.com/trabajo-de-{DASH_KEYWORDS}-sin-experiencia?ordenar=2"
         ),
         "selector_oferta":           "article.box_offer",
         "selector_ubicacion":        "p.fs13, .p_ubic, span.fs13",
@@ -97,6 +98,7 @@ SITE_CONFIG = {
         "selector_titulo_oferta":    "h1.title_offer, h1[class*='title'], h1",
         "tipo_postulacion":          "directa",
         "max_offers_per_run":        20,
+        "max_pages":                 5,   # 5 páginas de resultados por keyword (antes 3)
         "requires_login":            True,
     },
     "getonyboard": {
@@ -116,9 +118,10 @@ SITE_CONFIG = {
     "chiletrabajos": {
         # ChileTrabajos requiere cuenta gratuita para postular.
         # La sesión se guarda en sessions/chiletrabajos/ automáticamente.
+        # &ordenar=recientes = más recientes primero
         "url_busqueda": (
             f"https://www.chiletrabajos.cl/empleos?q={ENCODED_KEYWORDS}"
-            f"&experiencia=sin-experiencia"
+            f"&experiencia=sin-experiencia&ordenar=recientes"
         ),
         "selector_oferta":           "div.job-item",
         "selector_ubicacion":        ".job-location, .location, span[class*='location']",
@@ -405,6 +408,8 @@ _EXP_WHITELIST = frozenset({
     "0 a 1 año", "0 a 1 años", "hasta 1 año", "hasta un año",
     "1 año de experiencia", "un año de experiencia",
     "1 a 2 años",   # el mínimo es 1 -> aplica con 1 año
+    "2 a 3 años",   # borderline — usuario tiene 6 años exp, puede aplicar
+    "hasta 2 años", "máximo 2 años", "maximo 2 años",
     "deseable experiencia",  # no obligatoria
     "no excluyente",         # experiencia "no excluyente" = sin exp OK
 })
@@ -426,11 +431,12 @@ _SENIOR_WORDS_EXACT = frozenset({"sr", "ssr", "lead", "cto", "cio", "cpo"})
 # Patrones de años de experiencia que SUPERAN lo aceptable
 import re as _re
 _EXP_YEARS_PATTERN = _re.compile(
-    # "3 años de experiencia" / "2+ años de experiencia" / "5 o más años"
-    r'\b([2-9]|\d{2,})\s*(?:\+|o más|más de)?\s*años?\s*(?:de\s+)?experiencia'
+    # "3 años de experiencia" / "4+ años de experiencia" / "5 o más años"
+    # Umbral: 3+ años → rechazar. 2 años = aceptable (usuario tiene 6 años exp)
+    r'\b([3-9]|\d{2,})\s*(?:\+|o más|más de)?\s*años?\s*(?:de\s+)?experiencia'
     r'|'
-    # "5+ años" / "3+ años" — el + solo ya implica experiencia requerida
-    r'\b([2-9]|\d{2,})\s*\+\s*años?',
+    # "4+ años" / "3+ años"
+    r'\b([3-9]|\d{2,})\s*\+\s*años?',
     _re.IGNORECASE,
 )
 
@@ -919,7 +925,8 @@ def build_config_for_keyword(portal_key: str, keyword: str) -> dict:
     else:
         exp_indeed = "+junior+sin+experiencia"
 
-    exp_suffix_ct      = "-sin-experiencia"
+    has_sin_exp        = "sin experiencia" in kw_low
+    exp_suffix_ct      = "" if has_sin_exp else "-sin-experiencia"   # evitar doble sin-experiencia
     exp_suffix_laborum = "-sin-experiencia" if is_bodega else "-seniority-junior-sin-experiencia"
     exp_ct_query       = "sin+experiencia"  if is_bodega else "junior+sin+experiencia"
 
@@ -929,12 +936,13 @@ def build_config_for_keyword(portal_key: str, keyword: str) -> dict:
 
     url_map = {
         "indeed":        f"https://cl.indeed.com/jobs?q={kw_encoded}{exp_indeed}&l=Santiago%2C+Regi%C3%B3n+Metropolitana&radius=25&explvl=entry_level&sort=date",
-        "computrabajo":  f"https://cl.computrabajo.com/trabajo-de-{kw_dash}{exp_suffix_ct}",
+        # ?ordenar=2 = más recientes primero — evita saturación del DB con mismas ofertas
+        "computrabajo":  f"https://cl.computrabajo.com/trabajo-de-{kw_dash}{exp_suffix_ct}?ordenar=2",
         # Laborum: solo necesita llegar a laborum.cl con sesión válida.
         # /busqueda?q= devuelve 404 — usar la home siempre.
         "laborum":       "https://www.laborum.cl",
         # ChileTrabajos: URL de búsqueda directa por keyword
-        "chiletrabajos": f"https://www.chiletrabajos.cl/empleos?q={kw_encoded}&experiencia=sin-experiencia",
+        "chiletrabajos": f"https://www.chiletrabajos.cl/empleos?q={kw_encoded}&experiencia=sin-experiencia&ordenar=recientes",
         # GetOnBoard: usa URLs tipo slug (/jobs-{slug}), no soporta ?q= ni seniority en URL.
         "getonyboard":   _gob_slug_url(keyword),
         "linkedin":      f"https://www.linkedin.com/jobs/search/?keywords={kw_encoded}&location=Santiago%2C+Regi%C3%B3n+Metropolitana%2C+Chile&f_AL=true&f_E=2%2C3",
