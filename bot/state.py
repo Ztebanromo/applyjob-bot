@@ -94,8 +94,18 @@ def already_applied(url: str) -> bool:
             """SELECT id FROM applications
                WHERE url = ?
                  AND (
-                     status IN ('applied', 'skipped_already_applied')
+                     status IN (
+                         'applied',
+                         'skipped_already_applied',
+                         'skipped_topic',
+                         'skipped_experience',
+                         'skipped_schedule',
+                         'skipped_practica',
+                         'skipped_no_apply',
+                         'skipped_404'
+                     )
                      OR status LIKE 'external%'
+                     OR status LIKE 'filled%'
                  )""",
             (url,),
         ).fetchone()

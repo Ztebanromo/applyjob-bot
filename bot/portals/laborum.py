@@ -583,6 +583,13 @@ class LaborumPortal(BasePortal):
         """
         title = "unknown"
         try:
+            # Guard: verificar que la página no esté cerrada antes de navegar
+            try:
+                if page.is_closed():
+                    return "error: pagina cerrada", title
+            except Exception:
+                return "error: pagina cerrada", title
+
             if not self._goto_networkidle(page, offer_url):
                 return "error: navegación fallida", title
 
