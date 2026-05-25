@@ -1575,6 +1575,96 @@ def api_reset_all():
     return jsonify({'ok': True, 'cleared': cleared, 'errors': errors})
 
 
+@app.route('/api/daily-stats', methods=['GET'])
+def api_daily_stats():
+    """
+    Retorna conteos diarios de postulaciones de los últimos N días (default 14).
+    Response: { ok, labels: ["YYYY-MM-DD",...], applied: [int,...], external: [int,...], skipped: [int,...] }
+    """
+    import sqlite3
+    from datetime import date as _date, timedelta
+    from bot.state import DB_PATH
+
+    days = int(request.args.get('days', 14))
+    days = min(max(days, 1), 90)
+
+    try:
+        con = sqlite3.connect(str(DB_PATH))
+        con.row_factory = sqlite3.Row
+        rows = con.execute("""
+            SELECT
+                DATE(applied_at) as day,
+                SUM(CASE WHEN status = 'applied' THEN 1 ELSE 0 END)        as applied,
+                SUM(CASE WHEN status LIKE 'external%' THEN 1 ELSE 0 END)   as external,
+                SUM(CASE WHEN status LIKE 'skipped%' THEN 1 ELSE 0 END)    as skipped
+            FROM applications
+            WHERE applied_at >= DATE('now', ?)
+            GROUP BY day
+            ORDER BY day ASC
+        """, (f'-{days} days',)).fetchall()
+        con.close()
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e)}), 500
+
+    end   = _date.today()
+    start = end - timedelta(days=days - 1)
+    row_map = {r['day']: r for r in rows}
+
+    labels, applied_vals, external_vals, skipped_vals = [], [], [], []
+    cur = start
+    while cur <= end:
+        ds = cur.strftime('%Y-%m-%d')
+        r  = row_map.get(ds)
+        labels.append(ds)
+        applied_vals.append(int(r['applied'])  if r else 0)
+        external_vals.append(int(r['external']) if r else 0)
+        skipped_vals.append(int(r['skipped'])   if r else 0)
+        cur += timedelta(days=1)
+
+    return jsonify({
+        'ok':      True,
+        'labels':  labels,
+        'applied':  applied_vals,
+        'external': external_vals,
+        'skipped':  skipped_vals,
+    })
+
+
+@app.route('/api/export-csv', methods=['GET'])
+def api_export_csv():
+    """Descarga todas las postulaciones como CSV — columnas: portal, title, status, applied_at, url."""
+    import io
+    import csv as _csv
+    import sqlite3
+    from datetime import date as _date
+    from flask import Response as _Resp
+    from bot.state import DB_PATH
+
+    try:
+        con = sqlite3.connect(str(DB_PATH))
+        con.row_factory = sqlite3.Row
+        rows = con.execute(
+            "SELECT portal, title, status, applied_at, url "
+            "FROM applications ORDER BY applied_at DESC"
+        ).fetchall()
+        con.close()
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e)}), 500
+
+    output = io.StringIO()
+    writer = _csv.writer(output)
+    writer.writerow(['portal', 'title', 'status', 'applied_at', 'url'])
+    for r in rows:
+        writer.writerow([r['portal'], r['title'], r['status'], r['applied_at'], r['url']])
+
+    filename = f"postulaciones_{_date.today().strftime('%Y-%m-%d')}.csv"
+    return _Resp(
+        output.getvalue().encode('utf-8'),
+        mimetype='text/csv',
+        headers={'Content-Disposition': f'attachment; filename="{filename}"'}
+    )
+
+
 @app.route('/api/stop', methods=['POST'])
 def api_stop():
     """Endpoint HTTP de stop — fallback por si el SocketIO no llega."""
