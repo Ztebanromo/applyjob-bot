@@ -1,4 +1,7 @@
+import atexit
+import collections
 import json
+import logging as _logging
 import os
 import subprocess
 import threading
@@ -8,7 +11,37 @@ import secrets
 import re
 import tempfile
 import signal
-from flask import Flask, render_template, request, jsonify
+from functools import wraps
+from flask import Flask, render_template, request, jsonify, Response as FlaskResponse
+
+_log = _logging.getLogger("applyjob.server")
+
+
+# ── Rate limiter ──────────────────────────────────────────────────────────────
+class _RateLimiter:
+    """
+    Sliding-window rate limiter. Thread-safe.
+    Raises RuntimeError if more than max_calls happen within window_s seconds.
+    """
+    def __init__(self, max_calls: int, window_s: float):
+        self._max   = max_calls
+        self._win   = window_s
+        self._calls: collections.deque = collections.deque()
+        self._lock  = threading.Lock()
+
+    def check(self) -> None:
+        now = time.time()
+        with self._lock:
+            while self._calls and now - self._calls[0] > self._win:
+                self._calls.popleft()
+            if len(self._calls) >= self._max:
+                raise RuntimeError(
+                    f"Rate limit: max {self._max} requests per {int(self._win)}s exceeded"
+                )
+            self._calls.append(now)
+
+
+_config_rate_limiter = _RateLimiter(max_calls=10, window_s=60)
 from flask_socketio import SocketIO, emit
 from dotenv import load_dotenv
 
@@ -53,6 +86,58 @@ def _clear_stop_signal():
 
 # Limpiar señal residual al iniciar (por si el servidor se reinició abruptamente)
 _clear_stop_signal()
+
+# Max seconds a bot subprocess may run before the watchdog kills it
+PORTAL_TIMEOUT_S = int(os.getenv("PORTAL_TIMEOUT_S", "600"))  # 10 min default
+
+
+def _start_watchdog(process: subprocess.Popen, timeout_s: int, label: str) -> threading.Thread:
+    """
+    Lanza un thread daemon que mata `process` si no termina en timeout_s segundos.
+    """
+    def _watch():
+        deadline = time.time() + timeout_s
+        while time.time() < deadline:
+            if process.poll() is not None:
+                return          # proceso ya terminó — watchdog no necesario
+            time.sleep(5)
+        # Timeout agotado
+        if process.poll() is None:
+            _log.warning("[WATCHDOG] %s excedió %ds — matando PID %d",
+                         label, timeout_s, process.pid)
+            try:
+                state.add_log(f"\n[WATCHDOG] ⏱ Timeout {timeout_s}s en {label} — forzando cierre.\n")
+            except Exception:
+                pass
+            _write_stop_signal()
+            time.sleep(3)
+            if process.poll() is None:
+                try:
+                    process.kill()
+                except Exception:
+                    pass
+
+    t = threading.Thread(target=_watch, daemon=True, name=f"watchdog-{label}")
+    t.start()
+    return t
+
+
+def _kill_chromium_children(pid: int) -> None:
+    """Mata todos los procesos Chromium hijos de pid usando psutil (si está disponible)."""
+    try:
+        import psutil
+        parent = psutil.Process(pid)
+        for child in parent.children(recursive=True):
+            try:
+                if "chrom" in child.name().lower():
+                    child.kill()
+                    _log.debug("[CLEANUP] Chromium hijo PID %d matado", child.pid)
+            except Exception:
+                pass
+    except ImportError:
+        pass   # psutil no instalado — omitir silenciosamente
+    except Exception as e:
+        _log.debug("[CLEANUP] Error limpiando hijos: %s", e)
 
 # Estado global thread-safe
 class BotState:
@@ -344,6 +429,18 @@ _KNOWN_PORTALS = [
     # Portales remotos internacionales (sin login, postulación externa)
     'weworkremotely', 'remotive', 'remoteco',
 ]
+
+
+def _validate_portals(raw) -> list:
+    """
+    Filtra una lista de portales recibida del cliente contra la whitelist.
+    Retorna solo los portales válidos. Nunca lanza excepción.
+    """
+    if not isinstance(raw, list):
+        return []
+    return [p for p in raw if isinstance(p, str) and p in _KNOWN_PORTALS]
+
+
 # Indeed excluido: bloqueado por Cloudflare Turnstile
 _PERSISTED_ENV_KEYS = {
     'USER_KEYWORDS',
@@ -570,6 +667,9 @@ def _stream_process(proc, finish_log: str, finish_cb, stop_check=None):
         proc.wait(timeout=3)
     except Exception:
         pass
+    # Limpiar procesos Chromium zombie que el subprocess pudo haber dejado
+    if proc.pid:
+        _kill_chromium_children(proc.pid)
     state.add_log(finish_log)
     finish_cb()
 
@@ -594,6 +694,7 @@ def api_scan():
                                     text=True, encoding='utf-8', errors='replace', bufsize=1,
                                     env=_make_child_env())
             state.set_scan_process(proc)
+            _start_watchdog(proc, PORTAL_TIMEOUT_S, f"scan-{portals or 'all'}")
             def _finish():
                 if state.finish_scan(run_id):
                     socketio.emit('bot_status', state.get_status() | {"status": "scan_finished"}, namespace='/bot')
@@ -631,6 +732,7 @@ def api_postular():
                                     text=True, encoding='utf-8', errors='replace', bufsize=1,
                                     env=_make_child_env(runtime_env))
             state.set_apply_process(proc)
+            _start_watchdog(proc, PORTAL_TIMEOUT_S, f"postular-{portals or 'all'}")
             def _finish():
                 if state.finish_apply(run_id):
                     socketio.emit('bot_status', state.get_status() | {"status": "finished"}, namespace='/bot')
@@ -663,6 +765,7 @@ def api_apply_queue():
                                     text=True, encoding='utf-8', errors='replace', bufsize=1,
                                     env=_make_child_env())
             state.set_apply_process(proc)
+            _start_watchdog(proc, PORTAL_TIMEOUT_S, f"apply-queue-{portals or 'all'}")
             def _finish():
                 if state.finish_apply(run_id):
                     socketio.emit('bot_status', state.get_status() | {"status": "finished"}, namespace='/bot')
@@ -739,6 +842,10 @@ def api_parse_cv():
 
 @app.route('/save_config', methods=['POST'])
 def save_config():
+    try:
+        _config_rate_limiter.check()
+    except RuntimeError as e:
+        return jsonify({'ok': False, 'error': str(e)}), 429
     try:
         data = request.form.to_dict()
         
@@ -1324,7 +1431,7 @@ def handle_start(data):
     if state.apply_active:
         emit('bot_status', state.get_status() | {"status": "already_running"})
         return
-    portals = [p for p in data.get('portals', []) if p in _KNOWN_PORTALS]
+    portals = _validate_portals(data.get('portals', []))
     if not portals:
         emit('bot_status', state.get_status() | {"status": "idle"})
         return
@@ -1357,6 +1464,7 @@ def handle_start(data):
                                     text=True, encoding='utf-8', errors='replace', bufsize=1,
                                     env=_make_child_env(runtime_env))
             state.set_apply_process(proc)
+            _start_watchdog(proc, PORTAL_TIMEOUT_S, f"master-{','.join(portals)}")
             def _finish():
                 if state.finish_apply(run_id):
                     socketio.emit('bot_status', state.get_status() | {"status": "finished"}, namespace='/bot')
@@ -1430,6 +1538,27 @@ def api_stop():
     """Endpoint HTTP de stop — fallback por si el SocketIO no llega."""
     killed = _do_stop()
     return jsonify({'ok': True, 'killed': killed})
+
+def _on_exit():
+    """Limpieza al cerrar el servidor (Ctrl+C o kill)."""
+    _log.info("[SHUTDOWN] Servidor cerrándose — limpiando procesos...")
+    _write_stop_signal()
+    for proc_attr in ('apply_process', 'scan_process'):
+        proc = getattr(state, proc_attr, None)
+        if proc and proc.poll() is None:
+            try:
+                proc.terminate()
+                proc.wait(timeout=5)
+            except Exception:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+    _clear_stop_signal()
+    _log.info("[SHUTDOWN] Limpieza completada.")
+
+atexit.register(_on_exit)
+
 
 if __name__ == '__main__':
     port = 5000
