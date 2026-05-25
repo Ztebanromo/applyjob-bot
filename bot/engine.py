@@ -1111,6 +1111,70 @@ def _wait_for_login_if_needed(page, portal_name: str, config: dict) -> None:
             except Exception as exc:
                 log.warning("Fallo auto-login Laborum: %s", exc)
 
+    # --- Auto-Login GetOnBoard vía LinkedIn OAuth ---
+    # GetOnBoard no tiene login por email directo — el camino es LinkedIn OAuth.
+    # Intentamos hacer clic en "Ingresa" → "Continuar con LinkedIn" automáticamente.
+    # Si LinkedIn ya tiene sesión activa (CDP o sesión guardada), el OAuth completa
+    # solo y el bot detecta el login por el bucle de espera abajo.
+    if portal_name == "getonyboard":
+        try:
+            cur_url = page.url
+            # Solo intentar si estamos en la página de login
+            if "sign_in" in cur_url or "auth" in cur_url or "getonbrd.com" in cur_url:
+                _gob_linkedin_btn = None
+                # Intentar clic directo en el botón de LinkedIn si ya está visible
+                for _sel in [
+                    "a:has-text('Continuar con LinkedIn')",
+                    "a[href*='linkedin']",
+                    "button:has-text('LinkedIn')",
+                    ".gb-btn--linkedin",
+                ]:
+                    try:
+                        _el = page.query_selector(_sel)
+                        if _el and _el.is_visible():
+                            _gob_linkedin_btn = _el
+                            break
+                    except Exception:
+                        pass
+
+                if _gob_linkedin_btn:
+                    log.info("[GOB_LOGIN] Haciendo clic en 'Continuar con LinkedIn'...")
+                    print("[GOB_LOGIN] Auto-login GetOnBoard vía LinkedIn...")
+                    _gob_linkedin_btn.click()
+                    human_delay(3.0, 5.0)
+                else:
+                    # Intentar clic en "Ingresa" primero para llegar a los botones OAuth
+                    for _ingresa_sel in [
+                        "a:has-text('Ingresa')",
+                        "a[href*='/auth/sign_in']",
+                        "a:has-text('Iniciar sesión')",
+                    ]:
+                        try:
+                            _el = page.query_selector(_ingresa_sel)
+                            if _el and _el.is_visible():
+                                _el.click()
+                                human_delay(2.0, 3.0)
+                                # Ahora buscar el botón de LinkedIn
+                                for _sel in [
+                                    "a:has-text('Continuar con LinkedIn')",
+                                    "a[href*='linkedin']",
+                                    "button:has-text('LinkedIn')",
+                                ]:
+                                    try:
+                                        _el2 = page.query_selector(_sel)
+                                        if _el2 and _el2.is_visible():
+                                            log.info("[GOB_LOGIN] Clic en LinkedIn OAuth...")
+                                            _el2.click()
+                                            human_delay(3.0, 5.0)
+                                            break
+                                    except Exception:
+                                        pass
+                                break
+                        except Exception:
+                            pass
+        except Exception as _gob_exc:
+            log.debug("[GOB_LOGIN] Error en auto-login: %s", _gob_exc)
+
     # Esperar hasta 10 minutos a que el usuario inicie sesión
     deadline  = time.time() + 600
     last_log  = 0
@@ -2368,6 +2432,8 @@ def run_bot_multi_keywords(
     session_dir = str(SESSIONS_DIR / portal_name)
     Path(session_dir).mkdir(exist_ok=True)
 
+    _run_start = time.time()   # para calcular duración al finalizar
+
     log.info("=== ApplyJob Bot (Multi-Keyword — browser compartido) ===")
     log.info("Portal: %s | grupos: %d", portal_name, len(KEYWORD_GROUPS))
 
@@ -2676,6 +2742,21 @@ def run_bot_multi_keywords(
 
     # Emitir progreso final con flag finished=True para que el dashboard coloree
     print(f"[PROGRESO_FINAL] Aplicadas {total_applied}/{_total_max_target} en {portal_name.upper()}")
+
+    # ── Notificación de fin de run ─────────────────────────────────────────────
+    try:
+        from .notifier import send_summary as _notify
+        _notify(
+            portals=[portal_name],
+            applied=total_applied,
+            external=0,
+            filtered=0,
+            errors=0,
+            duration_s=time.time() - _run_start,
+        )
+    except Exception as _ne:
+        log.debug("[NOTIFIER] Error enviando notificación: %s", _ne)
+
     return total_applied
 
     if total_applied < MIN_APPLIES_TO_KEEP_SESSION:
@@ -2847,6 +2928,20 @@ def run_persistent_session(
         print(f"  {estado} {p.upper():<18} {cnt} postulaciones")
     print(f"  TOTAL: {total} postulaciones")
     print(f"{'='*55}\n")
+
+    # ── Notificación de sesión persistente finalizada ──────────────────────────
+    try:
+        from .notifier import send_summary as _notify
+        _notify(
+            portals=list(applied_per_portal.keys()),
+            applied=total,
+            external=0,
+            filtered=0,
+            errors=0,
+        )
+    except Exception as _ne:
+        log.debug("[NOTIFIER] Error enviando notificación: %s", _ne)
+
     return applied_per_portal
 
 

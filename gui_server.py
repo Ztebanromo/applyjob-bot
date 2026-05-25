@@ -1692,6 +1692,105 @@ def _on_exit():
 atexit.register(_on_exit)
 
 
+# ── Scheduler ─────────────────────────────────────────────────────────────────
+# Lee SCHEDULE_PORTALS y SCHEDULE_TIMES del .env y dispara el bot
+# automáticamente a las horas configuradas si no hay una ejecución activa.
+#
+# SCHEDULE_PORTALS=linkedin,computrabajo
+# SCHEDULE_TIMES=09:00,14:00,18:00
+#
+# El scheduler corre en un thread daemon — se inicia al arrancar el servidor y
+# muere cuando el proceso principal termina. No persiste entre reinicios.
+# Si el bot ya está corriendo a la hora programada, la dispara se omite silenciosamente.
+
+def _scheduler_thread():
+    """Thread daemon que dispara el bot a las horas configuradas."""
+    import datetime as _dt
+
+    _SCHEDULE_PORTALS_RAW = os.getenv("SCHEDULE_PORTALS", "").strip()
+    _SCHEDULE_TIMES_RAW   = os.getenv("SCHEDULE_TIMES",   "").strip()
+
+    if not _SCHEDULE_PORTALS_RAW or not _SCHEDULE_TIMES_RAW:
+        _log.debug("[SCHEDULER] No configurado — SCHEDULE_PORTALS o SCHEDULE_TIMES vacíos.")
+        return
+
+    # Parsear portales
+    _VALID_SCHED = set(_KNOWN_PORTALS) | {'indeed'}
+    sched_portals = [p.strip().lower() for p in _SCHEDULE_PORTALS_RAW.split(",")
+                     if p.strip().lower() in _VALID_SCHED]
+    if not sched_portals:
+        _log.warning("[SCHEDULER] SCHEDULE_PORTALS no contiene portales válidos: %s",
+                     _SCHEDULE_PORTALS_RAW)
+        return
+
+    # Parsear horarios HH:MM
+    sched_times: list[tuple[int, int]] = []
+    for t in _SCHEDULE_TIMES_RAW.split(","):
+        t = t.strip()
+        try:
+            h, m = t.split(":")
+            sched_times.append((int(h), int(m)))
+        except (ValueError, AttributeError):
+            _log.warning("[SCHEDULER] Horario inválido ignorado: '%s'", t)
+
+    if not sched_times:
+        _log.warning("[SCHEDULER] SCHEDULE_TIMES no contiene horarios válidos: %s",
+                     _SCHEDULE_TIMES_RAW)
+        return
+
+    _log.info("[SCHEDULER] Activo — portales: %s | horarios: %s",
+              ", ".join(sched_portals),
+              ", ".join(f"{h:02d}:{m:02d}" for h, m in sched_times))
+    print(f"[SCHEDULER] Activado — {', '.join(p.upper() for p in sched_portals)} "
+          f"a las {', '.join(f'{h:02d}:{m:02d}' for h, m in sched_times)}")
+
+    _last_fired: set[tuple] = set()   # (date, HH, MM) disparados hoy
+
+    while True:
+        try:
+            now = _dt.datetime.now()
+            today = now.date()
+
+            for h, m in sched_times:
+                key = (today, h, m)
+                if key in _last_fired:
+                    continue   # ya se disparó hoy a esta hora
+
+                # Ventana de ±1 minuto para tolerar desfase del sleep
+                target = now.replace(hour=h, minute=m, second=0, microsecond=0)
+                diff   = abs((now - target).total_seconds())
+                if diff <= 60:
+                    if state.is_active:
+                        _log.info("[SCHEDULER] %02d:%02d — bot ya activo, omitiendo.",
+                                  h, m)
+                    else:
+                        _log.info("[SCHEDULER] Disparando bot programado %02d:%02d — %s",
+                                  h, m, ", ".join(sched_portals))
+                        print(f"\n[SCHEDULER] ⏰ {h:02d}:{m:02d} — lanzando bot: "
+                              f"{', '.join(p.upper() for p in sched_portals)}")
+                        state.add_log(
+                            f"\n[SCHEDULER] ⏰ {h:02d}:{m:02d} — ejecución programada iniciada.\n"
+                        )
+                        threading.Thread(
+                            target=run_bot_thread,
+                            args=(sched_portals,),
+                            daemon=True,
+                        ).start()
+                    _last_fired.add(key)
+
+            # Limpiar disparos de días anteriores (evitar que el set crezca)
+            _last_fired = {k for k in _last_fired if k[0] == today}
+
+        except Exception as _se:
+            _log.warning("[SCHEDULER] Error en ciclo: %s", _se)
+
+        time.sleep(30)   # comprobar cada 30 segundos
+
+
+# Iniciar scheduler al arrancar el módulo (funciona tanto en __main__ como importado)
+threading.Thread(target=_scheduler_thread, daemon=True, name="scheduler").start()
+
+
 if __name__ == '__main__':
     port = 5000
     print(f"\n--- Iniciando modo maestro (producción) ---")
