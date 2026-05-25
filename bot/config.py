@@ -636,18 +636,14 @@ def topic_ok_it(text: str) -> bool:
 # Generador de combinaciones — base × modificador de experiencia
 # "sin experiencia" se añade siempre en la URL via build_config_for_keyword
 # ---------------------------------------------------------------------------
-def _gen_it(label: str, bases: list, mods=("junior", "trainee", "sin experiencia"), scan=True):
+def _gen_it(label: str, bases: list, mods=("junior", "sin experiencia"), scan=True):
+    """Genera combinaciones base × modificador. Solo IT, solo junior/sin experiencia."""
     rows = []
     for base in bases:
         for mod in mods:
             rows.append({"label": label, "keyword": f"{base} {mod}", "mode": "it", "scan": scan})
     return rows
 
-def _gen_bodega(bases: list):
-    rows = []
-    for base in bases:
-        rows.append({"label": "Bodega", "keyword": f"{base} sin experiencia", "mode": "bodega", "scan": False})
-    return rows
 
 KEYWORD_GROUPS = (
     # ── Desarrollo general ────────────────────────────────────────────────────
@@ -672,7 +668,7 @@ KEYWORD_GROUPS = (
     _gen_it("Datos", [
         "analista de datos", "analista BI", "data analyst",
         "analista de informacion",
-    ], mods=("junior", "trainee")) +
+    ]) +
     # ── Soporte / Helpdesk ────────────────────────────────────────────────────
     _gen_it("Soporte", [
         "soporte tecnico", "soporte TI", "help desk",
@@ -681,7 +677,7 @@ KEYWORD_GROUPS = (
     # ── QA / Testing ─────────────────────────────────────────────────────────
     _gen_it("QA", [
         "QA", "tester", "quality assurance",
-    ], mods=("junior", "trainee")) +
+    ]) +
     # ── Egresados — el modificador ES la identidad ────────────────────────────
     [
         {"label": "Egresado", "keyword": "egresado informatica",          "mode": "it", "scan": True},
@@ -689,12 +685,8 @@ KEYWORD_GROUPS = (
         {"label": "Egresado", "keyword": "egresado analista programador", "mode": "it", "scan": True},
         {"label": "Egresado", "keyword": "recien egresado sistemas",      "mode": "it", "scan": True},
         {"label": "Egresado", "keyword": "recien egresado informatica",   "mode": "it", "scan": True},
-    ] +
-    # ── Bodega / Logística ────────────────────────────────────────────────────
-    _gen_bodega([
-        "operario bodega", "operario de bodega", "auxiliar bodega", "auxiliar logistica",
-        "bodeguero", "operario logistica", "picker",
-    ])
+    ]
+    # Nota: bodega/logística eliminado — solo IT en adelante
 )
 
 
