@@ -50,6 +50,29 @@ app.config['UPLOAD_FOLDER'] = 'uploads'
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024
 app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', secrets.token_hex(24))
 
+# ── HTTP Basic Auth (opcional) ────────────────────────────────────────────────
+# Configura DASHBOARD_PASSWORD en .env para proteger el dashboard.
+# Si está vacío, no pide autenticación (comportamiento por defecto).
+_DASHBOARD_PW = os.getenv("DASHBOARD_PASSWORD", "")
+
+
+def _require_auth(f):
+    """Decorator de autenticación HTTP Basic (se mantiene para uso explícito si se necesita)."""
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if not _DASHBOARD_PW:
+            return f(*args, **kwargs)
+        auth = request.authorization
+        if auth and auth.password == _DASHBOARD_PW:
+            return f(*args, **kwargs)
+        return FlaskResponse(
+            "Acceso restringido — configura DASHBOARD_PASSWORD en .env.",
+            401,
+            {"WWW-Authenticate": 'Basic realm="ApplyJob Dashboard"'},
+        )
+    return decorated
+
+
 # Inicializar SocketIO con hilos (modo más compatible en Windows sin eventlet/gevent)
 # SECURITY: CORS restringido a localhost — nunca permitir orígenes externos
 socketio = SocketIO(
@@ -60,6 +83,24 @@ socketio = SocketIO(
 
 # Asegurar directorios
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
+
+
+@app.before_request
+def _global_auth():
+    """
+    Aplica HTTP Basic Auth a TODAS las rutas si DASHBOARD_PASSWORD está configurado.
+    Las peticiones de SocketIO pasan porque van por WebSocket, no HTTP normal.
+    """
+    if not _DASHBOARD_PW:
+        return
+    auth = request.authorization
+    if auth and auth.password == _DASHBOARD_PW:
+        return
+    return FlaskResponse(
+        "Acceso restringido — configura DASHBOARD_PASSWORD en .env.",
+        401,
+        {"WWW-Authenticate": 'Basic realm="ApplyJob Dashboard"'},
+    )
 
 # ── Archivo señal de parada (compartido con engine.py) ────────────────────────
 # gui_server escribe este archivo; engine.py lo detecta y cierra el browser limpio

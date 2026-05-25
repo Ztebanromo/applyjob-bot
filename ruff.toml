@@ -1,0 +1,19 @@
+[lint]
+select = ["E", "F", "W"]
+ignore = [
+    "E501",   # line too long — selectors and URLs are often long
+    "E402",   # module import not at top — intentional in some config files
+    "E701",   # multiple statements on one line (colon) — pre-existing style
+    "E702",   # multiple statements on one line (semicolon) — pre-existing style
+    "E722",   # bare except — pre-existing, broad catches intentional
+    "E741",   # ambiguous variable name (l, O) — minor style issue
+    "F401",   # imported but unused — some are re-exported
+    "F541",   # f-string without placeholders — pre-existing
+    "F821",   # undefined name — some functions defined later in file
+    "F841",   # local variable assigned but never used — pre-existing
+    "W291",   # trailing whitespace
+    "W293",   # whitespace before ':'
+]
+
+[lint.per-file-ignores]
+"tests/*" = ["F401", "E402"]

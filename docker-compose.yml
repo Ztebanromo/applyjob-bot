@@ -1,0 +1,22 @@
+services:
+  applyjob:
+    build: .
+    image: applyjob-bot:latest
+    ports:
+      - "5000:5000"
+    volumes:
+      # Persist state outside the container across rebuilds
+      - ./data:/app/data
+      - ./logs:/app/logs
+      - ./sessions:/app/sessions
+      - ./uploads:/app/uploads
+      # Mount .env as read-only — credentials never bake into the image
+      - ./.env:/app/.env:ro
+    environment:
+      - PYTHONUNBUFFERED=1
+      - PYTHONUTF8=1
+    restart: unless-stopped
+    # Chromium needs relaxed seccomp + extra shared memory
+    security_opt:
+      - seccomp:unconfined
+    shm_size: 256mb
