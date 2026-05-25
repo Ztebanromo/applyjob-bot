@@ -593,6 +593,38 @@ _OFF_TOPIC_SUBSTRINGS = [
     # Transporte (excluir choferes, no bodega logística)
     "chofer de camion", "chofer camion", "conductor de camion",
     "taxista", "uber", "delivery conductor",
+    # Prevención de riesgos / Seguridad laboral
+    "prevencionista", "prevención de riesgo", "prevencion de riesgo",
+    "experto en prevencion", "experto en prevención",
+    "higiene y seguridad", "seguridad y salud", "salud ocupacional",
+    "seguridad industrial", "seguridad laboral",
+    "asesor de seguridad", "asesora de seguridad",
+    "coordinador de seguridad", "coordinadora de seguridad",
+    "jefe de prevenci", "encargado de prevenci",
+    # Minería / Operaciones industriales (no IT)
+    "operador de planta", "operador de maquinaria",
+    "operador minero", "minero", "pirquinero",
+    "mantencion industrial", "mantención industrial",
+    "electricista industrial", "mecanico industrial",
+    "soldador", "tornero", "fresador",
+    # Retail / Atención al cliente (no IT)
+    "cajero", "cajera", "promotor", "promotora",
+    "reponedor", "reponedora", "repositor",
+    "atención al cliente", "atencion al cliente",
+    "servicio al cliente", "call center", "teleoperador",
+    # Limpieza / Aseo
+    "auxiliar de aseo", "auxiliar aseo", "aseo y ornato",
+    "camarera", "camarero", "mucama",
+    "conserje",
+    # Seguridad privada (guardia, no TI)
+    "guardia de seguridad", "guardia privado", "vigilante",
+    "guardia nocturno",
+    # Agricultura / Campo
+    "agricultor", "temporero", "cosecha",
+    "operario agricola", "operario agrícola",
+    # Servicios personales
+    "peluquero", "peluquera", "esteticista", "manicurista",
+    "masajista", "cosmetologa",
 ]
 
 
