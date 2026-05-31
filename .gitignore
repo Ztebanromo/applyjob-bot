@@ -32,6 +32,9 @@ TROUBLESHOOTING.md
 # Scripts de lanzamiento personal (.bat tienen rutas locales)
 *.bat
 
+# Node (doc generators)
+node_modules/
+
 # Python
 __pycache__/
 *.py[cod]
@@ -53,6 +56,7 @@ Thumbs.db
 # Temporales y logs en raíz
 *.log
 *.png
+*.txt
 scratch/
 research/
 uploads/
@@ -60,3 +64,7 @@ indeed_cookies.json
 server.log
 server_err.log
 logsserver.log
+
+# Archivos temporales de diff/debug
+C*Users*.txt
+*_diff.txt

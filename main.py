@@ -19,16 +19,11 @@ Notas:
 """
 import argparse
 import sys
-import io
-
-# Forzar UTF-8 en stdout/stderr para evitar UnicodeEncodeError en terminales Windows (cp1252)
-if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
-if sys.stderr.encoding and sys.stderr.encoding.lower() != "utf-8":
-    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
+# Nota: el rewrap UTF-8 de stdout/stderr lo hace bot/logger.py al importarse.
+# NO repetirlo aquí — doble wrap cierra el buffer subyacente → ValueError.
 
 from bot.config import SITE_CONFIG
-from bot.engine import run_bot, run_bot_multi_keywords, run_scan_pass, run_apply_queue, run_persistent_session
+from bot.engine import run_bot, run_bot_multi_keywords, run_scan_pass, run_apply_queue, run_persistent_session, run_scan_quick_links, run_apply_quick_links
 from bot.logger import configure_logging
 
 
@@ -125,6 +120,16 @@ Ejemplos:
         help="Cicla portales hasta que TODOS tengan ≥1 postulación. Usa con --portal o --run-all.")
     parser.add_argument("--min-per-portal", type=int, default=1,
         help="Mínimo de postulaciones por portal para parar en modo --persistent (default: 1)")
+    parser.add_argument("--scan-quick-links", action="store_true",
+        help="Escanea los quick_links.json guardados para recopilar preguntas de ATS externos")
+    parser.add_argument("--apply-quick-links", action="store_true",
+        help="Aplica automáticamente a los quick_links.json (ATS externos) — hasta --max (default 5)")
+    parser.add_argument("--fill-curriculum", action="store_true",
+        help="Llena el curriculum en trabajando.cl/mi-curriculum con los datos del perfil")
+    parser.add_argument("--cleanup", action="store_true",
+        help="Limpia capturas de pantalla viejas, logs raíz obsoletos y carpetas pycache")
+    parser.add_argument("--all-errors", action="store_true",
+        help="Usado con --cleanup para borrar todas las capturas de error (.png) sin retención de días")
 
     args = parser.parse_args()
 
@@ -140,10 +145,21 @@ Ejemplos:
 
     if args.stats:
         show_stats()
+        # Mostrar también análisis de keywords y sesiones
+        try:
+            from bot.session_stats import print_top_keywords_all_portals
+            print_top_keywords_all_portals(top_n=8)
+        except Exception:
+            pass
         sys.exit(0)
 
     if args.purge:
         run_purge(args.days)
+        sys.exit(0)
+
+    if args.cleanup:
+        from cleanup_project import run_cleanup
+        run_cleanup(delete_all_errors=args.all_errors)
         sys.exit(0)
 
     # Indeed excluido: bloqueado por Cloudflare Turnstile (requiere Chrome real + CDP)
@@ -152,6 +168,10 @@ Ejemplos:
 
     if args.scan:
         portals = _ALL_PORTALS if not args.portal else [p.strip() for p in args.portal.split(",") if p.strip()]
+        # Aplicar --max como límite de ofertas por keyword en el scan
+        if args.max is not None:
+            for p in SITE_CONFIG:
+                SITE_CONFIG[p]["max_offers_per_run"] = args.max
         for p in portals:
             print(f"\n{'='*50}")
             print(f"[SCAN] Portal: {p.upper()}")
@@ -167,6 +187,41 @@ Ejemplos:
             print(f"{'='*50}")
             run_apply_queue(p, headless=args.headless)
         sys.exit(0)
+
+    if args.scan_quick_links:
+        max_l = args.max if args.max else 100
+        run_scan_quick_links(headless=args.headless, max_links=max_l)
+        sys.exit(0)
+
+    if getattr(args, 'apply_quick_links', False):
+        max_a = args.max if args.max else 5
+        run_apply_quick_links(headless=args.headless, max_apply=max_a)
+        sys.exit(0)
+
+    if args.fill_curriculum:
+        from bot.portals.trabajando import fill_curriculum
+        from bot.config import USER_PROFILE
+        from playwright.sync_api import sync_playwright
+        import os as _os
+
+        session_dir = _os.path.join("sessions", "trabajando")
+        _os.makedirs(session_dir, exist_ok=True)
+        print("[fill-curriculum] Iniciando navegador para trabajando.cl…")
+        with sync_playwright() as pw:
+            ctx = pw.chromium.launch_persistent_context(
+                session_dir,
+                headless=args.headless,
+                args=["--no-sandbox", "--disable-blink-features=AutomationControlled", "--disable-popup-blocking"],
+                ignore_https_errors=True,
+            )
+            page = ctx.new_page()
+            ok = fill_curriculum(page, USER_PROFILE)
+            ctx.close()
+        if ok:
+            print("[fill-curriculum] Curriculum guardado correctamente en trabajando.cl ✓")
+        else:
+            print("[fill-curriculum] No se pudo guardar — puede necesitar login manual primero")
+        sys.exit(0 if ok else 1)
 
     # Sobrescribir límites si hay variable de entorno (para el Dashboard)
     import os
@@ -219,22 +274,46 @@ Ejemplos:
 
         elif args.multi_keyword:
             # multi-keyword: cada portal abre su propio sync_playwright internamente
+            from bot.session_stats import SessionTracker
+            _tracker = SessionTracker()
+            _tracker.start(portal_list)
+            _portal_results: dict = {}  # portal -> {applied, found, keywords, end_reason}
+
             for portal in portal_list:
                 if portal not in SITE_CONFIG:
                     print(f"Error: portal '{portal}' no encontrado. Saltando.")
+                    _tracker.record_portal(portal, 0, 0, 0, "error")
                     continue
                 print(f"\n[PORTAL_ACTIVO] PORTAL: {portal}")
                 try:
                     if args.max is not None:
                         SITE_CONFIG[portal]["max_offers_per_run"] = args.max
-                    applied = run_bot_multi_keywords(
+                    result = run_bot_multi_keywords(
                         portal_name = portal,
                         dry_run     = args.dry_run,
                         headless    = args.headless,
                     )
-                    total_global += (applied or 0)
+                    # result puede ser dict (nuevo) o int (legado)
+                    if isinstance(result, dict):
+                        _applied = result.get("applied", 0)
+                        _tracker.record_portal(
+                            portal,
+                            applied       = _applied,
+                            found         = result.get("found", 0),
+                            keywords_tried= result.get("keywords", 0),
+                            end_reason    = result.get("end_reason", "completed"),
+                        )
+                    else:
+                        _applied = result or 0
+                        _tracker.record_portal(portal, _applied, 0, 0, "completed")
+                    total_global += _applied
                 except Exception as e:
                     print(f"Error crítico en portal {portal}: {e}")
+                    _tracker.record_portal(portal, 0, 0, 0, "error")
+
+            # Guardar y mostrar resumen de sesión
+            session = _tracker.finish()
+            _tracker.print_summary(session)
         else:
             # modo normal: un solo sync_playwright compartido entre portales
             from playwright.sync_api import sync_playwright

@@ -210,10 +210,35 @@ def _auto_answer(label: str, profile: dict) -> Optional[str]:
     def _has(*keywords) -> bool:
         return any(k in n for k in keywords)
 
+    # -- 0a. Prueba técnica / evaluación (antes de cualquier otra regla) -------
+    if _has("prueba tecnica", "test tecnico", "evaluacion tecnica",
+            "prueba de conocimiento", "prueba de codificacion", "coding test",
+            "technical test", "technical assessment"):
+        return "Sí, con gusto. Estoy disponible para realizar pruebas técnicas."
+
+    # -- 0b. Disposición para hacer algo (sí/no genérico) ----------------------
+    # "¿Tienes disposición para realizar una prueba técnica?" etc.
+    if _has("disposicion") and _has("realizar", "hacer", "completar", "participar",
+                                     "asistir", "someterte", "tomar"):
+        return "Sí, con gusto."
+
+    # -- 0c. Disponibilidad para ir a la oficina / presencial / híbrido --------
+    # "¿Tienes disponibilidad para asistir 3 veces a la semana?" etc.
+    # (debe ir ANTES de la regla genérica de disponibilidad/incorporación)
+    if _has("asistir", "venir a la oficina") and _has("semana", "veces", "oficina",
+                                                       "presencial"):
+        return "Sí, tengo disponibilidad para trabajo híbrido o presencial."
+
     # -- 1. Salario ------------------------------------------------------------
     if _has("salario", "renta", "sueldo", "remuneracion", "pretension", "cuanto quieres ganar",
             "expectativa", "pretensiones"):
         return profile.get("salary", "850000")
+
+    # -- 1b. Contrato por proyecto / remoto + disponibilidad -------------------
+    if _has("contrato por proyecto", "modalidad remota", "acomoda") and _has(
+            "disponibilidad inmediata", "disponibilidad"):
+        return ("Sí, me acomoda perfectamente. Tengo disponibilidad inmediata y me adapto "
+                "a modalidad remota con asistencia presencial ocasional.")
 
     # -- 2. Disponibilidad / incorporación -------------------------------------
     if _has("disponibilidad", "incorporar", "cuando puedes", "cuando podrias empezar",
@@ -254,6 +279,17 @@ def _auto_answer(label: str, profile: dict) -> Optional[str]:
         return profile.get("excel_level",
             "Manejo Excel a nivel intermedio: tablas dinámicas, BUSCARV y fórmulas condicionales. 6/10.")
 
+    # -- 7b. Desarrollo móvil iOS / Android (va ANTES de regla general de TI) --
+    # IMPORTANTE: "ios" es substring de "usuarios" — exigir combinación con swift/xcode
+    if _has("swift", "xcode") or ("ios" in n and _has("swift", "xcode", "desarrollo ios",
+                                                        "app ios", "ios con")):
+        return "No tengo experiencia en desarrollo iOS con Swift."
+    if _has("android", "kotlin", "flutter", "react native"):
+        return "No tengo experiencia en desarrollo de aplicaciones móviles nativas."
+    if (_has("testing", "qa") and _has("movil", "mobile", "aplicacion movil",
+                                       "app ios", "app android")):
+        return "No cuento con experiencia en testing automático de aplicaciones móviles."
+
     # -- 8. Habilidades TI específicas -----------------------------------------
     if _has("python"):
         return ("Manejo Python a nivel básico-intermedio: scripting, automatización, "
@@ -261,6 +297,9 @@ def _auto_answer(label: str, profile: dict) -> Optional[str]:
     if _has("sql", "base de datos", "bases de datos"):
         return ("Sí, SQL básico-intermedio: SELECT, JOIN, GROUP BY, subconsultas y diseño "
                 "relacional. Aplicado en proyectos propios.")
+    if _has("sap mm", "sap fm", "sap co", "sap fi"):
+        return ("No específicamente en ese módulo SAP, pero tengo experiencia práctica "
+                "con SAP WMS en operaciones logísticas. Disponible para capacitación.")
     if _has("sap"):
         return ("Sí, usuario de SAP WM (módulo de gestión de almacenes). "
                 "Uso operativo, no implementador.")
@@ -300,6 +339,11 @@ def _auto_answer(label: str, profile: dict) -> Optional[str]:
                 "adquiridos durante mi formación técnica.")
 
     # -- 9. Soporte técnico ---------------------------------------------------
+    # Específico primero: preguntas de "cuánto tiempo / nivel" de soporte L1
+    if (_has("soporte", "helpdesk", "mesa de ayuda") and
+            _has("cuanto tiempo", "nivel", "l1", "l2", "usuarios finales", "usuario final")):
+        return ("No cuento con experiencia formal en helpdesk L1, pero poseo conocimientos "
+                "de soporte técnico adquiridos en INACAP. Disponible para aprender en el puesto.")
     if _has("soporte", "helpdesk", "mesa de ayuda", "tickets", "usuarios"):
         return ("No tengo experiencia formal en soporte técnico, pero cuento con base técnica "
                 "en hardware, sistemas operativos y redes, y facilidad para comunicarme con usuarios.")
@@ -322,12 +366,36 @@ def _auto_answer(label: str, profile: dict) -> Optional[str]:
             "interesa este cargo", "interesa esta posicion", "interesa trabajar"):
         return profile.get("cover_letter", "")
 
-    # -- 12. Catch-all: experiencia desconocida --------------------------------
-    if _has("experiencia", "conocimiento", "manejo", "habilidad", "trabaj"):
-        return ("No cuento con experiencia formal en esta área específica, "
-                "pero tengo disposición para aprender y adaptarme rápidamente.")
+    # -- 12. Fallback inteligente basado en el CV ---------------------------------
+    # Detecta contexto antes de responder, para que no todas sean idénticas.
+    # Bodega → bodega_exp | Off-topic → declina | IT/generic → cover_letter
+    _EXPERIENCE_TRIGGERS = ("experiencia", "conocimiento", "manejo", "habilidad",
+                             "trabaj", "coment", "posee", "cuenta con", "indique",
+                             "describe", "explica", "cuales son", "que habilidades",
+                             "que conocimiento", "background", "trayectoria")
+    if _has(*_EXPERIENCE_TRIGGERS):
+        # Sub-contexto bodega / logística
+        _BODEGA_CTX = ("bodega", "logistic", "almacen", "picking", "recepcion",
+                       "despacho", "wms", "operario", "bodeguero", "inventario",
+                       "forklift", "montacargas")
+        if any(k in n for k in _BODEGA_CTX):
+            return profile.get("bodega_exp",
+                "Tengo exposición directa a operaciones de bodega: SAP WM, WMS, "
+                "terminales RF, picking, despacho y recepción de mercadería "
+                "(STL Internacional, Ripley).")
 
-    # Sin patrón reconocido -> no inventar
+        # Sub-contexto off-topic → declinar con educación
+        _OFFTOPIC_CTX = ("venta", "seguro", "farmacia", "salud", "medic",
+                         "comida rapida", "restaurante", "gastronomia", "gasfiter",
+                         "electricist", "construcc", "marketing", "publicidad",
+                         "cajero", "telemarketing", "cobranza")
+        if any(k in n for k in _OFFTOPIC_CTX):
+            return "No tengo experiencia en esta área específica."
+
+        # General / IT → usar el cover_letter del perfil (es específico y profesional)
+        return profile.get("cover_letter", "")
+
+    # Sin patrón reconocido → guardar como pendiente para respuesta del usuario
     return None
 
 
@@ -381,14 +449,21 @@ def _save_pending_question(label: str, norm: str, portal: str = "", url: str = "
     """Guarda una pregunta desconocida en pending_questions.json (sin duplicados).
     Filtra automáticamente ruido de UI: filtros de búsqueda, nombres de archivos, etc.
     Si puede inferir una respuesta automáticamente la guarda directo en qa_cache.json
-    y no añade la pregunta a pending."""
+    y no añade la pregunta a pending.
+
+    Orden de resolución:
+      1. qa cache / question_answers.json  (respuesta ya conocida)
+      2. _auto_answer() con patrones del CV (incluye fallback inteligente)
+      3. cover_letter del perfil como fallback final (nunca queda sin responder)
+      4. Solo si aún None → guarda como pendiente para revisión manual
+    """
 
     # Ignorar entradas que son ruido de la interfaz, no preguntas reales
     if _is_noise_label(label, norm):
         log.debug("[PENDING_SKIP_NOISE] '%s'", label[:60])
         return
 
-    # Intentar responder automáticamente antes de guardar como pendiente
+    # 1 + 2. Intentar responder automáticamente
     auto_ans = _match_qa(label)
     if not auto_ans:
         try:
@@ -397,8 +472,21 @@ def _save_pending_question(label: str, norm: str, portal: str = "", url: str = "
         except Exception:
             auto_ans = None
 
+    # 3. Fallback final: cover_letter del perfil
+    # Cubre cualquier pregunta libre de "cuéntanos sobre ti / experiencia / presentación"
+    # que no matcheó los patrones anteriores. Mejor que dejar el campo vacío.
+    if not auto_ans:
+        try:
+            from .config import USER_PROFILE as _UP
+            fallback = _UP.get("cover_letter", "").strip()
+            if fallback:
+                auto_ans = fallback
+                log.info("[AUTO_CV_FALLBACK] '%s' -> cover_letter", label[:60])
+        except Exception:
+            pass
+
+    # Guardar en qa_cache.json si tiene respuesta automática (para uso en fill_form)
     if auto_ans:
-        # Persistir en qa_cache.json para que esté disponible en futuras postulaciones
         cache: dict = {}
         if _QA_CACHE_PATH.exists():
             try:
@@ -412,8 +500,10 @@ def _save_pending_question(label: str, norm: str, portal: str = "", url: str = "
             with open(_QA_CACHE_PATH, "w", encoding="utf-8") as f:
                 json.dump(cache, f, ensure_ascii=False, indent=2)
             log.info("[AUTO_CACHE] '%s' -> '%s'", label[:60], str(auto_ans)[:80])
-        return
 
+    # SIEMPRE guardar en pending_questions.json para que el usuario pueda ver y corregir
+    # Las auto-respondidas se guardan con answered=True y la respuesta pre-llenada
+    # Las sin respuesta se guardan con answered=False para revisión manual
     pending: List[dict] = []
     if _PENDING_PATH.exists():
         try:
@@ -422,9 +512,17 @@ def _save_pending_question(label: str, norm: str, portal: str = "", url: str = "
         except Exception:
             pending = []
 
-    # Evitar duplicados por norm
-    for entry in pending:
+    # Evitar duplicados por norm (actualizar si ya existe y estaba sin respuesta)
+    for i, entry in enumerate(pending):
         if entry.get("norm") == norm:
+            # Si ahora tenemos respuesta y antes no había, actualizar
+            if auto_ans and not entry.get("answer"):
+                pending[i]["answer"]   = str(auto_ans)
+                pending[i]["answered"] = True
+                pending[i]["source"]   = "auto"
+                _PENDING_PATH.parent.mkdir(parents=True, exist_ok=True)
+                with open(_PENDING_PATH, "w", encoding="utf-8") as f:
+                    json.dump(pending, f, ensure_ascii=False, indent=2)
             return
 
     pending.append({
@@ -432,13 +530,18 @@ def _save_pending_question(label: str, norm: str, portal: str = "", url: str = "
         "norm":     norm,
         "portal":   portal,
         "url":      url,
-        "answered": False,
-        "answer":   "",
+        "answered": bool(auto_ans),
+        "answer":   str(auto_ans) if auto_ans else "",
+        "source":   "auto" if auto_ans else "manual",
         "ts":       _time.time(),
     })
     _PENDING_PATH.parent.mkdir(parents=True, exist_ok=True)
     with open(_PENDING_PATH, "w", encoding="utf-8") as f:
         json.dump(pending, f, ensure_ascii=False, indent=2)
+    if auto_ans:
+        log.info("[PENDING_AUTO] Guardada con respuesta automática: '%s'", label[:60])
+    else:
+        log.warning("[PENDING_MANUAL] Sin respuesta automática: '%s'", label[:80])
 
 
 def _save_qa_answer(norm: str, answer: str) -> None:
@@ -1145,6 +1248,7 @@ def fill_form(page: Page, profile: dict, job_title: str = "") -> dict:
             ok = _fill_element_with_value(page, el, kind, qa_answer)
             if ok:
                 log.info("  [QA-cache] %s -> %s", label[:60], qa_answer[:40])
+                _save_pending_question(label, norm)  # guardar para que usuario vea
                 continue
 
         # -- 2. Auto-respuesta por palabras clave del label -------------------
@@ -1153,6 +1257,7 @@ def fill_form(page: Page, profile: dict, job_title: str = "") -> dict:
             ok = _fill_element_with_value(page, el, kind, auto)
             if ok:
                 _save_qa_answer(norm, auto)          # aprender para siempre
+                _save_pending_question(label, norm)  # guardar para que usuario vea
                 log.info("  [AUTO] %s -> %s", label[:60], auto[:60])
                 print(f"  [AUTO] {label[:70]} -> {auto[:60]}")
                 continue
@@ -1227,10 +1332,12 @@ def scan_form(page: Page, profile: dict, job_title: str = "") -> dict:
 
     # -- Campos de texto / select / number --
     for el, label, kind in unfilled:
+        norm = _normalize(label)
         if _match_qa(label) or _auto_answer(label, active_profile):
             answered += 1
+            # Guardar igualmente — usuario puede ver y corregir respuestas automáticas
+            _save_pending_question(label, norm)
         else:
-            norm = _normalize(label)
             _save_pending_question(label, norm)
             unanswered.append(label)
 
@@ -1246,10 +1353,11 @@ def scan_form(page: Page, profile: dict, job_title: str = "") -> dict:
             if not question_label:
                 continue
             raw = _match_qa(question_label) or _auto_answer(question_label, active_profile)
+            norm = _normalize(question_label)
             if _radio_answer_to_si_no(raw or ""):
                 answered += 1
+                _save_pending_question(question_label, norm)
             else:
-                norm = _normalize(question_label)
                 _save_pending_question(question_label, norm)
                 unanswered.append(f"[radio] {question_label}")
         except Exception:

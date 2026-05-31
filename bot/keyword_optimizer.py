@@ -37,7 +37,7 @@ _STATS_PATH = Path(__file__).parent.parent / "data" / "keyword_stats.json"
 
 # ── Umbrales ────────────────────────────────────────────────────────────────
 MAX_ACTIVE_KEYWORDS = 20  # máximo de keywords activas por portal en cada run
-MIN_RUNS_TO_RETIRE  = 1   # 1 run con found=0 → retirar del portal (sin piedad)
+MIN_RUNS_TO_RETIRE  = 3   # 3 runs con found=0 → retirar del portal (evita falsos retiros)
 REPLACEMENTS_PER_KW = 2   # keywords nuevas a generar al retirar una
 
 # ── Vocabulario para generación ──────────────────────────────────────────────

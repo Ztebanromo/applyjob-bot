@@ -33,7 +33,7 @@ REQUIRED_PROFILE_FIELDS = ["full_name", "email", "phone"]
 REQUIRED_CONFIG_KEYS = ["url_busqueda", "selector_oferta", "selector_boton_aplicar", "tipo_postulacion"]
 
 # Tipos de postulación válidos
-VALID_TIPOS = {"directa", "modal", "externa"}
+VALID_TIPOS = {"directa", "modal", "externa", "form", "redirect"}
 
 
 class ConfigError(ValueError):

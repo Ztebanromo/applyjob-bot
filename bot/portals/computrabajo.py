@@ -332,7 +332,7 @@ class ComputrabajoPortal(BasePortal):
                 if not experience_ok(full_text):
                     log.info("  [ct] Descartada (senior/experiencia): '%s'", title)
                     return "skipped_experience", title
-                if not topic_ok(full_text):
+                if not topic_ok(title):   # solo el título — la descripción puede mencionar clientes/sectores
                     log.info("  [ct] Descartada (fuera de rubro IT/bodega): '%s'", title)
                     return "skipped_topic", title
             except Exception:

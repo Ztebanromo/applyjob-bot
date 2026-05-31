@@ -22,6 +22,23 @@ log = logging.getLogger("applyjob.retry")
 
 
 # ---------------------------------------------------------------------------
+# Excepción de rate limit — permite saltar al siguiente portal
+# ---------------------------------------------------------------------------
+class RateLimitExceeded(Exception):
+    """
+    Raised cuando un portal alcanza su límite de acciones por hora.
+    En lugar de esperar bloqueado, el motor puede capturar esta excepción
+    y pasar directamente al siguiente portal.
+    """
+    def __init__(self, portal: str, wait_secs: float):
+        self.portal   = portal
+        self.wait_secs = wait_secs
+        super().__init__(
+            f"{portal}: rate limit alcanzado — {wait_secs:.0f}s para liberar ventana"
+        )
+
+
+# ---------------------------------------------------------------------------
 # Clasificación de errores
 # ---------------------------------------------------------------------------
 TRANSIENT_KEYWORDS = (
@@ -136,13 +153,15 @@ class RateLimiter:
         self.window          = timedelta(minutes=window_minutes)
         self._timestamps: deque = deque()
 
-    def acquire(self, portal: str = "") -> None:
+    def acquire(self, portal: str = "", skip_on_limit: bool = True) -> None:
         """
-        Bloquea hasta que haya capacidad disponible.
-        Registra la acción una vez que se permite.
+        Registra una acción. Si se alcanzó el límite:
+          - skip_on_limit=True  (default): lanza RateLimitExceeded → motor salta al siguiente portal
+          - skip_on_limit=False           : bloquea con sleep hasta que haya capacidad (comportamiento antiguo)
 
         Args:
-            portal: nombre para el log
+            portal        : nombre del portal para el log
+            skip_on_limit : si True, lanza excepción en vez de dormir
         """
         now = datetime.now()
 
@@ -151,20 +170,28 @@ class RateLimiter:
             self._timestamps.popleft()
 
         if len(self._timestamps) >= self.max_actions:
-            # Calcular cuánto esperar hasta que la acción más vieja salga de la ventana
-            oldest  = self._timestamps[0]
+            oldest     = self._timestamps[0]
             wait_until = oldest + self.window
             wait_secs  = (wait_until - now).total_seconds() + 1.0
+
             log.warning(
                 "[%s] Rate limit: %d/%d acciones en la última hora. "
-                "Esperando %.0f segundos…",
+                "%.0f segundos para liberar ventana.",
                 portal, len(self._timestamps), self.max_actions, wait_secs,
             )
-            time.sleep(wait_secs)
-            # Limpiar de nuevo después de la espera
-            now = datetime.now()
-            while self._timestamps and now - self._timestamps[0] > self.window:
-                self._timestamps.popleft()
+
+            if skip_on_limit:
+                # Lanzar excepción — el motor captura esto y salta al siguiente portal
+                print(f"\n[RATE_LIMIT] {portal.upper()}: límite {self.max_actions}/hora alcanzado "
+                      f"({wait_secs/60:.0f} min para liberar). Pasando al siguiente portal...")
+                raise RateLimitExceeded(portal, wait_secs)
+            else:
+                # Comportamiento antiguo: esperar bloqueado
+                print(f"\n[RATE_LIMIT] {portal.upper()}: esperando {wait_secs:.0f}s...")
+                time.sleep(wait_secs)
+                now = datetime.now()
+                while self._timestamps and now - self._timestamps[0] > self.window:
+                    self._timestamps.popleft()
 
         self._timestamps.append(datetime.now())
 

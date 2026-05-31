@@ -34,7 +34,7 @@ from playwright.sync_api import Page, TimeoutError as PlaywrightTimeout, Element
 from .base import BasePortal
 from ..stealth_utils import human_delay, take_error_screenshot
 from ..form_filler import fill_form
-from ..config import schedule_ok, experience_ok, practica_ok, topic_ok
+from ..config import schedule_ok, experience_ok, practica_ok, topic_ok, location_score
 
 # Ruta del archivo de caché persistente de preguntas y respuestas
 _QA_CACHE_PATH = Path(__file__).parent.parent.parent / "data" / "qa_cache.json"
@@ -106,7 +106,8 @@ log = logging.getLogger("applyjob.laborum")
 # de las clases dinámicas de React/Styled Components.
 SEL = {
     # Selector de las tarjetas de empleo en el listado
-    "card": "a[href*='/empleos/'][class*='sc-']",
+    # Laborum usa clases React dinámicas (sc-*) — preferir selector por href que es estable
+    "card": "a[href*='/empleos/'], a[href*='laborum.cl/empleos']",
     
     # Selector del botón principal de postulación en la página de detalle
     # Laborum cambió de "Postularme" -> "Postulación rápida" (mayo 2026)
@@ -114,9 +115,16 @@ SEL = {
         "button:has-text('Postulación rápida'), "
         "button:has-text('Postularme'), "
         "button:has-text('Postular'), "
+        "button:has-text('Aplicar'), "
+        "button:has-text('Postúlate'), "
+        "button:has-text('Inscribirme'), "
         "a:has-text('Postulación rápida'), "
         "a:has-text('Postularme'), "
-        "button[class*='sc-enLHqu']"
+        "a:has-text('Postular'), "
+        "button[class*='sc-enLHqu'], "
+        "button[data-qa='apply-button'], "
+        "[data-testid*='apply'], "
+        "button[class*='apply' i]"
     ),
     
     # Título del puesto en la página de detalle
@@ -191,6 +199,23 @@ class LaborumPortal(BasePortal):
     _TITLE_IT_WORDS_EXACT: Set[str] = {
         "react", "java", "android", "ios", "cloud", "sql", "sap", "aws",
         "erp", "crm", "bi", "ti", "it",
+    }
+
+    # Términos de bodega/logística — al menos uno debe aparecer en el título
+    # para que una oferta de "modo bodega" sea aceptada
+    _TITLE_BODEGA_WORDS: Set[str] = {
+        "bodega", "bodeguero", "bodeguera",
+        "picking", "packing",
+        "logística", "logistica",
+        "almacén", "almacen",
+        "inventario", "stock",
+        "auxiliar de bodega", "auxiliar bodega",
+        "ayudante de bodega", "ayudante bodega",
+        "operario de bodega", "operario bodega",
+        "operador logístico", "operador logistico",
+        "carga y descarga", "fulfillment",
+        "despacho de mercadería", "recepción de mercadería",
+        "recepcion de mercaderia",
     }
 
     def __init__(self, config: dict, profile: dict, dry_run: bool = False):
@@ -395,58 +420,103 @@ class LaborumPortal(BasePortal):
         log.debug("Laborum API keyword enriquecido: %r", api_keyword)
 
         # ── Filtros Navent ──────────────────────────────────────────────────
-        # Region 13 = Región Metropolitana; NivelLaboral 1 = Junior/Sin experiencia
-        nivel_filtro = ',{"id":"NivelLaboral","facets":["1"]}' if not is_bodega else ''
-        filtros_json = '[{"id":"Region","facets":["13"]}' + nivel_filtro + ']'
+        # IMPORTANTE: cualquier filtro (Region, NivelLaboral) causa HTTP 400.
+        # Se usan filtros vacíos; el filtrado se hace post-fetch por
+        # location_score() (Santiago) y experience_ok() (nivel junior).
+        filtros_solo_region = '[]'
+        filtros_con_nivel   = '[]'
+        filtros_json = '[]'
+
+        # Si el keyword ya apunta a IT, no re-filtrar por título tech
+        # (el API filtró por keyword — doble filtro descarta demasiado)
+        _IT_KW_SIGNALS = {
+            "analista", "desarrollador", "programador", "developer",
+            "soporte", "help desk", "tester", "qa", "python",
+            "javascript", "sql", "sap", "wms", "erp", "data",
+            "egresado", "informatica", "sistemas", "software", "ti",
+        }
+        skip_tech_filter = is_bodega or any(w in kw_low for w in _IT_KW_SIGNALS)
 
         skipped_tech = skipped_exp = skipped_sch = 0
 
-        for page_num in range(max_pages):
-            log.debug("Consultando API Laborum: página %d", page_num)
-            try:
-                # Se inyecta el fetch directamente en la consola del navegador
-                result = page.evaluate(f"""
-                async () => {{
-                    try {{
-                        const resp = await fetch(
-                            '/api/avisos/searchV2?pageSize={page_size}&page={page_num}&sort=FECHA_DESC',
-                            {{
-                                method: 'POST',
-                                credentials: 'include',
-                                headers: {{
-                                    'Accept': 'application/json, text/plain, */*',
-                                    'Content-Type': 'application/json',
-                                    'x-site-id': 'BMCL',
-                                }},
-                                body: JSON.stringify({{
-                                    "filtros": {filtros_json},
-                                    "palabraClave": "{safe_keyword}"
-                                }})
-                            }}
-                        );
-                        if (!resp.ok) return {{ error: resp.status, items: [] }};
-                        const data = await resp.json();
-                        return {{
-                            total: data.total || 0,
-                            items: (data.content || []).map(j => ({{
-                                id: String(j.id || ''),
-                                title: j.titulo || '',
-                                url: j.url || j.postulacionUrl || j.link || j.slug || '',
-                                titulo_slug: (j.titulo || '').toLowerCase()
-                                    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
-                                    .replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, ''),
-                            }})),
-                        }};
-                    }} catch(e) {{
-                        return {{ error: String(e), items: [] }};
+        # Endpoints a probar en orden si el anterior retorna 400
+        _API_ENDPOINTS = ["/api/avisos/searchV2", "/api/search", "/api/avisos/searchV3"]
+        _active_ep = _API_ENDPOINTS[0]
+
+        def _call_laborum_api(ep, filtros, kw, pnum):
+            safe_kw = kw.replace('"', '\\"').replace("'", "\'")
+            js = f"""
+            async () => {{
+                try {{
+                    // Obtener el x-session-jwt desde localStorage o desde la API de sesi\u00f3n
+                    let sessionJwt = localStorage.getItem('sessionJwt') || '';
+                    if (!sessionJwt) {{
+                        // Fallback: pedirlo al endpoint de sesi\u00f3n
+                        const s = await fetch('/api/candidates/datosPostulanteResumido', {{
+                            credentials: 'include',
+                            headers: {{'Accept':'application/json','x-site-id':'BMCL'}}
+                        }});
+                        sessionJwt = s.headers.get('x-session-jwt') || '';
                     }}
+
+                    const headers = {{
+                        'Accept': 'application/json, text/plain, */*',
+                        'Content-Type': 'application/json',
+                        'x-site-id': 'BMCL',
+                    }};
+                    if (sessionJwt) headers['x-session-jwt'] = sessionJwt;
+
+                    const resp = await fetch(
+                        '{ep}?pageSize={page_size}&page={pnum}&sort=RECIENTES',
+                        {{
+                            method: 'POST',
+                            credentials: 'include',
+                            headers: headers,
+                            body: JSON.stringify({{
+                                "filtros": {filtros},
+                                "palabraClave": "{safe_kw}"
+                            }})
+                        }}
+                    );
+                    if (!resp.ok) return {{ error: resp.status, items: [] }};
+                    const data = await resp.json();
+                    return {{
+                        total: data.total || 0,
+                        items: (data.content || []).map(j => ({{
+                            id: String(j.id || ''),
+                            title: j.titulo || '',
+                            url: j.url || j.postulacionUrl || j.link || j.slug || '',
+                            titulo_slug: (j.titulo || '').toLowerCase()
+                                .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+                                .replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, ''),
+                        }})),
+                    }};
+                }} catch(e) {{
+                    return {{ error: String(e), items: [] }};
                 }}
-                """)
+            }}
+            """
+            return page.evaluate(js)
+
+        for page_num in range(max_pages):
+            log.debug("Consultando API Laborum: pagina %d endpoint=%s", page_num, _active_ep)
+            try:
+                result = _call_laborum_api(_active_ep, filtros_json, api_keyword, page_num)
+
+                # Si sigue en error, probar endpoints alternativos
+                if isinstance(result.get('error'), int) and result['error'] >= 400:
+                    for alt_ep in _API_ENDPOINTS[1:]:
+                        log.info("  [laborum-api] Probando endpoint alternativo: %s", alt_ep)
+                        r2 = _call_laborum_api(alt_ep, filtros_json, api_keyword, page_num)
+                        if not r2.get('error'):
+                            _active_ep = alt_ep
+                            result = r2
+                            log.info("  [laborum-api] Endpoint OK: %s", alt_ep)
+                            break
 
                 if 'error' in result:
                     log.warning("Error en respuesta de API Laborum (p%d): %s", page_num, result['error'])
                     break
-
                 items = result.get('items', [])
                 if not items:
                     log.debug("No se encontraron más ítems en la página %d de la API", page_num)
@@ -458,11 +528,26 @@ class LaborumPortal(BasePortal):
                     if not jid or jid in seen_ids:
                         continue
 
-                    # Filtro 1: el título debe ser de TI
-                    if not self._title_is_tech(title):
+                    # Filtro 0: SIEMPRE rechazar rubros off-topic
+                    # (ventas, salud, RRHH, guardia, gastronomía, etc.)
+                    if not topic_ok(title):
                         skipped_tech += 1
-                        log.debug("  [laborum-api] Descartado (no TI): %s", title[:60])
+                        log.debug("  [laborum-api] Descartado (off-topic): %s", title[:60])
                         continue
+
+                    # Filtro 1: el título debe pertenecer al rubro correcto
+                    #   IT keywords  → debe tener señal tech en el título
+                    #   Bodega keywords → debe tener señal de bodega/logística
+                    if is_bodega:
+                        if not self._title_is_bodega(title):
+                            skipped_tech += 1
+                            log.debug("  [laborum-api] Descartado (no bodega): %s", title[:60])
+                            continue
+                    else:
+                        if not self._title_is_tech(title):
+                            skipped_tech += 1
+                            log.debug("  [laborum-api] Descartado (no TI): %s", title[:60])
+                            continue
 
                     # Filtro 2: experiencia/nivel (descartar senior/directivo)
                     if not experience_ok(title):
@@ -474,6 +559,14 @@ class LaborumPortal(BasePortal):
                     if not schedule_ok(title):
                         skipped_sch += 1
                         log.info("  [laborum-api] Descartado (horario): %s", title[:60])
+                        continue
+
+                    # Filtro 4: ubicación — rechazar ciudades fuera de Santiago RM
+                    # El slug/título a veces incluye la ciudad: "bodeguero-calama-..."
+                    titulo_slug = item.get('titulo_slug', '')
+                    loc_text = title + " " + titulo_slug.replace("-", " ")
+                    if location_score(loc_text) == 2:
+                        log.info("  [laborum-api] Descartado (fuera de RM): %s", title[:60])
                         continue
 
                     seen_ids.add(jid)
@@ -630,7 +723,7 @@ class LaborumPortal(BasePortal):
                     log.info("  [laborum] Descartada (senior/experiencia): '%s'", title)
                     print(f"  [FILTRO] Descartada por nivel/experiencia: {title}")
                     return "skipped_experience", title
-                if not topic_ok(full_text):
+                if not topic_ok(title):   # solo el título — descripción puede mencionar sectores no-IT
                     log.info("  [laborum] Descartada (fuera de rubro IT/bodega): '%s'", title)
                     return "skipped_topic", title
             except Exception:
@@ -638,7 +731,7 @@ class LaborumPortal(BasePortal):
 
             # Esperar que React hidrate el botón de postulación (SPA)
             try:
-                page.wait_for_selector(SEL["apply_btn"], timeout=8_000)
+                page.wait_for_selector(SEL["apply_btn"], timeout=12_000)
             except Exception:
                 pass  # seguimos — puede que no exista
 
@@ -656,7 +749,8 @@ class LaborumPortal(BasePortal):
             if not apply_btn:
                 # Scroll hacia abajo por si el botón está fuera de viewport
                 page.evaluate("window.scrollTo(0, 400)")
-                time.sleep(1)
+                time.sleep(1.5)
+                # Segundo intento: selector por selector con más tiempo
                 for selector in SEL["apply_btn"].split(","):
                     try:
                         btn = page.query_selector(selector.strip())
@@ -665,6 +759,49 @@ class LaborumPortal(BasePortal):
                             break
                     except Exception:
                         continue
+                # Tercer intento: JS genérico — buscar cualquier botón con texto
+                # de postulación (útil cuando Laborum usa clases React dinámicas)
+                if not apply_btn:
+                    try:
+                        apply_btn_js = page.evaluate("""
+                            () => {
+                                const terms = ['postulación rápida','postularme','postular','aplicar',
+                                               'postúlate','inscribirme'];
+                                const btns = Array.from(document.querySelectorAll(
+                                    'button, a[role="button"], a.btn'
+                                ));
+                                return btns.find(b => {
+                                    const t = (b.textContent || '').toLowerCase().trim();
+                                    return terms.some(k => t.includes(k)) &&
+                                           b.offsetParent !== null &&
+                                           !b.disabled;
+                                }) ? true : false;
+                            }
+                        """)
+                        if apply_btn_js:
+                            # click vía JS
+                            page.evaluate("""
+                                () => {
+                                    const terms = ['postulación rápida','postularme','postular','aplicar',
+                                                   'postúlate','inscribirme'];
+                                    const btns = Array.from(document.querySelectorAll(
+                                        'button, a[role="button"], a.btn'
+                                    ));
+                                    const btn = btns.find(b => {
+                                        const t = (b.textContent || '').toLowerCase().trim();
+                                        return terms.some(k => t.includes(k)) &&
+                                               b.offsetParent !== null && !b.disabled;
+                                    });
+                                    if (btn) btn.click();
+                                }
+                            """)
+                            human_delay(1.5, 2.5)
+                            # Verificar si abrió formulario o confirmación
+                            if self._check_success(page) or self._check_has_form(page):
+                                log.info("  [laborum] JS click en apply: éxito (%s)", offer_url[:60])
+                                return "applied", title
+                    except Exception as js_exc:
+                        log.debug("  [laborum] JS apply fallback error: %s", js_exc)
 
             if not apply_btn:
                 # Sin botón nativo: oferta cerrada o solo informativa -> no es un error
@@ -700,13 +837,12 @@ class LaborumPortal(BasePortal):
                 form_result = fill_form(page, self.profile)
                 log.debug("  [form] step %d: %d campos Laborum + genérico", step + 1, n)
 
-                # Si quedaron preguntas sin respuesta -> NO enviar, saltar oferta
+                # Si quedaron preguntas sin respuesta → continuar de todas formas
+                # (cover_letter ya rellenó los campos en _fill_laborum_screening)
                 if form_result.get("unanswered", 0) > 0:
                     labels = form_result.get("unanswered_labels", [])
-                    log.warning("  [SKIP] Oferta saltada — preguntas sin respuesta: %s",
-                                ", ".join(labels[:3]))
-                    print(f"  [SKIP] Postulacion cancelada — sin respuesta: {', '.join(labels[:3])}")
-                    return "skipped: preguntas_sin_respuesta", title
+                    log.info("  [FORM] %d campo(s) pendiente(s) — enviando igual: %s",
+                             len(labels), ", ".join(labels[:3]))
 
                 # En dry_run pausamos para inspección visual
                 if self.dry_run:
@@ -849,15 +985,16 @@ class LaborumPortal(BasePortal):
                     value = profile.get("salary", "850.000")
                     answer_source = "salary"
                     self._cache_answer(question_text, value)
-                # d) Pregunta desconocida -> NO rellenar, guardar como pendiente
+                # d) Pregunta desconocida -> cover_letter como fallback (no saltarla)
                 else:
                     _save_pending_question(question_text)
-                    log.warning(
-                        "  [form] PREGUNTA PENDIENTE (sin respuesta): %r — dejando vacío",
-                        question_text[:80],
-                    )
-                    print(f"\n[PREGUNTA_PENDIENTE] {question_text[:120]}\n", flush=True)
-                    continue  # no rellenar este campo
+                    value = profile.get("cover_letter", "") or profile.get("bodega_exp", "")
+                    if not value:
+                        log.warning("  [form] PREGUNTA PENDIENTE sin cover_letter: %r", question_text[:80])
+                        continue
+                    answer_source = "cover_letter_fallback"
+                    self._cache_answer(question_text, value)
+                    log.info("  [form] Pregunta desconocida → cover_letter: %r", question_text[:60])
 
                 ta.click()
                 ta.fill(value)
@@ -934,6 +1071,11 @@ class LaborumPortal(BasePortal):
             if _re.search(r'\b' + _re.escape(word) + r'\b', title_lc):
                 return True
         return False
+
+    def _title_is_bodega(self, title: str) -> bool:
+        """Retorna True si el título contiene términos de bodega/logística."""
+        t = title.lower()
+        return any(w in t for w in self._TITLE_BODEGA_WORDS)
 
     def _is_tech_job(self, slug: str) -> bool:
         """Determina si una URL slug de oferta es de TI (fallback DOM)."""

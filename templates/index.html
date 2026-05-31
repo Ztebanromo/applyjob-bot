@@ -5,643 +5,35 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>ApplyJob | Dashboard</title>
-    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/style.css">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.min.js"></script>
     <style>
+        /* Variables inline — sincronizadas con style.css */
         :root {
-            --primary: #6366f1;
-            --primary-glow: rgba(99, 102, 241, 0.4);
-            --secondary: #a855f7;
-            --bg: #0f172a;
-            --card-bg: rgba(30, 41, 59, 0.7);
-            --text: #f8fafc;
-            --text-dim: #94a3b8;
-            --accent: #22d3ee;
-            --success: #10b981;
-            --danger: #ef4444;
-            --warning: #f59e0b;
+            --primary:      #a78bfa;
+            --primary-glow: rgba(167,139,250,0.25);
+            --secondary:    #f472b6;
+            --bg:           #080010;
+            --card-bg:      rgba(255,255,255,0.055);
+            --text:         rgba(255,255,255,0.82);
+            --text-dim:     rgba(255,255,255,0.38);
+            --text-bright:  rgba(255,255,255,0.92);
+            --accent:       #34d399;
+            --success:      #34d399;
+            --danger:       #f87171;
+            --warning:      #fb923c;
+            --green:        #34d399;
+            --green-glow:   rgba(52,211,153,0.25);
+            --green-faint:  rgba(52,211,153,0.06);
+            --cyan:         #a78bfa;
+            --cyan-dim:     rgba(167,139,250,0.5);
+            --cyan-glow:    rgba(167,139,250,0.25);
+            --cyan-faint:   rgba(167,139,250,0.08);
+            --pink:         #f472b6;
+            --pink-glow:    rgba(244,114,182,0.25);
+            --border:       rgba(255,255,255,0.1);
+            --panel:        rgba(255,255,255,0.055);
         }
-
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-            font-family: 'Outfit', sans-serif;
-        }
-
-        body {
-            background-color: var(--bg);
-            background-image: radial-gradient(at 0% 0%, rgba(99, 102, 241, .12) 0, transparent 50%),
-                radial-gradient(at 100% 100%, rgba(168, 85, 247, .12) 0, transparent 50%);
-            color: var(--text);
-            min-height: 100vh;
-            padding: 0.75rem 1rem;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-        }
-
-        .container {
-            width: 100%;
-            max-width: 1300px;
-            display: grid;
-            grid-template-columns: 1fr 2fr;
-            gap: 1rem;
-            margin-top: 0.5rem;
-        }
-
-        header {
-            text-align: center;
-            margin-bottom: 0.6rem;
-        }
-
-        header h1 {
-            font-size: 1.8rem;
-            font-weight: 800;
-            background: linear-gradient(to right, #6366f1, #a855f7, #22d3ee);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            margin-bottom: 0.2rem;
-        }
-
-        header p {
-            color: var(--text-dim);
-            font-size: 0.85rem;
-        }
-
-        .stats-bar {
-            display: grid;
-            grid-template-columns: repeat(4, 1fr);
-            gap: 0.6rem;
-            width: 100%;
-            max-width: 1300px;
-            margin-bottom: 0.6rem;
-        }
-
-        .stat-card {
-            background: var(--card-bg);
-            border: 1px solid rgba(255, 255, 255, 0.1);
-            padding: 0.6rem 0.75rem;
-            border-radius: 12px;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            gap: 0.2rem;
-        }
-
-        .stat-value {
-            font-size: 1.4rem;
-            font-weight: 800;
-            color: var(--accent);
-        }
-
-        .stat-label {
-            font-size: 0.68rem;
-            color: var(--text-dim);
-            text-transform: uppercase;
-            letter-spacing: 1px;
-        }
-
-        .card {
-            background: var(--card-bg);
-            backdrop-filter: blur(12px);
-            border: 1px solid rgba(255, 255, 255, 0.1);
-            border-radius: 16px;
-            padding: 1rem;
-            box-shadow: 0 10px 30px -8px rgba(0, 0, 0, 0.5);
-        }
-
-        .card h2 {
-            font-size: 1rem;
-            margin-bottom: 0.75rem;
-            display: flex;
-            align-items: center;
-            gap: 0.5rem;
-        }
-
-        .form-group {
-            margin-bottom: 0.6rem;
-        }
-
-        label {
-            display: block;
-            font-size: 0.75rem;
-            color: var(--text-dim);
-            margin-bottom: 0.25rem;
-        }
-
-        input[type="text"],
-        input[type="email"],
-        input[type="number"],
-        select {
-            width: 100%;
-            background: rgba(15, 23, 42, 0.5);
-            border: 1px solid rgba(255, 255, 255, 0.1);
-            border-radius: 8px;
-            padding: 0.4rem 0.7rem;
-            color: white;
-            outline: none;
-            font-size: 0.82rem;
-            transition: border-color .2s;
-        }
-
-        textarea {
-            font-size: 0.82rem;
-        }
-
-        input:focus,
-        textarea:focus {
-            border-color: var(--primary);
-        }
-
-        .btn {
-            cursor: pointer;
-            border: none;
-            border-radius: 8px;
-            padding: 0.5rem 1rem;
-            font-weight: 600;
-            font-size: 0.85rem;
-            transition: all .2s;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            gap: 0.4rem;
-            width: 100%;
-        }
-
-        .btn-primary {
-            background: linear-gradient(135deg, var(--primary), var(--secondary));
-            color: white;
-        }
-
-        .btn-success {
-            background: linear-gradient(135deg, #10b981, #059669);
-            color: white;
-        }
-
-        .btn-danger {
-            background: linear-gradient(135deg, #ef4444, #dc2626);
-            color: white;
-        }
-
-        .btn:disabled {
-            opacity: 0.5;
-            cursor: not-allowed;
-        }
-
-        .btn:hover:not(:disabled) {
-            filter: brightness(1.1);
-        }
-
-        .toolbar-btn {
-            cursor: pointer;
-            border: 1px solid rgba(255, 255, 255, 0.12);
-            background: rgba(255, 255, 255, 0.06);
-            color: var(--text);
-            border-radius: 7px;
-            padding: 0.3rem 0.6rem;
-            font-size: 0.72rem;
-            font-weight: 700;
-            transition: all .2s;
-        }
-
-        .toolbar-btn:hover {
-            border-color: var(--accent);
-            color: var(--accent);
-        }
-
-        .ops-panel {
-            margin: 0.6rem 0;
-            display: grid;
-            grid-template-columns: repeat(4, minmax(0, 1fr));
-            gap: 0.5rem;
-        }
-
-        .ops-item {
-            background: rgba(15, 23, 42, 0.42);
-            border: 1px solid rgba(255, 255, 255, 0.09);
-            border-radius: 8px;
-            padding: 0.5rem 0.7rem;
-            min-width: 0;
-        }
-
-        .ops-label {
-            color: var(--text-dim);
-            font-size: 0.62rem;
-            text-transform: uppercase;
-            letter-spacing: .04em;
-            margin-bottom: 0.2rem;
-        }
-
-        .ops-value {
-            font-size: 0.8rem;
-            font-weight: 700;
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-        }
-
-        .ops-value.ok {
-            color: var(--success);
-        }
-
-        .ops-value.warn {
-            color: var(--warning);
-        }
-
-        .ops-value.info {
-            color: var(--accent);
-        }
-
-        .ops-value.danger {
-            color: var(--danger);
-        }
-
-        .terminal-wrap {
-            margin-top: 0.6rem;
-        }
-
-        .terminal-header {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            background: rgba(16, 185, 129, 0.08);
-            border: 1px solid rgba(16, 185, 129, 0.2);
-            border-bottom: none;
-            border-radius: 10px 10px 0 0;
-            padding: 0.4rem 0.75rem;
-            font-size: 0.72rem;
-            color: var(--success);
-        }
-
-        .terminal-header span {
-            display: flex;
-            align-items: center;
-            gap: 0.4rem;
-        }
-
-        .terminal-dot {
-            width: 7px;
-            height: 7px;
-            border-radius: 50%;
-            background: var(--success);
-            box-shadow: 0 0 5px var(--success);
-            animation: pulse 2s infinite;
-        }
-
-        @keyframes pulse {
-
-            0%,
-            100% {
-                opacity: 1
-            }
-
-            50% {
-                opacity: 0.4
-            }
-        }
-
-        .terminal {
-            background: #050a0e;
-            border-radius: 0 0 10px 10px;
-            padding: 0.75rem 1rem;
-            font-family: 'Courier New', monospace;
-            font-size: 0.75rem;
-            height: 320px;
-            overflow-y: auto;
-            color: #10b981;
-            border: 1px solid rgba(16, 185, 129, 0.2);
-            border-top: none;
-        }
-
-        .log-line {
-            margin-bottom: 3px;
-            border-left: 2px solid transparent;
-            padding-left: 6px;
-            line-height: 1.4;
-        }
-
-        .log-success {
-            color: var(--success);
-            border-left-color: var(--success);
-        }
-
-        .log-error {
-            color: var(--danger);
-            border-left-color: var(--danger);
-        }
-
-        .log-portal {
-            color: var(--primary);
-            font-weight: bold;
-            border-left-color: var(--primary);
-        }
-
-        .log-warning {
-            color: var(--warning);
-            border-left-color: var(--warning);
-        }
-
-        .log-search {
-            color: var(--accent);
-            border-left-color: var(--accent);
-            font-style: italic;
-        }
-
-        .log-manual {
-            color: #fb923c;
-            border-left-color: #fb923c;
-            background: rgba(251,146,60,0.08);
-            font-weight: 600;
-            padding: 0.25rem 0.5rem;
-            border-radius: 0 6px 6px 0;
-            animation: pulseManual 1.5s ease-in-out 3;
-        }
-        @keyframes pulseManual {
-            0%,100% { background: rgba(251,146,60,0.08); }
-            50%      { background: rgba(251,146,60,0.22); }
-        }
-
-        #manual-actions-panel {
-            background: rgba(251,146,60,0.07);
-            border: 1px solid rgba(251,146,60,0.3);
-            border-radius: 10px;
-            padding: 0.5rem 0.75rem;
-            margin-bottom: 0.5rem;
-            display: none;
-        }
-        #manual-actions-panel .ma-header {
-            display: flex; align-items: center; justify-content: space-between;
-            font-size: 0.78rem; font-weight: 600; color: #fb923c; margin-bottom: 0.35rem;
-        }
-        #manual-actions-list { list-style: none; padding: 0; margin: 0; }
-        #manual-actions-list li {
-            font-size: 0.73rem; color: var(--text-dim);
-            padding: 0.15rem 0;
-            border-bottom: 1px solid rgba(255,255,255,0.05);
-        }
-        #manual-actions-list li:last-child { border-bottom: none; }
-
-        .portal-grid {
-            display: grid;
-            grid-template-columns: repeat(3, 1fr);
-            gap: 0.5rem;
-            margin-bottom: 0.75rem;
-        }
-
-        .portal-item {
-            background: rgba(255, 255, 255, 0.03);
-            border: 1px solid rgba(255, 255, 255, 0.1);
-            padding: 0.6rem 0.7rem;
-            border-radius: 10px;
-            display: flex;
-            flex-direction: column;
-            gap: 0.35rem;
-            transition: all .2s;
-            min-width: 0;
-        }
-
-        .portal-item.active {
-            border-color: var(--primary);
-            background: rgba(99, 102, 241, 0.12);
-        }
-
-        .portal-item.done {
-            border-color: var(--success);
-            background: rgba(16, 185, 129, 0.1);
-        }
-
-        .portal-item.disabled-hint {
-            opacity: 0.45;
-        }
-
-        .portal-item input[type="checkbox"] {
-            width: 14px;
-            height: 14px;
-            accent-color: var(--primary);
-            flex-shrink: 0;
-        }
-
-        .portal-name {
-            font-weight: 700;
-            font-size: 0.82rem;
-            text-transform: capitalize;
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-        }
-
-        .portal-status-text {
-            font-size: 0.65rem;
-            color: var(--text-dim);
-        }
-
-        .portal-counter {
-            font-weight: 800;
-            color: var(--accent);
-            font-size: 0.9rem;
-        }
-
-        .session-dot {
-            width: 7px;
-            height: 7px;
-            border-radius: 50%;
-            background: var(--text-dim);
-            display: inline-block;
-            flex-shrink: 0;
-            transition: all .3s;
-        }
-
-        .session-dot.active {
-            background: var(--success);
-            box-shadow: 0 0 5px var(--success);
-        }
-
-        .session-dot.missing {
-            background: var(--warning);
-            box-shadow: 0 0 5px rgba(245, 158, 11, .4);
-        }
-
-        .file-upload {
-            position: relative;
-            border: 2px dashed rgba(255, 255, 255, 0.1);
-            border-radius: 8px;
-            padding: 0.6rem;
-            text-align: center;
-            cursor: pointer;
-            font-size: 0.78rem;
-        }
-
-        .file-upload input {
-            position: absolute;
-            inset: 0;
-            opacity: 0;
-            cursor: pointer;
-        }
-
-        .registry {
-            max-height: 200px;
-            overflow-y: auto;
-            display: flex;
-            flex-direction: column;
-            gap: 0.35rem;
-            margin-top: 0.6rem;
-        }
-
-        .registry-card {
-            display: flex;
-            align-items: center;
-            gap: 0.5rem;
-            padding: 0.4rem 0.7rem;
-            border-radius: 7px;
-            font-size: 0.78rem;
-            border: 1px solid rgba(255, 255, 255, 0.07);
-        }
-
-        .registry-card.success {
-            background: rgba(16, 185, 129, 0.1);
-            border-color: rgba(16, 185, 129, 0.3);
-        }
-
-        .registry-card.error {
-            background: rgba(239, 68, 68, 0.1);
-            border-color: rgba(239, 68, 68, 0.3);
-        }
-
-        .registry-badge {
-            font-size: 0.62rem;
-            font-weight: 700;
-            padding: 1px 6px;
-            border-radius: 20px;
-            text-transform: uppercase;
-            flex-shrink: 0;
-        }
-
-        .registry-badge.success {
-            background: rgba(16, 185, 129, 0.25);
-            color: var(--success);
-        }
-
-        .registry-badge.error {
-            background: rgba(239, 68, 68, 0.25);
-            color: var(--danger);
-        }
-
-        .registry-title {
-            flex: 1;
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-        }
-
-        .registry-portal {
-            font-size: 0.62rem;
-            color: var(--text-dim);
-            flex-shrink: 0;
-        }
-
-        .iv-panel {
-            display: none;
-            border-radius: 10px;
-            padding: 0.75rem 1rem;
-            border: 2px solid var(--warning);
-            margin-top: 0.6rem;
-            background: rgba(245, 158, 11, 0.06);
-            animation: ivPulse 2.5s ease-in-out infinite;
-        }
-
-        .iv-panel.login {
-            border-color: #818cf8;
-            background: rgba(129, 140, 248, 0.08);
-            animation: ivPulseLogin 2.5s ease-in-out infinite;
-        }
-
-        @keyframes ivPulse {
-
-            0%,
-            100% {
-                box-shadow: 0 0 0 rgba(245, 158, 11, 0)
-            }
-
-            50% {
-                box-shadow: 0 0 16px rgba(245, 158, 11, 0.4)
-            }
-        }
-
-        @keyframes ivPulseLogin {
-
-            0%,
-            100% {
-                box-shadow: 0 0 0 rgba(129, 140, 248, 0)
-            }
-
-            50% {
-                box-shadow: 0 0 16px rgba(129, 140, 248, 0.4)
-            }
-        }
-
-        .iv-header {
-            display: flex;
-            align-items: center;
-            gap: 0.75rem;
-            margin-bottom: 0.5rem;
-        }
-
-        .iv-icon {
-            font-size: 1.6rem;
-            flex-shrink: 0;
-        }
-
-        .iv-title {
-            font-size: 0.9rem;
-            font-weight: 800;
-        }
-
-        .iv-sub {
-            font-size: 0.7rem;
-            color: var(--text-dim);
-            margin-top: 2px;
-        }
-
-        .iv-steps {
-            padding-left: 1.2rem;
-            color: var(--text-dim);
-            line-height: 2;
-            font-size: 0.8rem;
-        }
-
-        .iv-steps strong {
-            color: var(--text);
-        }
-
-        .iv-btn-sound {
-            background: rgba(255, 255, 255, 0.07);
-            border: 1px solid rgba(255, 255, 255, 0.15);
-            color: white;
-            border-radius: 6px;
-            padding: 0.25rem 0.6rem;
-            cursor: pointer;
-            font-size: 0.72rem;
-            margin-left: auto;
-            flex-shrink: 0;
-        }
-
-        #captcha-modal {
-            display: none;
-            position: fixed;
-            inset: 0;
-            background: rgba(0, 0, 0, 0.85);
-            backdrop-filter: blur(8px);
-            z-index: 9999;
-            align-items: center;
-            justify-content: center;
-            opacity: 0;
-            pointer-events: none;
-            transition: opacity .3s;
-        }
-
-        #scan-status.done  { color:#4ade80; border-color:rgba(74,222,128,0.25); background:rgba(74,222,128,0.07); }
-        #scan-status.error { color:var(--danger); border-color:rgba(239,68,68,0.25); background:rgba(239,68,68,0.07); }
     </style>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
 </head>
@@ -651,11 +43,11 @@
         <h1>ApplyJob</h1>
         <div style="display:flex; gap:8px; justify-content:center; flex-wrap:wrap; margin-top:4px;">
             <span
-                style="background:var(--primary-glow); padding:3px 12px; border-radius:20px; font-size:0.75rem; border:1px solid var(--primary);">
+                style="background:rgba(177,151,252,0.15); padding:3px 12px; border-radius:8px; font-size:0.75rem; border:1px solid rgba(177,151,252,0.35);">
                 🔑 <b id="kw-text">--</b>
             </span>
             <span
-                style="background:rgba(34,211,238,0.08); padding:3px 12px; border-radius:20px; font-size:0.75rem; border:1px solid var(--accent);">
+                style="background:rgba(255,255,255,0.07); padding:3px 12px; border-radius:8px; font-size:0.75rem; border:1px solid rgba(255,255,255,0.15);">
                 <b id="action-text">Esperando...</b>
             </span>
         </div>
@@ -663,42 +55,47 @@
 
     <!-- (banner flotante eliminado — reemplazado por iv-panel dentro del card) -->
 
-    <div class="stats-bar" style="grid-template-columns: repeat(6,1fr);">
-        <div class="stat-card" title="Postulaciones enviadas correctamente en esta sesión">
-            <span class="stat-value" id="stat-applied" style="color:var(--success);">0</span>
-            <span class="stat-label">✅ Postuladas</span>
-        </div>
-        <div class="stat-card" title="Ofertas externas registradas (link abierto / GetOnBoard)">
-            <span class="stat-value" id="stat-external" style="color:var(--accent);">0</span>
-            <span class="stat-label">⚡ Externas</span>
-        </div>
-        <div class="stat-card" title="Descartadas por filtros (horario, experiencia, rubro, etc.)">
-            <span class="stat-value" id="stat-filtered" style="color:var(--warning);">0</span>
-            <span class="stat-label">🔻 Filtradas</span>
-        </div>
-        <div class="stat-card" title="No se pudo navegar: oferta cerrada o botón sin acción">
-            <span class="stat-value" id="stat-nonav" style="color:#f97316;">0</span>
-            <span class="stat-label">⚠️ Sin Nav</span>
-        </div>
-        <div class="stat-card" title="Errores reales de navegación o postulación">
-            <span class="stat-value" id="stat-errors" style="color:var(--danger);">0</span>
-            <span class="stat-label">❌ Errores</span>
-        </div>
-        <div class="stat-card" style="grid-column: span 1;">
-            <span class="stat-value" id="stat-portal" style="font-size:1rem; color:var(--warning);">---</span>
-            <span class="stat-label">🌐 Portal</span>
-        </div>
+    <!-- Sesión counter banner — se actualiza con cada postulación -->
+    <div id="session-banner" style="display:none;margin-bottom:0.5rem;padding:0.4rem 1rem;background:rgba(0,255,136,0.05);border:1px solid rgba(0,255,136,0.25);text-align:center;font-size:0.72rem;font-family:'Share Tech Mono',monospace;color:var(--green);letter-spacing:0.06em;">
+        📬 <span id="session-count">0</span> postulaciones procesadas en esta sesión
     </div>
 
-    <!-- Daily chart strip -->
-    <div id="daily-chart-wrap" style="max-width:1400px;margin:0.6rem auto 0;padding:0 1rem;">
-        <div style="background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.06);border-radius:12px;padding:0.7rem 1.2rem 0.6rem;">
-            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0.4rem;">
-                <span style="font-size:0.72rem;font-weight:700;color:var(--text-dim);letter-spacing:.06em;">POSTULACIONES — ÚLTIMOS 14 DÍAS</span>
-                <button onclick="exportCsv()" class="toolbar-btn" style="font-size:0.7rem;padding:0.2rem 0.7rem;" title="Descargar historial completo como CSV">⬇ CSV</button>
+    <!-- Stats: barra única -->
+    <div style="width:100%;max-width:1300px;margin:0 0 0.6rem;display:flex;flex-direction:column;gap:0.3rem;position:relative;z-index:1;">
+
+        <!-- Fila de 6 stats compactos -->
+        <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:0.3rem;">
+            <div style="background:var(--panel);border:1px solid var(--border);padding:0.45rem 0.6rem;display:flex;align-items:center;justify-content:center;gap:0.45rem;position:relative;">
+                <span style="font-family:'Orbitron',sans-serif;font-size:1.1rem;font-weight:700;color:var(--success);" id="stat-applied">0</span>
+                <span style="font-size:0.65rem;color:#7ab8d4;text-transform:uppercase;letter-spacing:0.08em;font-family:'Share Tech Mono',monospace;">✅ Postuladas</span>
             </div>
-            <canvas id="dailyChart" height="60"></canvas>
+            <div style="background:var(--panel);border:1px solid var(--border);padding:0.45rem 0.6rem;display:flex;align-items:center;justify-content:center;gap:0.45rem;">
+                <span style="font-family:'Orbitron',sans-serif;font-size:1.1rem;font-weight:700;color:var(--accent);" id="stat-external">0</span>
+                <span style="font-size:0.65rem;color:#7ab8d4;text-transform:uppercase;letter-spacing:0.08em;font-family:'Share Tech Mono',monospace;">⚡ Externas</span>
+            </div>
+            <div style="background:var(--panel);border:1px solid var(--border);padding:0.45rem 0.6rem;display:flex;align-items:center;justify-content:center;gap:0.45rem;">
+                <span style="font-family:'Orbitron',sans-serif;font-size:1.1rem;font-weight:700;color:var(--warning);" id="stat-filtered">0</span>
+                <span style="font-size:0.65rem;color:#7ab8d4;text-transform:uppercase;letter-spacing:0.08em;font-family:'Share Tech Mono',monospace;">🔻 Filtradas</span>
+            </div>
+            <div style="background:var(--panel);border:1px solid var(--border);padding:0.45rem 0.6rem;display:flex;align-items:center;justify-content:center;gap:0.45rem;">
+                <span style="font-family:'Orbitron',sans-serif;font-size:1.1rem;font-weight:700;color:#f97316;" id="stat-nonav">0</span>
+                <span style="font-size:0.65rem;color:#7ab8d4;text-transform:uppercase;letter-spacing:0.08em;font-family:'Share Tech Mono',monospace;">⚠️ Sin Nav</span>
+            </div>
+            <div style="background:var(--panel);border:1px solid var(--border);padding:0.45rem 0.6rem;display:flex;align-items:center;justify-content:center;gap:0.45rem;">
+                <span style="font-family:'Orbitron',sans-serif;font-size:1.1rem;font-weight:700;color:var(--danger);" id="stat-errors">0</span>
+                <span style="font-size:0.65rem;color:#7ab8d4;text-transform:uppercase;letter-spacing:0.08em;font-family:'Share Tech Mono',monospace;">❌ Errores</span>
+            </div>
+            <div style="background:var(--panel);border:1px solid var(--border);padding:0.45rem 0.6rem;display:flex;align-items:center;justify-content:center;gap:0.45rem;">
+                <span style="font-family:'Orbitron',sans-serif;font-size:0.72rem;font-weight:700;color:var(--warning);" id="stat-portal">---</span>
+                <span style="font-size:0.65rem;color:#7ab8d4;text-transform:uppercase;letter-spacing:0.08em;font-family:'Share Tech Mono',monospace;">🌐 Portal</span>
+            </div>
         </div>
+
+        <!-- Chart oculto — canvas necesario para loadDailyChart() -->
+        <div id="daily-chart-wrap" style="display:none;">
+            <canvas id="dailyChart"></canvas>
+        </div>
+
     </div>
 
     <div class="container">
@@ -708,7 +105,7 @@
 
             <!-- Banner de detección de CV -->
             <div id="cv-parse-banner"
-                style="display:none; background:rgba(16,185,129,0.1); border:1px solid rgba(16,185,129,0.3); border-radius:12px; padding:0.75rem 1rem; margin-bottom:1.25rem; font-size:0.85rem; color:var(--success); align-items:center; gap:0.6rem;">
+                style="display:none;background:rgba(0,255,136,0.05);border:1px solid rgba(0,255,136,0.25);padding:0.5rem 0.85rem;margin-bottom:0.75rem;font-size:0.72rem;font-family:'Share Tech Mono',monospace;color:var(--green);align-items:center;gap:0.5rem;letter-spacing:0.04em;">
                 <span style="font-size:1.2rem;">✓</span>
                 <span id="cv-parse-msg">Campos detectados del CV</span>
             </div>
@@ -731,19 +128,20 @@
                     <input type="hidden" name="USER_CV_PATH" id="inp-cv-path">
                 </div>
 
+                <!-- ── Keywords acordeón ─────────────────────────────────────── -->
                 <div class="form-group">
-                    <label style="display:flex;align-items:center;gap:0.5rem;">
-                        Keywords de búsqueda
-                        <span style="font-size:0.68rem;color:var(--text-dim);font-weight:400;">acordeón por categoría · cada keyword = búsqueda separada</span>
-                        <span style="margin-left:auto;font-size:0.68rem;color:#34d399;" id="kw-selected-count"></span>
-                        <span style="background:rgba(16,185,129,0.15);border:1px solid rgba(16,185,129,0.3);color:#34d399;border-radius:4px;padding:1px 6px;font-size:0.62rem;font-weight:700;white-space:nowrap;">🔒 sin experiencia siempre</span>
-                    </label>
-                    <div id="kw-accordion" style="border:1px solid rgba(255,255,255,0.08);border-radius:8px;overflow:hidden;"></div>
-                    <div style="display:flex;gap:0.4rem;margin-top:0.4rem;align-items:center;">
-                        <input type="text" id="kw-add-input" placeholder="+ agregar keyword personalizada..."
-                            style="flex:1;background:rgba(15,23,42,0.5);border:1px solid rgba(255,255,255,0.08);border-radius:6px;padding:0.3rem 0.6rem;color:white;outline:none;font-size:0.78rem;"
+                    <div style="display:flex;align-items:center;gap:0.5rem;margin-bottom:0.25rem;">
+                        <span style="font-family:'Orbitron',sans-serif;font-size:0.65rem;font-weight:700;color:var(--cyan);letter-spacing:0.08em;text-transform:uppercase;white-space:nowrap;flex-shrink:0;">Keywords</span>
+                        <span style="flex:1;"></span>
+                        <span id="kw-selected-count" style="font-family:'Inter',sans-serif;font-size:0.65rem;font-weight:600;color:rgba(255,255,255,0.55);white-space:nowrap;flex-shrink:0;"></span>
+                        <span style="background:linear-gradient(135deg,#15803d,#22c55e);color:#fff;padding:2px 9px;font-size:0.58rem;font-weight:700;white-space:nowrap;font-family:'Inter',sans-serif;border-radius:6px;flex-shrink:0;">⚡ SIN EXP</span>
+                    </div>
+                    <div id="kw-accordion" style="border:1px solid rgba(255,255,255,0.1);border-radius:10px;overflow:hidden;"></div>
+                    <div style="display:flex;gap:0.4rem;margin-top:0.5rem;align-items:center;">
+                        <input type="text" id="kw-add-input" placeholder="Agregar keyword..."
+                            style="flex:1;font-family:'Inter',sans-serif;font-size:0.75rem;border-radius:8px;"
                             onkeydown="if(event.key==='Enter'){event.preventDefault();addCustomKeyword();}">
-                        <button type="button" onclick="addCustomKeyword()" style="background:rgba(99,102,241,0.2);border:1px solid var(--primary);color:var(--primary);border-radius:6px;padding:0.3rem 0.7rem;font-size:0.78rem;cursor:pointer;">+ Agregar</button>
+                        <button type="button" onclick="addCustomKeyword()" style="background:linear-gradient(160deg,#15803d,#22c55e);border:none;color:#fff;padding:0.38rem 0.85rem;font-size:0.68rem;font-weight:700;cursor:pointer;font-family:'Inter',sans-serif;border-radius:8px;white-space:nowrap;box-shadow:0 2px 5px rgba(0,0,0,0.3);">+ Add</button>
                     </div>
                     <input type="hidden" name="USER_KEYWORDS" id="inp-keywords">
                 </div>
@@ -786,7 +184,7 @@
                 <div style="display:grid; grid-template-columns:1fr auto; gap:0.5rem; align-items:end;">
                     <div class="form-group" style="margin:0;">
                         <label>Ofertas por Portal</label>
-                        <input type="number" name="MAX_OFFERS" id="inp-max" value="20" min="1">
+                        <input type="number" name="MAX_OFFERS" id="inp-max" value="5" min="1">
                     </div>
                     <button type="submit" class="btn btn-primary" style="width:auto; white-space:nowrap;">💾
                         Guardar</button>
@@ -816,11 +214,29 @@
                 style="display:flex; align-items:center; justify-content:space-between; gap:0.5rem; margin-bottom:0.6rem;">
                 <h2 style="margin-bottom:0;">🚀 Control Maestro</h2>
                 <div style="display:flex; gap:0.4rem;">
-                    <button type="button" class="toolbar-btn" id="selectAllPortalsBtn">Todos</button>
-                    <button type="button" class="toolbar-btn" id="clearPortalsBtn">Limpiar</button>
+                    <button type="button" class="toolbar-btn" id="selectAllPortalsBtn" style="background:rgba(255,255,255,0.12);">Todos</button>
+                    <button type="button" class="toolbar-btn" id="clearPortalsBtn" style="background:rgba(255,255,255,0.12);">Limpiar</button>
+                    <button type="button" class="toolbar-btn" id="verifySessionsBtn"
+                        onclick="verifySessions()"
+                        style="background:linear-gradient(160deg,#0e7490,#06b6d4);"
+                        title="Verificar: chequea sin abrir ventana si las sesiones siguen activas (browser invisible)">
+                        🔐 Verificar
+                    </button>
+                    <button type="button" class="toolbar-btn" id="loginPortalsBtn"
+                        onclick="loginPortals()"
+                        style="background:linear-gradient(160deg,#15803d,#22c55e);"
+                        title="Loguear: abre browser visible por portal. Si la sesion sigue activa cierra solo en segundos. Si expiro, espera que inicies sesion.">
+                        🔑 Loguear
+                    </button>
+                    <button type="button" class="toolbar-btn" id="resetSessionsBtn"
+                        onclick="resetSessions()"
+                        style="background:linear-gradient(160deg,#b45309,#f59e0b);"
+                        title="Re-login: borra TODAS las cookies — fuerza loguear de cero en todos los portales">
+                        🗝 Re-login
+                    </button>
                     <button type="button" class="toolbar-btn" id="resetAllBtn"
                         onclick="resetAll()"
-                        style="background:rgba(239,68,68,0.15);color:#f87171;border-color:rgba(239,68,68,0.4);"
+                        style="background:linear-gradient(160deg,#991b1b,#ef4444);"
                         title="Limpia colas, estadísticas y deja todo en cero">
                         🗑 Reset
                     </button>
@@ -833,15 +249,18 @@
 
             <!-- Botones de control -->
             <div style="display:flex; gap:0.5rem; flex-wrap:wrap; align-items:center; margin-bottom:0.5rem;">
-                <button id="scanBtn" class="btn" style="background:linear-gradient(135deg,#0284c7,#0ea5e9);color:#fff;font-weight:700;flex:1;">
+                <button id="scanBtn" class="btn btn-scan" style="flex:1;">
                     🔍 Scan
                 </button>
-                <button id="postularBtn" class="btn btn-success" style="flex:1;font-weight:700;">
+                <button id="postularBtn" class="btn btn-success" style="flex:1;">
                     🚀 Postular
                 </button>
                 <button id="stopBtn" class="btn btn-danger" style="flex:1;" disabled>⏹ Detener</button>
+                <button type="button" onclick="unlockBtns();_botMode=null;setBotControls('idle');"
+                    title="Forzar desbloqueo si el botón quedó atascado"
+                    style="background:rgba(255,255,255,0.07);border:none;color:rgba(255,255,255,0.5);padding:0.38rem 0.55rem;font-size:0.72rem;cursor:pointer;white-space:nowrap;font-family:'Inter',sans-serif;flex-shrink:0;border-radius:8px;box-shadow:0 2px 5px rgba(0,0,0,0.3);">↺</button>
             </div>
-            <div id="scan-status" style="display:none;font-size:0.8rem;font-weight:600;color:#38bdf8;margin-bottom:0.4rem;padding:0.4rem 0.6rem;background:rgba(14,165,233,0.08);border:1px solid rgba(14,165,233,0.2);border-radius:8px;"></div>
+            <div id="scan-status" style="display:none;font-size:0.72rem;font-family:'Share Tech Mono',monospace;letter-spacing:0.04em;color:#7ecfea;margin-bottom:0.4rem;padding:0.35rem 0.7rem;background:rgba(0,212,255,0.04);border:1px solid rgba(0,212,255,0.18);"></div>
 
             <div class="ops-panel" aria-live="polite">
                 <div class="ops-item">
@@ -875,63 +294,53 @@
                 <ol class="iv-steps" id="iv-steps"></ol>
             </div>
 
-            <!-- Banner post-scan: muestra resultados del último scan -->
-            <div id="scan-result-banner" style="display:none; background:rgba(16,185,129,0.08); border:1px solid rgba(16,185,129,0.3); border-radius:10px; padding:0.6rem 1rem; margin-bottom:0.75rem; font-size:0.82rem;">
-                <div style="display:flex; align-items:center; gap:0.5rem; flex-wrap:wrap;">
-                    <span style="font-weight:700; color:#34d399;">📋 Resultado del Scan</span>
-                    <span id="scan-result-queue" style="color:#a3e635; font-weight:600;">— ofertas en cola</span>
-                    <span style="color:var(--text-dim);">·</span>
-                    <span id="scan-result-questions" style="color:#c4b5fd; font-weight:600;">— preguntas</span>
-                    <span id="scan-result-cta" style="margin-left:auto; display:none;">
-                        <button onclick="postularQueue()"
-                            style="background:linear-gradient(135deg,#059669,#10b981);color:white;border:none;border-radius:7px;padding:0.3rem 0.9rem;cursor:pointer;font-size:0.8rem;font-weight:700;box-shadow:0 2px 8px rgba(16,185,129,0.35);">
-                            🚀 Postular a todo
-                        </button>
+            <!-- Banner post-scan -->
+            <div id="scan-result-banner" style="display:none;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.1);border-radius:12px;padding:0.5rem 0.85rem;margin-bottom:0.5rem;">
+                <div style="display:flex;align-items:center;gap:0.6rem;flex-wrap:wrap;">
+                    <span style="font-family:'Inter',sans-serif;font-size:0.68rem;font-weight:700;letter-spacing:0.06em;color:rgba(255,255,255,0.7);text-transform:uppercase;">Scan</span>
+                    <span id="scan-result-queue" style="color:#86efac;font-family:'JetBrains Mono',monospace;font-size:0.72rem;"></span>
+                    <span style="color:rgba(255,255,255,0.18);">·</span>
+                    <span id="scan-result-questions" style="color:#c4b5fd;font-family:'JetBrains Mono',monospace;font-size:0.72rem;"></span>
+                    <span id="scan-result-cta" style="margin-left:auto;display:none;">
+                        <button onclick="postularQueue()" style="background:linear-gradient(160deg,#15803d,#22c55e);border:none;color:#fff;padding:0.25rem 0.85rem;font-size:0.68rem;font-weight:700;font-family:'Inter',sans-serif;border-radius:8px;cursor:pointer;box-shadow:0 2px 5px rgba(0,0,0,0.3);">🚀 Postular todo</button>
                     </span>
                 </div>
             </div>
 
-            <!-- Panel Cola del Scan — ofertas que el bot postulará automáticamente -->
-            <div id="sq-panel" style="display:none; background:rgba(163,230,53,0.05); border:1px solid rgba(163,230,53,0.25); border-radius:10px; margin-bottom:0.75rem; overflow:hidden;">
-                <div onclick="toggleSqPanel()" style="display:flex;align-items:center;gap:0.5rem;padding:0.5rem 0.75rem;cursor:pointer;user-select:none;">
-                    <span style="font-size:0.85rem;">📋</span>
-                    <div style="flex:1;min-width:0;">
-                        <span style="font-size:0.78rem;font-weight:700;color:#a3e635;">Ofertas en cola</span>
-                        <span style="font-size:0.65rem;color:rgba(163,230,53,0.5);margin-left:0.4rem;">el bot las postula automático al hacer "Postular a todo"</span>
+            <!-- Panel Cola del Scan -->
+            <div id="sq-panel" style="display:none;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.1);border-radius:12px;margin-bottom:0.5rem;overflow:hidden;">
+                <div onclick="toggleSqPanel()" style="display:flex;align-items:center;gap:0.5rem;padding:0.5rem 0.85rem;cursor:pointer;user-select:none;border-bottom:1px solid rgba(255,255,255,0.07);">
+                    <span style="font-family:'Inter',sans-serif;font-size:0.68rem;font-weight:700;letter-spacing:0.06em;color:rgba(255,255,255,0.7);text-transform:uppercase;">Cola</span>
+                    <span id="sq-count" style="font-size:0.68rem;color:#86efac;font-family:'JetBrains Mono',monospace;"></span>
+                    <span style="font-size:0.6rem;color:rgba(255,255,255,0.3);font-family:'Inter',sans-serif;">ofertas en espera</span>
+                    <div onclick="event.stopPropagation()" style="display:flex;gap:0.4rem;align-items:center;margin-left:auto;">
+                        <button onclick="openAllScanQueue()" style="font-size:0.65rem;background:rgba(255,255,255,0.08);color:rgba(255,255,255,0.7);border:none;padding:0.22rem 0.7rem;cursor:pointer;font-family:'Inter',sans-serif;font-weight:600;white-space:nowrap;border-radius:7px;box-shadow:0 2px 5px rgba(0,0,0,0.25);">Ver todas</button>
+                        <button onclick="clearScanQueue()" style="background:rgba(255,255,255,0.06);border:none;color:rgba(255,255,255,0.45);cursor:pointer;font-size:0.72rem;padding:0.15rem 0.35rem;border-radius:6px;" title="Limpiar">🗑</button>
                     </div>
-                    <span id="sq-count" style="font-size:0.72rem;color:#84cc16;font-weight:400;white-space:nowrap;"></span>
-                    <div onclick="event.stopPropagation()" style="display:flex;gap:0.4rem;align-items:center;">
-                        <button onclick="openAllScanQueue()" style="font-size:0.72rem;background:linear-gradient(135deg,#65a30d,#84cc16);color:white;border:none;border-radius:6px;padding:0.25rem 0.75rem;cursor:pointer;font-weight:700;white-space:nowrap;">Ver todas</button>
-                        <button onclick="clearScanQueue()" style="background:none;border:none;color:#a3e635;cursor:pointer;font-size:0.72rem;opacity:0.6;" title="Limpiar cola">🗑</button>
-                    </div>
-                    <span id="sq-chevron" style="color:#a3e635;font-size:0.75rem;transition:transform 0.2s;pointer-events:none;transform:rotate(-90deg);">▼</span>
+                    <span id="sq-chevron" style="color:rgba(255,255,255,0.3);font-size:0.65rem;transition:transform 0.2s;pointer-events:none;transform:rotate(-90deg);margin-left:0.3rem;">▼</span>
                 </div>
-                <div id="sq-body" style="padding:0 0.75rem 0.5rem;display:none;flex-direction:column;gap:0.25rem;max-height:320px;overflow-y:auto;"></div>
+                <div id="sq-body" style="padding:0.3rem 0.85rem 0.5rem;display:none;flex-direction:column;gap:0.2rem;max-height:280px;overflow-y:auto;scrollbar-width:thin;"></div>
             </div>
 
-            <!-- Panel de Preguntas — responder para que el bot complete formularios -->
-            <div id="pq-panel" style="display:none; background:rgba(139,92,246,0.08); border:1px solid rgba(139,92,246,0.35); border-radius:12px; margin-bottom:1rem; overflow:hidden;">
+            <!-- Panel de Preguntas -->
+            <div id="pq-panel" style="display:none;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.1);border-radius:12px;margin-bottom:0.5rem;overflow:hidden;">
                 <div id="pq-header" onclick="togglePqPanel()"
-                    style="display:flex; align-items:center; gap:0.6rem; padding:0.75rem 1rem; cursor:pointer; user-select:none;">
-                    <span style="font-size:1rem;">❓</span>
-                    <div style="flex:1;min-width:0;">
-                        <strong style="color:#a78bfa; font-size:0.88rem;">Preguntas del formulario</strong>
-                        <div style="font-size:0.65rem;color:rgba(167,139,250,0.5);">respóndelas una vez — el bot las reutiliza en todas las postulaciones</div>
-                    </div>
-                    <span id="pq-badge-answered" style="background:#065f46; color:#6ee7b7; border-radius:20px; padding:0.1rem 0.5rem; font-size:0.7rem; font-weight:700;">0 ✓</span>
-                    <span id="pq-badge" style="background:#7c3aed; color:white; border-radius:20px; padding:0.1rem 0.5rem; font-size:0.7rem; font-weight:700; display:none;">0 ⚠</span>
+                    style="display:flex;align-items:center;gap:0.6rem;padding:0.5rem 0.85rem;cursor:pointer;user-select:none;">
+                    <span style="font-family:'Inter',sans-serif;font-size:0.68rem;font-weight:700;letter-spacing:0.06em;color:rgba(255,255,255,0.7);text-transform:uppercase;">Preguntas</span>
+                    <span style="font-size:0.6rem;color:rgba(255,255,255,0.3);font-family:'Inter',sans-serif;">formulario ATS</span>
+                    <span id="pq-badge-answered" style="margin-left:auto;background:rgba(52,211,153,0.15);border:1px solid rgba(52,211,153,0.3);color:#86efac;padding:2px 8px;font-size:0.65rem;font-family:'JetBrains Mono',monospace;border-radius:6px;">0 ✓</span>
+                    <span id="pq-badge" style="background:rgba(177,151,252,0.15);border:1px solid rgba(177,151,252,0.35);color:#c4b5fd;padding:2px 8px;font-size:0.65rem;font-family:'JetBrains Mono',monospace;border-radius:6px;display:none;">0 ⚠</span>
                     <button id="pq-autofill-btn" onclick="event.stopPropagation(); autoFillFromCV()"
-                        style="background:linear-gradient(135deg,#0891b2,#06b6d4);border:none;color:white;border-radius:6px;padding:0.25rem 0.65rem;cursor:pointer;font-size:0.72rem;font-weight:700;"
-                        title="Responder automáticamente usando los datos de tu CV y perfil">🧠 Auto-responder</button>
+                        style="background:linear-gradient(160deg,#7c3aed,#a855f7);border:none;color:#fff;padding:0.22rem 0.7rem;cursor:pointer;font-size:0.64rem;font-family:'Inter',sans-serif;font-weight:700;white-space:nowrap;border-radius:7px;box-shadow:0 2px 5px rgba(0,0,0,0.3);"
+                        title="Responder desde CV y perfil">🧠 Responder desde CV</button>
                     <button onclick="event.stopPropagation(); loadPendingQuestions()"
-                        style="background:none;border:none;color:var(--text-dim);cursor:pointer;font-size:0.72rem;" title="Actualizar">↻</button>
-                    <span id="pq-chevron" style="color:var(--text-dim); font-size:0.8rem; transition:transform 0.2s; transform:rotate(-90deg);">▼</span>
+                        style="background:rgba(255,255,255,0.08);border:none;color:rgba(255,255,255,0.6);cursor:pointer;font-size:0.78rem;padding:0.15rem 0.4rem;border-radius:6px;" title="Actualizar">↻</button>
+                    <span id="pq-chevron" style="color:rgba(255,255,255,0.3);font-size:0.65rem;transition:transform 0.2s;transform:rotate(-90deg);">▼</span>
                 </div>
-                <!-- Cuerpo colapsable -->
-                <div id="pq-body" style="padding:0 1rem 0.75rem; display:none; flex-direction:column; gap:0.6rem;">
+                <div id="pq-body" style="padding:0 0.85rem 0.6rem;display:none;flex-direction:column;gap:0.5rem;border-top:1px solid rgba(255,255,255,0.07);">
                     <div id="pq-list"></div>
-                    <p style="font-size:0.72rem; color:var(--text-dim); margin:0.25rem 0 0;">
-                        ✏️ Las respuestas se guardan automáticamente al escribir. Se reusan en futuras sesiones.
+                    <p style="font-size:0.62rem;color:rgba(255,255,255,0.28);margin:0.2rem 0 0;font-family:'Inter',sans-serif;">
+                        Respuestas guardadas automáticamente · reutilizadas en todas las sesiones
                     </p>
                 </div>
             </div>
@@ -945,56 +354,23 @@
                 <ul id="manual-actions-list"></ul>
             </div>
 
-            <!-- Panel Links Rápidos — acordeón colapsable -->
-            <div id="quick-links-panel" style="display:none; background:rgba(16,185,129,0.07); border:1px solid rgba(16,185,129,0.3); border-radius:10px; margin-bottom:0.5rem; overflow:hidden;">
-                <!-- Header clickable (acordeón) -->
-                <div onclick="toggleQuickLinks()" style="display:flex; align-items:center; justify-content:space-between; padding:0.5rem 0.75rem; cursor:pointer; user-select:none; gap:0.5rem;">
-                    <div style="display:flex;align-items:center;gap:0.5rem;flex:1;min-width:0;">
-                        <span style="font-size:0.9rem;">🚀</span>
-                        <div style="min-width:0;">
-                            <span style="font-size:0.78rem; font-weight:700; color:#34d399; white-space:nowrap;">Postulación rápida</span>
-                            <span id="quick-links-count" style="font-size:0.72rem;color:#6ee7b7;font-weight:400;margin-left:0.3rem;"></span>
-                            <div style="font-size:0.63rem;color:rgba(52,211,153,0.5);">ATS externos — el bot no puede postular solo, ábrelas tú</div>
-                        </div>
+            <!-- Panel Links Rápidos -->
+            <div id="quick-links-panel" style="display:none;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.1);border-radius:12px;margin-bottom:0.5rem;overflow:hidden;">
+                <div onclick="toggleQuickLinks()" style="display:flex;align-items:center;gap:0.5rem;padding:0.5rem 0.85rem;cursor:pointer;user-select:none;border-bottom:1px solid rgba(255,255,255,0.07);">
+                    <span style="font-family:'Inter',sans-serif;font-size:0.68rem;font-weight:700;letter-spacing:0.06em;color:rgba(255,255,255,0.7);text-transform:uppercase;">Postulación Rápida</span>
+                    <span id="quick-links-count" style="font-size:0.68rem;color:#86efac;font-family:'JetBrains Mono',monospace;"></span>
+                    <div style="display:flex;align-items:center;gap:0.35rem;margin-left:auto;" onclick="event.stopPropagation()">
+                        <label title="Auto-postular 5 cada 5 minutos" style="display:flex;align-items:center;gap:0.25rem;cursor:pointer;font-size:0.62rem;color:rgba(255,255,255,0.45);font-family:'Inter',sans-serif;white-space:nowrap;">
+                            <input type="checkbox" id="ql-auto-toggle" onchange="toggleQlAuto()" style="cursor:pointer;accent-color:#a78bfa;width:11px;height:11px;">
+                            <span id="ql-auto-label">AUTO 5min</span>
+                        </label>
+                        <button onclick="scanQuickLinks()" style="font-size:0.65rem;background:linear-gradient(160deg,#0369a1,#0ea5e9);border:none;color:#fff;padding:0.22rem 0.65rem;cursor:pointer;font-family:'Inter',sans-serif;font-weight:700;white-space:nowrap;border-radius:7px;box-shadow:0 2px 5px rgba(0,0,0,0.3);">⬡ Escanear</button>
+                        <button id="apply-all-btn" onclick="applyQuickLinksNow()" style="font-size:0.65rem;background:linear-gradient(160deg,#15803d,#22c55e);border:none;color:#fff;padding:0.22rem 0.7rem;cursor:pointer;font-family:'Inter',sans-serif;font-weight:700;white-space:nowrap;border-radius:7px;box-shadow:0 2px 5px rgba(0,0,0,0.3);">⚡ Postulando...</button>
+                        <button onclick="clearQuickLinks()" style="background:rgba(255,255,255,0.06);border:none;color:rgba(255,255,255,0.45);cursor:pointer;font-size:0.72rem;padding:0.15rem 0.35rem;border-radius:6px;" title="Limpiar">🗑</button>
                     </div>
-                    <div style="display:flex;align-items:center;gap:0.4rem;" onclick="event.stopPropagation()">
-                        <button id="apply-all-btn" onclick="applyAllQuickLinks()" style="font-size:0.72rem;background:linear-gradient(135deg,#059669,#10b981);color:white;border:none;border-radius:6px;padding:0.25rem 0.75rem;cursor:pointer;font-weight:700;white-space:nowrap;box-shadow:0 2px 8px rgba(16,185,129,0.3);">Postular a todo</button>
-                        <button onclick="clearQuickLinks()" style="background:none;border:none;color:#34d399;cursor:pointer;font-size:0.72rem;opacity:0.6;" title="Limpiar todo">🗑</button>
-                    </div>
-                    <span id="ql-chevron" style="color:#34d399;font-size:0.75rem;transition:transform 0.2s;display:inline-block;pointer-events:none;transform:rotate(-90deg);">▼</span>
+                    <span id="ql-chevron" style="color:rgba(255,255,255,0.3);font-size:0.6rem;transition:transform 0.2s;pointer-events:none;transform:rotate(-90deg);margin-left:0.3rem;">▼</span>
                 </div>
-                <!-- Cuerpo colapsable -->
-                <div id="quick-links-body" style="padding:0 0.75rem 0.5rem; display:none; flex-direction:column; gap:0.3rem;"></div>
-            </div>
-
-            <!-- Panel Registros Históricos -->
-            <div id="records-panel" style="background:rgba(30,41,59,0.6); border:1px solid rgba(99,102,241,0.2); border-radius:12px; margin-bottom:0.75rem; overflow:hidden;">
-                <div id="records-header" onclick="toggleRecords()"
-                    style="display:flex; align-items:center; gap:0.6rem; padding:0.65rem 1rem; cursor:pointer; user-select:none;">
-                    <span style="font-size:0.95rem;">📋</span>
-                    <strong style="color:#a5b4fc; font-size:0.85rem; flex:1;">Registros — Historial de Postulaciones</strong>
-                    <span id="records-total" style="font-size:0.72rem; color:var(--text-dim);">cargando...</span>
-                    <button onclick="event.stopPropagation(); loadRecords()"
-                        style="background:none;border:none;color:var(--text-dim);cursor:pointer;font-size:0.72rem;" title="Actualizar">↻</button>
-                    <span id="records-chevron" style="color:var(--text-dim); font-size:0.8rem; transition:transform 0.2s; transform:rotate(-90deg);">▼</span>
-                </div>
-                <div id="records-body" style="display:none; padding:0 0.75rem 0.75rem; overflow-x:auto;">
-                    <!-- Resumen por portal -->
-                    <div id="records-summary" style="display:flex; gap:0.5rem; flex-wrap:wrap; margin-bottom:0.5rem;"></div>
-                    <!-- Tabla últimas postulaciones -->
-                    <table style="width:100%; border-collapse:collapse; font-size:0.75rem;">
-                        <thead>
-                            <tr style="color:var(--text-dim); border-bottom:1px solid rgba(255,255,255,0.07);">
-                                <th style="text-align:left; padding:0.3rem 0.5rem; font-weight:600;">Fecha</th>
-                                <th style="text-align:left; padding:0.3rem 0.5rem; font-weight:600;">Portal</th>
-                                <th style="text-align:left; padding:0.3rem 0.5rem; font-weight:600;">Título</th>
-                                <th style="text-align:left; padding:0.3rem 0.5rem; font-weight:600;">Estado</th>
-                            </tr>
-                        </thead>
-                        <tbody id="records-tbody"></tbody>
-                    </table>
-                    <p id="records-empty" style="display:none; font-size:0.75rem; color:var(--text-dim); text-align:center; padding:0.75rem;">Sin registros aún — las postulaciones aparecerán aquí.</p>
-                </div>
+                <div id="quick-links-body" style="padding:0.25rem 0.85rem 0.5rem;display:none;flex-direction:column;gap:0.25rem;border-top:1px solid rgba(255,255,255,0.07);"></div>
             </div>
 
             <!-- Terminal de logs -->
@@ -1004,7 +380,9 @@
                         <div class="terminal-dot"></div> Actividad en tiempo real
                     </span>
                     <button onclick="document.getElementById('log-container').innerHTML=''"
-                        style="background:none;border:none;color:var(--text-dim);cursor:pointer;font-size:0.75rem;">limpiar</button>
+                        style="background:linear-gradient(160deg,#991b1b,#ef4444);border:none;color:#fff;cursor:pointer;font-size:0.65rem;font-weight:700;font-family:'Inter',sans-serif;padding:0.25rem 0.8rem;border-radius:8px;letter-spacing:0.03em;box-shadow:0 2px 5px rgba(0,0,0,0.3);transition:filter .15s;"
+                        onmouseover="this.style.filter='brightness(1.12)'"
+                        onmouseout="this.style.filter='brightness(1)'">🗑 Limpiar</button>
                 </div>
                 <div class="terminal" id="terminal">
                     <div id="log-container"></div>
@@ -1039,15 +417,17 @@
         // Portales locales (Chile) + remotos internacionales
         const PORTALS = [
             'chiletrabajos', 'laborum', 'getonyboard', 'computrabajo', 'linkedin',
+            'trabajando', 'infojobs',
             'weworkremotely', 'remotive', 'remoteco',
         ];
 
         // Portales activados por defecto — solo locales Chile
-        const DEFAULT_PORTALS = new Set(['chiletrabajos', 'laborum', 'getonyboard', 'computrabajo', 'linkedin']);
+        const DEFAULT_PORTALS = new Set(['chiletrabajos', 'laborum', 'getonyboard', 'computrabajo', 'linkedin', 'trabajando', 'infojobs']);
 
         const PORTAL_ICONS = {
             linkedin:       '💼', indeed: '🔍', computrabajo: '🏢',
             getonyboard:    '🚀', chiletrabajos: '🇨🇱', laborum: '📋',
+            trabajando:     '📄', infojobs: '💡',
             weworkremotely: '🌎', remotive: '🌐', remoteco: '🛸',
         };
 
@@ -1058,6 +438,8 @@
             getonyboard:    'GetOnBoard',
             chiletrabajos:  'ChileTrabajos',
             laborum:        'Laborum',
+            trabajando:     'Trabajando.cl',
+            infojobs:       'InfoJobs',
             weworkremotely: 'We Work Remotely',
             remotive:       'Remotive',
             remoteco:       'Remote.co',
@@ -1070,6 +452,8 @@
             getonyboard:    'https://www.getonbrd.com/jobs-desarrollador-junior',
             chiletrabajos:  'https://www.chiletrabajos.cl/',
             laborum:        'https://www.laborum.cl/',
+            trabajando:     'https://www.trabajando.cl/trabajo-empleo/chile',
+            infojobs:       'https://www.infojobs.net/ofertas-trabajo/chile',
             weworkremotely: 'https://weworkremotely.com/categories/remote-programming-jobs',
             remotive:       'https://remotive.com/remote-jobs/software-dev',
             remoteco:       'https://remote.co/remote-jobs/developer/',
@@ -1212,46 +596,70 @@
             if (countEl) countEl.textContent = `${total} seleccionadas`;
         }
 
+        function _makeChip(cat, idx, item) {
+            const chip = document.createElement('span');
+            const isActive = item.active;
+            const isCustom = item.custom;
+            const bg   = isCustom ? 'rgba(251,146,60,0.15)'  : isActive ? 'rgba(177,151,252,0.18)' : 'rgba(255,255,255,0.05)';
+            const bd   = isCustom ? 'rgba(251,146,60,0.4)'   : isActive ? 'rgba(177,151,252,0.4)'  : 'rgba(255,255,255,0.1)';
+            const col  = isCustom ? '#fbbf24' : isActive ? '#c4b5fd' : 'rgba(255,255,255,0.35)';
+            chip.style.cssText = `display:inline-flex;align-items:center;gap:0.2rem;padding:0.18rem 0.6rem;font-size:0.65rem;font-family:'Inter',sans-serif;font-weight:500;cursor:pointer;user-select:none;transition:all 0.12s;border:1px solid ${bd};background:${bg};color:${col};border-radius:6px;`;
+            chip.title = cat;
+            let inner = item.kw;
+            if (isCustom) inner += `<span data-rm="${cat}|${idx}" style="margin-left:0.25rem;opacity:0.6;font-size:0.6rem;">✕</span>`;
+            chip.innerHTML = inner;
+            chip.onclick = (e) => {
+                const rm = e.target.dataset && e.target.dataset.rm;
+                if (rm) { const [c,i] = rm.split('|'); removeCustomKw(c, +i); return; }
+                item.active = !item.active;
+                renderKwAccordion();
+            };
+            chip.onmouseenter = () => { chip.style.filter = 'brightness(1.15)'; };
+            chip.onmouseleave = () => { chip.style.filter = ''; };
+            return chip;
+        }
+
         function renderKwAccordion() {
             const acc = document.getElementById('kw-accordion');
             acc.innerHTML = '';
             Object.entries(_kwGroups).forEach(([cat, grp]) => {
-                const active = grp.keywords.filter(k => k.active).length;
-                const total  = grp.keywords.length;
-                const icon   = _CAT_ICONS[cat] || '🔹';
+                const icon = _CAT_ICONS[cat] || '▸';
+                const isOpen = grp.open;
+                const activeCount = grp.keywords.filter(k => k.active).length;
+                const total = grp.keywords.length;
+
                 // Header
                 const hdr = document.createElement('div');
-                hdr.style.cssText = 'display:flex;align-items:center;gap:0.5rem;padding:0.35rem 0.6rem;background:rgba(15,23,42,0.6);cursor:pointer;border-bottom:1px solid rgba(255,255,255,0.06);user-select:none;';
-                hdr.innerHTML = `
-                    <span style="font-size:0.78rem;">${icon} <strong style="color:#e2e8f0;">${cat}</strong></span>
-                    <span style="font-size:0.65rem;color:#64748b;margin-left:0.2rem;">${active}/${total}</span>
-                    <span style="margin-left:auto;font-size:0.7rem;color:#64748b;">${grp.open ? '▾' : '▸'}</span>
-                    <label onclick="event.stopPropagation()" style="display:flex;align-items:center;gap:0.25rem;font-size:0.68rem;color:#94a3b8;cursor:pointer;">
-                        <input type="checkbox" id="kw-cat-all-${cat}"
-                            ${active === total ? 'checked' : active > 0 ? 'indeterminate' : ''}
-                            onchange="toggleCatAll('${cat}', this.checked)">
-                        todos
-                    </label>`;
+                hdr.style.cssText = `display:flex;align-items:center;gap:0.45rem;padding:0.38rem 0.65rem;cursor:pointer;user-select:none;background:${isOpen ? 'rgba(177,151,252,0.06)' : 'rgba(255,255,255,0.02)'};border-bottom:1px solid rgba(255,255,255,0.07);transition:background 0.15s;`;
                 hdr.onclick = () => { grp.open = !grp.open; renderKwAccordion(); };
-                // Fix indeterminate
-                const cb = hdr.querySelector(`#kw-cat-all-${cat}`);
-                if (cb && active > 0 && active < total) cb.indeterminate = true;
+                hdr.onmouseenter = () => { hdr.style.background = 'rgba(177,151,252,0.08)'; };
+                hdr.onmouseleave = () => { hdr.style.background = isOpen ? 'rgba(177,151,252,0.06)' : 'rgba(255,255,255,0.02)'; };
+
+                const chev = document.createElement('span');
+                chev.textContent = isOpen ? '▾' : '▸';
+                chev.style.cssText = 'font-size:0.6rem;color:rgba(255,255,255,0.35);width:0.7rem;flex-shrink:0;';
+
+                const lbl = document.createElement('span');
+                lbl.textContent = icon + ' ' + cat;
+                lbl.style.cssText = 'font-family:\'Inter\',sans-serif;font-size:0.68rem;font-weight:600;letter-spacing:0.04em;color:rgba(255,255,255,0.75);text-transform:uppercase;flex:1;';
+
+                const cnt = document.createElement('span');
+                cnt.textContent = `${activeCount}/${total}`;
+                const allActive = activeCount === total;
+                cnt.style.cssText = `font-family:'JetBrains Mono',monospace;font-size:0.62rem;font-weight:600;color:${allActive ? '#86efac' : 'rgba(255,255,255,0.45)'};background:${allActive ? 'rgba(52,211,153,0.12)' : 'rgba(255,255,255,0.07)'};padding:0.1rem 0.45rem;border-radius:6px;flex-shrink:0;`;
+
+                hdr.appendChild(chev);
+                hdr.appendChild(lbl);
+                hdr.appendChild(cnt);
                 acc.appendChild(hdr);
 
-                if (grp.open) {
-                    const body = document.createElement('div');
-                    body.style.cssText = 'display:flex;flex-wrap:wrap;gap:0.3rem;padding:0.4rem 0.6rem 0.5rem;background:rgba(8,12,28,0.4);border-bottom:1px solid rgba(255,255,255,0.04);';
-                    grp.keywords.forEach((item, idx) => {
-                        const chip = document.createElement('label');
-                        chip.style.cssText = `display:inline-flex;align-items:center;gap:0.25rem;padding:0.18rem 0.55rem;border-radius:20px;font-size:0.7rem;cursor:pointer;user-select:none;transition:all 0.15s;border:1px solid ${item.custom ? 'rgba(251,146,60,0.4)' : item.active ? 'rgba(99,102,241,0.5)' : 'rgba(255,255,255,0.1)'};background:${item.custom ? 'rgba(251,146,60,0.1)' : item.active ? 'rgba(99,102,241,0.15)' : 'rgba(255,255,255,0.03)'};color:${item.custom ? '#fb923c' : item.active ? '#c4b5fd' : '#475569'};`;
-                        const removeBtn = item.custom ? `<span onclick="removeCustomKw('${cat}',${idx});event.preventDefault();" style="margin-left:0.2rem;opacity:0.6;font-size:0.62rem;">✕</span>` : '';
-                        chip.innerHTML = `<input type="checkbox" style="display:none;" ${item.active ? 'checked' : ''} onchange="toggleKw('${cat}',${idx},this.checked)">${item.kw}${removeBtn}`;
-                        chip.querySelector('input').onchange = (e) => { toggleKw(cat, idx, e.target.checked); };
-                        chip.onclick = (e) => { if (e.target.tagName !== 'INPUT' && e.target.tagName !== 'SPAN') { item.active = !item.active; renderKwAccordion(); _syncKwHidden(); } };
-                        body.appendChild(chip);
-                    });
-                    acc.appendChild(body);
-                }
+                if (!isOpen) return;
+
+                // Body con chips
+                const body = document.createElement('div');
+                body.style.cssText = 'display:flex;flex-wrap:wrap;gap:0.28rem;padding:0.45rem 0.65rem;border-bottom:1px solid rgba(255,255,255,0.06);background:rgba(0,0,0,0.12);';
+                grp.keywords.forEach((item, idx) => body.appendChild(_makeChip(cat, idx, item)));
+                acc.appendChild(body);
             });
             _syncKwHidden();
         }
@@ -1274,7 +682,8 @@
             const inp = document.getElementById('kw-add-input');
             const val = inp.value.trim();
             if (!val) return;
-            if (!_kwGroups['Custom']) _kwGroups['Custom'] = { open: false, keywords: [] };
+            if (!_kwGroups['Custom']) _kwGroups['Custom'] = { open: true, keywords: [] };
+            _kwGroups['Custom'].open = true;
             const already = _kwGroups['Custom'].keywords.find(k => k.kw.toLowerCase() === val.toLowerCase());
             if (!already) {
                 _kwGroups['Custom'].keywords.push({ kw: val, active: true, custom: true });
@@ -1559,7 +968,8 @@
             const el = document.getElementById(`p-${portal}`);
             if (el) {
                 el.classList.add('active');
-                document.getElementById(`ps-${portal}`).innerText = 'Procesando...';
+                const _psEl = document.getElementById(`ps-${portal}`);
+                if (_psEl) { _psEl.innerText = 'Procesando...'; _psEl.style.color = 'var(--violet)'; }
             }
         }
 
@@ -1579,6 +989,14 @@
                 el.style.transform  = 'scale(1.25)';
                 setTimeout(() => el.style.transform = 'scale(1)', 180);
             });
+            // Banner de sesión: visible cuando hay al menos 1 postulación
+            const applied = stats.applied ?? 0;
+            const banner  = document.getElementById('session-banner');
+            const sessEl  = document.getElementById('session-count');
+            if (banner && sessEl) {
+                sessEl.innerText    = applied;
+                banner.style.display = applied > 0 ? 'block' : 'none';
+            }
         }
 
         socket.on('captcha_required', (data) => {
@@ -1604,12 +1022,55 @@
                 }
                 const status = document.getElementById(`ps-${portal}`);
                 if (status && status.innerText === 'Pendiente') {
-                    status.innerText = hasSession ? 'Sesión guardada' : 'Puede pedir login';
+                    if (hasSession) {
+                        status.innerText = 'Sesión guardada';
+                        status.style.color = 'var(--green)';
+                    } else {
+                        status.innerText = 'Puede pedir login';
+                        status.style.color = 'var(--orange)';
+                    }
                 }
             }
         });
 
         socket.on('new_log', (data) => appendLogLine(data.message));
+
+        // ── Verificación de sesiones en tiempo real ───────────────────────────
+        socket.on('session_check_progress', (partial) => {
+            for (const [portal, result] of Object.entries(partial)) {
+                const dot = document.getElementById(`session-${portal}`);
+                const ps  = document.getElementById(`ps-${portal}`);
+                if (!dot) continue;
+                // Estado visual mientras verifica
+                if (result === 'checking') {
+                    dot.style.animation = 'pulse 0.8s infinite';
+                    dot.classList.remove('active','missing');
+                    dot.style.background = '#ffee00';
+                    dot.title = 'Verificando...';
+                    if (ps) ps.innerText = 'Verificando...';
+                } else if (result === 'ok') {
+                    dot.style.animation = '';
+                    dot.style.background = '';
+                    dot.classList.add('active');
+                    dot.classList.remove('missing');
+                    dot.title = '✅ Sesión activa confirmada';
+                    if (ps) ps.innerText = 'Sesión activa';
+                } else if (result === 'expired') {
+                    dot.style.animation = '';
+                    dot.style.background = '#ff2d55';
+                    dot.classList.remove('active','missing');
+                    dot.title = '❌ Sesión expirada — requiere re-login';
+                    if (ps) ps.innerText = 'Sesión expirada';
+                } else if (result === 'no_cookies') {
+                    dot.style.animation = '';
+                    dot.style.background = '';
+                    dot.classList.remove('active');
+                    dot.classList.add('missing');
+                    dot.title = 'Sin sesión guardada';
+                    if (ps) ps.innerText = 'Sin sesión';
+                }
+            }
+        });
 
         // ── Preguntas Pendientes ──────────────────────────────────────────────
         socket.on('pending_question', (data) => {
@@ -1617,109 +1078,10 @@
             loadPendingQuestions();
         });
 
-        // ── Registros históricos ──────────────────────────────────────────────
-        let _recordsOpen = false;
-        function toggleRecords() {
-            _recordsOpen = !_recordsOpen;
-            const body = document.getElementById('records-body');
-            const chev = document.getElementById('records-chevron');
-            if (body) body.style.display = _recordsOpen ? 'block' : 'none';
-            if (chev) chev.style.transform = _recordsOpen ? 'rotate(0deg)' : 'rotate(-90deg)';
-            if (_recordsOpen) loadRecords();
-        }
-
-        const STATUS_COLORS = {
-            applied:     '#10b981',
-            external:    '#22d3ee',
-            skipped:     '#94a3b8',
-            error:       '#ef4444',
-            dry_run:     '#6b7280',
-        };
-        function statusColor(s) {
-            if (!s) return '#94a3b8';
-            if (s === 'applied') return STATUS_COLORS.applied;
-            if (s.startsWith('external')) return STATUS_COLORS.external;
-            if (s.startsWith('skipped')) return STATUS_COLORS.skipped;
-            if (s.startsWith('error')) return STATUS_COLORS.error;
-            return '#94a3b8';
-        }
-        function statusLabel(s) {
-            if (!s) return '—';
-            if (s === 'applied') return '✅ Postulado';
-            if (s.startsWith('external')) return '⚡ Externo';
-            if (s === 'skipped_404') return '🚫 404';
-            if (s === 'skipped_senior' || s === 'skipped_experience') return '🔻 Senior';
-            if (s === 'skipped_schedule') return '🔻 Horario';
-            if (s === 'skipped_practica') return '🔻 Práctica';
-            if (s === 'skipped_topic') return '🔻 Rubro';
-            if (s.startsWith('skipped')) return '⏭ Saltado';
-            if (s.startsWith('error')) return '❌ Error';
-            if (s === 'dry_run') return '🧪 Dry run';
-            return s.slice(0, 18);
-        }
-
-        async function loadRecords() {
-            try {
-                const [recentRes, statsRes] = await Promise.all([
-                    fetch('/api/recent?limit=30'),
-                    fetch('/api/db-stats'),
-                ]);
-                const rows  = await recentRes.json();
-                const stats = await statsRes.json();
-
-                // Total badge
-                const totalEl = document.getElementById('records-total');
-                if (totalEl) totalEl.textContent = `${stats.total ?? 0} total en DB`;
-
-                // Resumen por portal
-                const summary = document.getElementById('records-summary');
-                if (summary && stats.by_portal) {
-                    summary.innerHTML = '';
-                    for (const [portal, statuses] of Object.entries(stats.by_portal)) {
-                        const applied = statuses.applied || 0;
-                        const ext = Object.entries(statuses).filter(([k]) => k.startsWith('external')).reduce((a,[,v]) => a+v, 0);
-                        const errors = Object.entries(statuses).filter(([k]) => k.startsWith('error')).reduce((a,[,v]) => a+v, 0);
-                        summary.innerHTML += `<span style="background:rgba(99,102,241,0.15);border:1px solid rgba(99,102,241,0.25);border-radius:8px;padding:0.25rem 0.6rem;font-size:0.72rem;">
-                            <span style="color:#a5b4fc;font-weight:700;">${portal}</span>
-                            <span style="color:#10b981;margin-left:0.3rem;">✅${applied}</span>
-                            ${ext > 0 ? `<span style="color:#22d3ee;margin-left:0.3rem;">⚡${ext}</span>` : ''}
-                            ${errors > 0 ? `<span style="color:#ef4444;margin-left:0.3rem;">❌${errors}</span>` : ''}
-                        </span>`;
-                    }
-                }
-
-                // Tabla de registros
-                const tbody = document.getElementById('records-tbody');
-                const empty = document.getElementById('records-empty');
-                if (!tbody) return;
-                tbody.innerHTML = '';
-
-                if (!Array.isArray(rows) || rows.length === 0) {
-                    if (empty) empty.style.display = 'block';
-                    return;
-                }
-                if (empty) empty.style.display = 'none';
-
-                rows.forEach(r => {
-                    const color = statusColor(r.status);
-                    const label = statusLabel(r.status);
-                    const date  = (r.applied_at || '').slice(0, 16).replace('T', ' ');
-                    const tr = document.createElement('tr');
-                    tr.style.cssText = 'border-bottom:1px solid rgba(255,255,255,0.04);';
-                    tr.innerHTML = `
-                        <td style="padding:0.3rem 0.5rem;color:var(--text-dim);white-space:nowrap;">${date}</td>
-                        <td style="padding:0.3rem 0.5rem;color:#a5b4fc;font-weight:600;">${escHtml(r.portal || '')}</td>
-                        <td style="padding:0.3rem 0.5rem;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${escHtml(r.title || '')}">${escHtml((r.title || '—').slice(0,50))}</td>
-                        <td style="padding:0.3rem 0.5rem;color:${color};font-weight:600;white-space:nowrap;">${label}</td>`;
-                    tbody.appendChild(tr);
-                });
-            } catch(e) { console.warn('loadRecords error', e); }
-        }
-
-        // Actualizar registros al finalizar cada run
+        // Actualizar UI al finalizar cada run
         socket.on('bot_status', (data) => {
             if (!data.running && (data.status === 'finished' || data.status === 'stopped')) {
-                if (_recordsOpen) loadRecords();
+                loadQuickLinks();
             }
         });
 
@@ -1785,6 +1147,51 @@
             catch(e) {}
         }
 
+        async function scanQuickLinks() {
+            const btn = event.currentTarget || event.target;
+            const orig = btn.textContent;
+            btn.textContent = '⏳ Escaneando...';
+            btn.disabled = true;
+            try {
+                const r = await fetch('/api/scan-quick-links', {method:'POST'});
+                const d = await r.json();
+                if (d.top_questions && d.top_questions.length) {
+                    const qs = d.top_questions.slice(0,10).map((q,i) => `${i+1}. ${q}`).join('\n');
+                    alert(`Scan completado:\n✓ Ya respondidas: ${d.already_answered}\n⏳ En cola: ${d.queued}\n✗ Sin formulario: ${d.failed}\n\nPreguntas sin respuesta:\n${qs}\n\nAgrega las respuestas en data/qa_cache.json y luego presiona "Postular a todo".`);
+                } else {
+                    alert(`Scan completado:\n✓ Escaneadas: ${d.scanned}\n✓ Ya respondidas: ${d.already_answered}\n⏳ En cola: ${d.queued}\n\nTodas las preguntas ya tienen respuesta! Puedes hacer "Postular a todo".`);
+                }
+            } catch(e) {
+                alert('Error en scan: ' + e);
+            } finally {
+                btn.textContent = orig;
+                btn.disabled = false;
+            }
+        }
+
+        async function fillCurriculum() {
+            const btn = event.currentTarget || event.target;
+            const orig = btn.textContent;
+            btn.textContent = '⏳ Llenando...';
+            btn.disabled = true;
+            try {
+                const r = await fetch('/api/fill-curriculum', {method:'POST'});
+                const d = await r.json();
+                if (d.ok) {
+                    alert('✅ Curriculum llenado correctamente en trabajando.cl');
+                } else {
+                    alert('⚠️ No se pudo llenar el curriculum.\n' +
+                          (d.error || 'Puede que necesites hacer login primero en trabajando.cl.\n' +
+                           'Abre trabajando.cl manualmente, inicia sesión, y luego intenta de nuevo.'));
+                }
+            } catch(e) {
+                alert('Error al llamar la API: ' + e);
+            } finally {
+                btn.textContent = orig;
+                btn.disabled = false;
+            }
+        }
+
         function applyAllQuickLinks() {
             const btn  = document.getElementById('apply-all-btn');
             const list = document.getElementById('quick-links-body');
@@ -1817,7 +1224,59 @@
                 await fetch('/api/quick-links/clear', {method:'POST'});
                 document.getElementById('quick-links-panel').style.display = 'none';
                 document.getElementById('quick-links-body').innerHTML = '';
+                const countEl = document.getElementById('quick-links-count');
+                if (countEl) countEl.textContent = '';
             } catch(e) {}
+        }
+
+        // ── Auto-apply cada 5 minutos ─────────────────────────────────────────
+        let _qlAutoTimer = null;
+        let _qlAutoRunning = false;
+
+        async function applyQuickLinksNow() {
+            if (_qlAutoRunning) return;
+            const btn = document.getElementById('apply-all-btn');
+            const origText = btn ? btn.textContent : '';
+            if (btn) { btn.textContent = '⏳ Postulando...'; btn.disabled = true; }
+            _qlAutoRunning = true;
+            try {
+                const r = await fetch('/api/apply-quick-links', {
+                    method: 'POST',
+                    headers: {'Content-Type':'application/json'},
+                    body: JSON.stringify({max: 5})
+                });
+                const d = await r.json();
+                const msg = `✅ ${d.applied || 0} postuladas · ⏳ ${d.pending || 0} pendientes · ❌ ${d.failed || 0} fallidas`;
+                if (btn) btn.textContent = msg;
+                appendLogLine(`[AUTO-QL] ${msg}`);
+                setTimeout(() => { if (btn) { btn.textContent = origText; btn.disabled = false; } }, 3000);
+                await loadQuickLinks();
+            } catch(e) {
+                if (btn) { btn.textContent = origText; btn.disabled = false; }
+                const errMsg = e.message.includes('fetch') ? 'servidor no disponible' : e.message;
+                appendLogLine(`[AUTO-QL] Error: ${errMsg} — reintentara en 5min.`);
+            } finally {
+                _qlAutoRunning = false;
+            }
+        }
+
+        function toggleQlAuto() {
+            const chk   = document.getElementById('ql-auto-toggle');
+            const label = document.getElementById('ql-auto-label');
+            if (chk.checked) {
+                // Activar — ejecutar inmediatamente y luego cada 5 min
+                applyQuickLinksNow();
+                _qlAutoTimer = setInterval(() => {
+                    if (!_qlAutoRunning) applyQuickLinksNow();
+                }, 5 * 60 * 1000);  // 5 minutos
+                if (label) label.textContent = '⏱ Activo';
+                appendLogLine('[AUTO-QL] Auto-postulación activada — cada 5 min, 5 ofertas.');
+            } else {
+                // Desactivar
+                if (_qlAutoTimer) { clearInterval(_qlAutoTimer); _qlAutoTimer = null; }
+                if (label) label.textContent = 'Auto 5min';
+                appendLogLine('[AUTO-QL] Auto-postulación desactivada.');
+            }
         }
 
         function checkQuickLinksEmpty() {
@@ -2223,27 +1682,45 @@
 
         // Patrones de líneas técnicas que no deben mostrarse al usuario
         const _NOISE_PATTERNS = [
-            /^={3,}/,                          // === banners ===
-            /Navegando a:\s*https?:\/\//i,     // URLs de navegación interna
+            // Python source / tracebacks
+            /^={3,}/,
+            /Traceback|File ".*\.py"/,
+            /^\s*self\./,
+            /^\s*os\.(rename|path|remove|makedirs)/,
+            /^\s*log\.(info|debug|warning|error|critical)\s*\(/,
+            /^\s*result\s*=/,
+            /^\s*_res\s*=/,
+            /^\s*applied,\s*seen/,
+            /^Message:\s*['"]/,
+            /^Arguments:\s*\(/,
+            /PermissionError|WinError/,
+            /doRollover|baseFilename|rotate\(self/,
+            /run_persistent_session|run_bot_multi_keywords|_run_keyword_loop/,
+            // Playwright / browser internals
+            /Navegando a:\s*https?:\/\//i,
             /playwright.?stealth/i,
             /CDP (no disponible|disponible)/i,
             /Modo fallback.*Chromium/i,
             /usando chrome del sistema/i,
+            /lanzando chromium propio/i,
+            /browser compartido/i,
+            /Tiempo de gracia para React/i,
+            /networkidle|domcontentloaded/i,
+            /DEBUG|WARNING.*playwright/i,
+            /stealth activo/i,
+            // Config / setup ruido
             /^portal:\s*\w+\s*\|\s*grupos/i,
             /Validando configuraci[oó]n para portal/i,
             /Advertencias de configuraci[oó]n/i,
             /tiene valor de ejemplo/i,
-            /lanzando chromium propio/i,
-            /browser compartido/i,
             /^apply\.?job bot/i,
-            /DEBUG|WARNING.*playwright/i,
             /Q&A cache/i,
-            /stealth activo/i,
             /\d+\s+resultados\s+encontrados/i,
-            /Tiempo de gracia para React/i,
-            /networkidle/i,
-            /domcontentloaded/i,
-            /Traceback|File ".*\.py"/,         // tracebacks de Python
+            // URLs crudas sueltas
+            /^https?:\/\/\S+$/,
+            // Líneas de código Python sueltas
+            /^\s*(def |class |import |from |return |raise |with |async |await )/,
+            /\.(append|extend|update|pop|get|set|keys|values|items)\s*\(/,
         ];
 
         function isNoisyLine(m) {
@@ -2287,9 +1764,17 @@
             }
             if (mClean.includes('[PROGRESO]')) {
                 const progress = mClean.match(/Aplicadas\s+(\d+)\/(\d+)/i);
-                return progress
-                    ? `📊 ${portal || 'Portal'}: ${progress[1]} de ${progress[2]} postulaciones enviadas.`
-                    : sentence(cleanLogText(mClean));
+                if (!progress) return sentence(cleanLogText(mClean));
+                const extMatch  = mClean.match(/\((\d+)\s+externas/i);
+                const dirMatch  = mClean.match(/\((\d+)\s+directas/i);
+                const p = portal || 'Portal';
+                if (extMatch && dirMatch) {
+                    return `📊 ${p}: ${progress[1]} de ${progress[2]} — ${dirMatch[1]} directas + ${extMatch[1]} externas (completar manualmente).`;
+                } else if (extMatch) {
+                    return `🔗 ${p}: ${progress[1]} de ${progress[2]} links abiertos — completar formularios manualmente.`;
+                } else {
+                    return `📊 ${p}: ${progress[1]} de ${progress[2]} postulaciones enviadas.`;
+                }
             }
             if (mClean.includes('[EXITO]') || mClean.includes('Postulación completada')) {
                 return `✅ ${sentence(cleanLogText(mClean))}`;
@@ -2320,6 +1805,19 @@
             if (isNoisyLine(mClean)) return '';
 
             // ── Mensajes útiles del engine sin etiqueta ──────────────────────
+
+            // "Revisando portal X" / "Procesando portal X"
+            if (/revisando|procesando|iniciando/i.test(mClean) && portal) {
+                return `🔄 Revisando ${portal}…`;
+            }
+            // "Oferta encontrada: título"
+            const ofertaMatch = mClean.match(/oferta[s]?\s*(encontrada[s]?|en\s+cola)[:\-\s]+(.{5,80})/i);
+            if (ofertaMatch) return `📋 Oferta encontrada: ${ofertaMatch[2].trim()}.`;
+
+            // "Ofertas encontradas: N"
+            const countMatch = mClean.match(/ofertas?\s+encontradas?[:\s]+(\d+)/i);
+            if (countMatch) return `📋 ${portal || 'Portal'}: ${countMatch[1]} oferta${countMatch[1]==='1'?'':'s'} encontrada${countMatch[1]==='1'?'':'s'}.`;
+
             if (/postul(ó|o|ando|ación)/i.test(mClean) && mClean.length < 120) {
                 return `📨 ${sentence(cleanLogText(mClean))}`;
             }
@@ -2327,16 +1825,27 @@
                 return `🧪 Modo prueba — no se envió la postulación.`;
             }
             if (/\bskipped\b|descartad[ao]/i.test(mClean)) {
-                const oferta = mClean.match(/:\s*'?(.{8,70})'?$/);
-                return oferta ? `⏭ Omitida: ${oferta[1].trim()}.` : '';
+                const t = mClean.match(/:\s*'?(.{8,70})'?$/);
+                return t ? `⏭ Omitida: ${t[1].trim()}.` : '';
             }
             if (/external.?apply/i.test(mClean)) {
-                return `🔗 Oferta registrada para postulación manual${portal ? ` (${portal})` : ''}.`;
+                return `🔗 Oferta externa registrada${portal ? ` (${portal})` : ''} — postulación manual requerida.`;
+            }
+            // Login / sesión sin etiqueta
+            if (/login|inicia.*sesi[oó]n|iniciar sesi/i.test(mClean)) {
+                return `🔑 Login requerido${portal ? ` en ${portal}` : ''}. Ve al navegador e inicia sesión.`;
+            }
+            // Error genérico legible
+            if (/error|exception|fallo|fail/i.test(mClean) && mClean.length < 150) {
+                const e = cleanLogText(mClean).replace(/error[:\s]*/i, '').trim();
+                return e.length > 8 ? `⚠️ ${sentence(e)}` : '';
             }
 
-            // ── Fallback: limpiar y mostrar si es suficientemente informativo ──
+            // ── Fallback: solo mostrar si el texto es limpio y corto ──────────
             const cleaned = cleanLogText(mClean);
-            return cleaned.length > 15 ? sentence(cleaned) : '';
+            // Descartar si parece código (contiene paréntesis de llamada, corchetes, etc.)
+            if (/[()[\]{}'"]/.test(cleaned) && cleaned.length > 40) return '';
+            return cleaned.length > 18 ? sentence(cleaned) : '';
         }
 
         function appendLogLine(msg) {
@@ -2657,6 +2166,8 @@
             _botMode = 'scan';
             lockScan();
             setScanStatus('🔍 Conectando… escaneando ' + portals.join(', '));
+            // Auto-responder preguntas antes de escanear
+            await autoAnswerPending(true);
             try {
                 const res = await fetch('/api/scan', {
                     method: 'POST',
@@ -2699,10 +2210,45 @@
             }
         }
 
+        // ── Auto-responder preguntas pendientes desde el CV ──────────────────
+        async function autoAnswerPending(silent = false) {
+            try {
+                const r = await fetch('/api/auto-answer-pending', { method: 'POST' });
+                const d = await r.json();
+                if (d.ok && d.answered > 0) {
+                    appendLogLine(`[AUTO-RESP] ✅ ${d.answered} preguntas respondidas automáticamente del CV. Pendientes: ${d.still_pending}`);
+                } else if (!silent && d.ok) {
+                    appendLogLine(`[AUTO-RESP] Sin preguntas nuevas que responder (${d.total || 0} totales).`);
+                }
+                // Refrescar panel de preguntas
+                if (typeof loadPendingQuestions === 'function') loadPendingQuestions();
+            } catch(e) {
+                if (!e.message?.toLowerCase().includes('fetch')) {
+                    appendLogLine(`[AUTO-RESP] Error: ${e.message}`);
+                }
+            }
+        }
+
         // ── POSTULAR: aplica directamente usando la memoria compartida ────────
-        postularBtn.onclick = () => {
+        postularBtn.onclick = async () => {
             const portals = getSelectedPortals();
             if (!portals.length) { alert('Selecciona al menos un portal.'); return; }
+
+            // 1. Auto-responder preguntas pendientes del CV ANTES de postular
+            appendLogLine('[INICIO] Respondiendo preguntas automáticas del CV…');
+            await autoAnswerPending(true);
+
+            // 2. Iniciar quick links en paralelo (no bloquea el bot principal)
+            appendLogLine('[INICIO] Iniciando verificación de postulaciones rápidas…');
+            if (!_qlAutoRunning) {
+                applyQuickLinksNow();  // primera ronda inmediata
+                // Activar auto-timer si no está ya activo
+                const qlToggle = document.getElementById('ql-auto-toggle');
+                if (qlToggle && !qlToggle.checked) {
+                    qlToggle.checked = true;
+                    toggleQlAuto();
+                }
+            }
 
             // Recopilar perfil desde los inputs del form usando CFG_MAP
             const profile = {};
@@ -2737,6 +2283,104 @@
         };
 
         // ── Reset completo ────────────────────────────────────────────────────
+        async function verifySessions() {
+            const btn = document.getElementById('verifySessionsBtn');
+            if (btn.disabled) return;
+            btn.disabled = true;
+            btn.innerText = '⏳ Verificando...';
+
+            // Poner todos los dots de portales-login en amarillo (checking)
+            const loginPortals = ['linkedin','computrabajo','laborum','trabajando','infojobs','chiletrabajos','getonyboard'];
+            for (const portal of loginPortals) {
+                const dot = document.getElementById(`session-${portal}`);
+                const ps  = document.getElementById(`ps-${portal}`);
+                if (dot) {
+                    dot.style.animation = 'pulse 0.8s infinite';
+                    dot.style.background = '#ffee00';
+                    dot.classList.remove('active','missing');
+                    dot.title = 'Verificando...';
+                }
+                if (ps) ps.innerText = 'Verificando...';
+            }
+
+            try {
+                const res  = await fetch('/api/check-sessions', {
+                    method:'POST',
+                    headers:{'Content-Type':'application/json'},
+                    body: JSON.stringify({ portals: loginPortals })
+                });
+                const data = await res.json();
+
+                // Resumen
+                const expired  = Object.entries(data).filter(([,v]) => v === 'expired').map(([k]) => k);
+                const noCookies= Object.entries(data).filter(([,v]) => v === 'no_cookies').map(([k]) => k);
+                const ok       = Object.entries(data).filter(([,v]) => v === 'ok').map(([k]) => k);
+
+                let msg = `🔐 Verificación completada:\n✅ Activas: ${ok.join(', ') || 'ninguna'}`;
+                if (expired.length)   msg += `\n❌ Expiradas: ${expired.join(', ')}`;
+                if (noCookies.length) msg += `\n⚠️ Sin sesión: ${noCookies.join(', ')}`;
+                appendLogLine('[VERIFICAR_SESIONES] ' + msg.replace(/\n/g, ' | '));
+
+                if (expired.length) {
+                    appendLogLine('[VERIFICAR_SESIONES] ⚠️ Portales con sesión expirada: ' + expired.join(', ') + ' — debés re-ingresar antes de postular.');
+                }
+            } catch(e) {
+                const msg = e.message && e.message.toLowerCase().includes('fetch')
+                    ? 'No se pudo conectar al servidor. Recarga la página e intentá de nuevo.'
+                    : e.message;
+                appendLogLine('[VERIFICAR] Error: ' + msg);
+            } finally {
+                btn.disabled = false;
+                btn.innerText = '🔐 Verificar';
+            }
+        }
+
+        async function loginPortals() {
+            const portals = Array.from(document.querySelectorAll('.portal-checkbox:checked')).map(c => c.value).filter(Boolean);
+            if (!portals.length) {
+                appendLogLine('[LOGIN] Activá al menos un portal en el grid primero.');
+                return;
+            }
+            const btn = document.getElementById('loginPortalsBtn');
+            btn.disabled = true; btn.innerText = '⏳ Logueando...';
+            appendLogLine(`[LOGIN] Abriendo browser para ${portals.length} portal(es): ${portals.join(', ')}`);
+            appendLogLine('[LOGIN] Iniciá sesión en cada ventana que aparezca — el bot continúa solo al detectar login.');
+            try {
+                const res  = await fetch('/api/login-portals', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ portals })
+                });
+                const data = await res.json();
+                if (!data.ok) {
+                    appendLogLine('[LOGIN] ❌ ' + (data.error || 'Error'));
+                    btn.disabled = false; btn.innerText = '🔑 Loguear';
+                }
+            } catch(e) {
+                appendLogLine('[LOGIN] ❌ ' + e.message);
+                btn.disabled = false; btn.innerText = '🔑 Loguear';
+            }
+        }
+
+        async function resetSessions() {
+            if (!confirm('🔑 ¿Borrar cookies de TODOS los portales?\n\nEl bot pedirá login en cada portal al próximo run.\nLas sesiones nuevas quedarán guardadas automáticamente.\n\n¿Continuar?')) return;
+            const btn = document.getElementById('resetSessionsBtn');
+            btn.disabled = true; btn.innerText = '⏳...';
+            try {
+                const res  = await fetch('/api/reset-sessions', { method: 'POST' });
+                const data = await res.json();
+                if (data.ok) {
+                    appendLogLine('[RE-LOGIN] ✅ Cookies borradas — el bot pedirá login en cada portal al próximo run.');
+                } else {
+                    appendLogLine('[RE-LOGIN] ❌ Error al borrar sesiones.');
+                }
+            } catch(e) {
+                appendLogLine('[RE-LOGIN] ❌ ' + e.message);
+            } finally {
+                btn.disabled = false; btn.innerText = '🔑 Re-login';
+            }
+        }
+
         async function resetAll() {
             if (!confirm('⚠️ ¿Limpiar TODO?\n\nEsto eliminará:\n• Cola de ofertas (scan_queue)\n• Quick links\n• Restricciones de portales\n• Estadísticas de keywords\n• Señal de stop\n\nLos contadores y el log se reiniciarán en pantalla.\n¿Continuar?')) return;
 
@@ -2839,6 +2483,31 @@
 
         // ── Estado del proceso — scan y apply independientes ──────────────────
         socket.on('bot_status', (data) => {
+            // ── Login iniciado — bloquear scan/postular mientras dure ──
+            if (data.status === 'login_started') {
+                setBotControls('running');
+                scanBtn.disabled     = true;
+                postularBtn.disabled = true;
+                stopBtn.disabled     = false;   // permitir detener el login si lo necesita
+                const btn = document.getElementById('loginPortalsBtn');
+                if (btn) { btn.disabled = true; btn.innerText = '⏳ Logueando...'; }
+                const portals = (data.portals || []).join(', ');
+                appendLogLine(`[LOGIN] Iniciando login para: ${portals}`);
+                appendLogLine('[LOGIN] El browser se cerrará automáticamente al detectar el login.');
+                _setStatus('Login en progreso', 'var(--warning)');
+                return;
+            }
+
+            // ── Login de portales terminado — desbloquear todo ──
+            if (data.status === 'login_finished') {
+                const btn = document.getElementById('loginPortalsBtn');
+                if (btn) { btn.disabled = false; btn.innerText = '🔑 Loguear'; }
+                setBotControls('idle');
+                _botMode = null;
+                appendLogLine('[LOGIN] Sesiones guardadas. Podés iniciar el bot.');
+                return;
+            }
+
             // ── Reset completado desde el backend ──
             if (data.status === 'reset') {
                 _botMode = null;
@@ -2925,6 +2594,16 @@
             if (data.logs && logContainer.innerHTML === '') {
                 data.logs.forEach(msg => appendLogLine(msg));
             }
+
+            // ── Reconciliación idle al reconectar ──
+            // Si el bot está idle (sin status explícito = mensaje de reconexión) y el botón
+            // sigue bloqueado, desbloquearlo. Cubre el caso en que el socket se desconectó
+            // mientras el bot corría y reconecta cuando ya terminó.
+            if (!data.running && !data.scan_active && !data.apply_active && !data.status) {
+                if (postularBtn.disabled) { unlockApply(); }
+                if (scanBtn.disabled)     { unlockScan();  }
+                _botMode = null;
+            }
         });
 
         // Pedir permiso para notificaciones del sistema al cargar
@@ -2984,7 +2663,6 @@
         loadConfig();
         loadKeywordChips();
         loadQuickLinks();
-        loadRecords();  // poblar total del panel de registros al iniciar
         setInterval(loadQuickLinks, 30_000);  // refresca cada 30s mientras el bot corre
 
         // ── Cargar estadísticas históricas de la DB al iniciar ─────────────────
@@ -3034,6 +2712,107 @@
                 if (fh) fh.value = (fn + ' ' + ln).trim();
             });
         });
+    </script>
+
+    <!-- ── Cyberpunk particle trail ─────────────────────────────────────── -->
+    <canvas id="particle-canvas" style="position:fixed;inset:0;pointer-events:none;z-index:0;"></canvas>
+    <script>
+    (function() {
+        const canvas = document.getElementById('particle-canvas');
+        const ctx    = canvas.getContext('2d');
+
+        let W, H;
+        function resize() {
+            W = canvas.width  = window.innerWidth;
+            H = canvas.height = window.innerHeight;
+        }
+        resize();
+        window.addEventListener('resize', resize);
+
+        const STAR_COUNT   = 200;
+        const REPEL_RADIUS = 130;
+        const REPEL_FORCE  = 1.0;   // suave
+        const SPRING       = 0.007; // retorno lento
+        const FRICTION     = 0.97;  // glide fluido
+
+        let mx = -9999, my = -9999;
+        document.addEventListener('mousemove', e => { mx = e.clientX; my = e.clientY; });
+
+        const stars = Array.from({ length: STAR_COUNT }, () => {
+            const bx = Math.random() * window.innerWidth;
+            const by = Math.random() * window.innerHeight;
+            return {
+                bx, by,             // posición de nacimiento (ancla del drift)
+                ox: bx, oy: by,     // origen dinámico (se mueve con drift)
+                x: bx, y: by,
+                vx: 0, vy: 0,
+                r: 0.3 + Math.random() * 1.7,
+                alpha: 0.25 + Math.random() * 0.65,
+                // Twinkle independiente por estrella
+                twinkleFreq:  0.0004 + Math.random() * 0.0008,
+                twinklePhase: Math.random() * Math.PI * 2,
+                // Deriva natural lenta — cada estrella flota en su propia elipse
+                driftFreq:  0.00008 + Math.random() * 0.00015,
+                driftAmpX:  6 + Math.random() * 18,
+                driftAmpY:  5 + Math.random() * 14,
+                driftPhX:   Math.random() * Math.PI * 2,
+                driftPhY:   Math.random() * Math.PI * 2,
+            };
+        });
+
+        let last = performance.now();
+        function loop(now) {
+            const dt = Math.min(now - last, 32); // cap 32ms para no saltar
+            last = now;
+
+            ctx.clearRect(0, 0, W, H);
+
+            stars.forEach(s => {
+                // ── Deriva natural (el origen flota lentamente) ──
+                s.ox = s.bx + Math.sin(now * s.driftFreq + s.driftPhX) * s.driftAmpX;
+                s.oy = s.by + Math.cos(now * s.driftFreq + s.driftPhY) * s.driftAmpY;
+
+                // ── Repulsión suave por mouse ──
+                const dx   = s.x - mx;
+                const dy   = s.y - my;
+                const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+                if (dist < REPEL_RADIUS) {
+                    const force = (1 - dist / REPEL_RADIUS) * REPEL_FORCE;
+                    s.vx += (dx / dist) * force * (dt / 16);
+                    s.vy += (dy / dist) * force * (dt / 16);
+                }
+
+                // ── Spring hacia origen dinámico ──
+                s.vx += (s.ox - s.x) * SPRING * (dt / 16);
+                s.vy += (s.oy - s.y) * SPRING * (dt / 16);
+
+                // ── Fricción — glide fluido ──
+                s.vx *= Math.pow(FRICTION, dt / 16);
+                s.vy *= Math.pow(FRICTION, dt / 16);
+
+                s.x += s.vx * (dt / 16);
+                s.y += s.vy * (dt / 16);
+
+                // ── Twinkle suave ──
+                const tw = s.alpha * (0.65 + 0.35 * Math.sin(now * s.twinkleFreq + s.twinklePhase));
+
+                ctx.save();
+                ctx.globalAlpha = Math.max(0, tw);
+                if (s.r > 1.3) {
+                    ctx.shadowColor = 'rgba(200,230,255,0.5)';
+                    ctx.shadowBlur  = s.r * 2.5;
+                }
+                ctx.fillStyle = '#cce8ff';
+                ctx.beginPath();
+                ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.restore();
+            });
+
+            requestAnimationFrame(loop);
+        }
+        requestAnimationFrame(loop);
+    })();
     </script>
 </body>
 

@@ -38,8 +38,10 @@ def test_should_not_retire_new_keyword():
     assert kw.should_retire("new keyword", "laborum") is False
 
 
-def test_should_retire_after_one_run_with_zero_found():
-    kw.update_keyword_stat("bad keyword", "laborum", applied=0, found=0)
+def test_should_retire_after_min_runs_with_zero_found():
+    """Se necesitan MIN_RUNS_TO_RETIRE runs consecutivos con found=0 para retirar."""
+    for _ in range(kw.MIN_RUNS_TO_RETIRE):
+        kw.update_keyword_stat("bad keyword", "laborum", applied=0, found=0)
     assert kw.should_retire("bad keyword", "laborum") is True
 
 

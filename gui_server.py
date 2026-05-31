@@ -12,7 +12,7 @@ import re
 import tempfile
 import signal
 from functools import wraps
-from flask import Flask, render_template, request, jsonify, Response as FlaskResponse
+from flask import Flask, render_template, request, jsonify, Response as FlaskResponse, make_response
 
 _log = _logging.getLogger("applyjob.server")
 
@@ -42,6 +42,7 @@ class _RateLimiter:
 
 
 _config_rate_limiter = _RateLimiter(max_calls=10, window_s=60)
+_env_write_lock = threading.Lock()  # protege escrituras concurrentes a .env
 from flask_socketio import SocketIO, emit
 from dotenv import load_dotenv
 
@@ -54,23 +55,16 @@ app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', secrets.token_hex(24))
 # Configura DASHBOARD_PASSWORD en .env para proteger el dashboard.
 # Si está vacío, no pide autenticación (comportamiento por defecto).
 _DASHBOARD_PW = os.getenv("DASHBOARD_PASSWORD", "")
+if not _DASHBOARD_PW:
+    print(
+        "\n[AVISO DE SEGURIDAD] DASHBOARD_PASSWORD no está configurado.\n"
+        "  Cualquier proceso local puede acceder al dashboard y disparar el bot.\n"
+        "  Agrega DASHBOARD_PASSWORD=<clave> en .env para protegerlo.\n"
+    )
 
 
-def _require_auth(f):
-    """Decorator de autenticación HTTP Basic (se mantiene para uso explícito si se necesita)."""
-    @wraps(f)
-    def decorated(*args, **kwargs):
-        if not _DASHBOARD_PW:
-            return f(*args, **kwargs)
-        auth = request.authorization
-        if auth and auth.password == _DASHBOARD_PW:
-            return f(*args, **kwargs)
-        return FlaskResponse(
-            "Acceso restringido — configura DASHBOARD_PASSWORD en .env.",
-            401,
-            {"WWW-Authenticate": 'Basic realm="ApplyJob Dashboard"'},
-        )
-    return decorated
+# Nota: la autenticación se aplica globalmente via _global_auth() (before_request)
+# No se usa ningún decorator individual — toda protección es centralizada.
 
 
 # Inicializar SocketIO con hilos (modo más compatible en Windows sin eventlet/gevent)
@@ -128,15 +122,10 @@ def _clear_stop_signal():
 # Limpiar señal residual al iniciar (por si el servidor se reinició abruptamente)
 _clear_stop_signal()
 
-# Limpiar caché de scan al iniciar — el scan_queue es solo para la sesión actual
-_scan_q_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data', 'scan_queue.json')
-try:
-    if os.path.exists(_scan_q_path):
-        with open(_scan_q_path, 'w', encoding='utf-8') as _f:
-            _f.write('[]')
-        _log.info("scan_queue.json limpiado al arrancar servidor.")
-except Exception as _sqe:
-    _log.warning("No se pudo limpiar scan_queue: %s", _sqe)
+# NOTA: scan_queue.json NO se limpia al arrancar.
+# Las ofertas con preguntas desconocidas se guardan entre sesiones para que
+# --apply-queue las reintente una vez el usuario haya respondido las preguntas.
+# El bot aplica poda automática por antigüedad (5 días) en run_apply_queue.
 
 # Max seconds a bot subprocess may run before the watchdog kills it
 # Scan / apply-queue: 600s es suficiente (pocas ofertas, < 10 min)
@@ -290,6 +279,16 @@ class BotState:
             with self.lock:
                 self.intervention = {"type": "captcha", "portal": portal, "message": message.strip()}
             socketio.emit('captcha_required', {"message": "Verificación humana requerida en el navegador", "portal": portal}, namespace='/bot')
+        elif "[SESION_NUEVA]" in message:
+            # Navegador abierto para login manual antes de la sesion headless
+            portal = self._portal_from_message(message) or self.current_portal or ""
+            with self.lock:
+                self.intervention = {"type": "login", "portal": portal, "message": message.strip()}
+            socketio.emit('login_required', {
+                "portal":  portal,
+                "message": message.strip(),
+                "manual":  True,
+            }, namespace='/bot')
         elif "[SESION_INICIADA]" in message:
             with self.lock:
                 self.intervention = None
@@ -522,7 +521,7 @@ _PERSISTED_ENV_KEYS = {
     'LABORUM_PASSWORD',
 }
 # SECURITY: keys que NUNCA se devuelven al browser vía /api/config
-_SECRET_ENV_KEYS = {'LABORUM_PASSWORD', 'SECRET_KEY'}
+_SECRET_ENV_KEYS = {'LABORUM_PASSWORD', 'SECRET_KEY', 'SMTP_PASS'}
 # Keys públicas = persistidas - secretas
 _PUBLIC_ENV_KEYS = _PERSISTED_ENV_KEYS - _SECRET_ENV_KEYS
 # Campos que se pasan al proceso del bot como env vars en tiempo de ejecución
@@ -532,37 +531,39 @@ _SENSITIVE_ENV_KEYS = _PERSISTED_ENV_KEYS
 def update_env_values(env_path: str, updates: dict, remove_keys=None) -> None:
     """Actualiza .env sin reemplazar el archivo por un temporal.
 
+    Thread-safe: usa _env_write_lock para evitar corrupción por escrituras concurrentes.
     En Windows + OneDrive, el rename atómico que usa python-dotenv puede fallar
     con PermissionError aunque el archivo sea escribible.
     """
-    existing_lines = []
-    seen = set()
-    remove_keys = set(remove_keys or [])
+    with _env_write_lock:
+        existing_lines = []
+        seen = set()
+        remove_keys = set(remove_keys or [])
 
-    if os.path.exists(env_path):
-        with open(env_path, 'r', encoding='utf-8') as f:
-            existing_lines = f.readlines()
+        if os.path.exists(env_path):
+            with open(env_path, 'r', encoding='utf-8') as f:
+                existing_lines = f.readlines()
 
-    with open(env_path, 'w', encoding='utf-8', newline='') as f:
-        for line in existing_lines:
-            stripped = line.strip()
-            if not stripped or stripped.startswith('#') or '=' not in line:
-                f.write(line)
-                continue
+        with open(env_path, 'w', encoding='utf-8', newline='') as f:
+            for line in existing_lines:
+                stripped = line.strip()
+                if not stripped or stripped.startswith('#') or '=' not in line:
+                    f.write(line)
+                    continue
 
-            key, _, _ = line.partition('=')
-            key = key.strip()
-            if key in remove_keys:
-                continue
-            if key in updates:
-                f.write(f"{key}={updates[key]}\n")
-                seen.add(key)
-            else:
-                f.write(line)
+                key, _, _ = line.partition('=')
+                key = key.strip()
+                if key in remove_keys:
+                    continue
+                if key in updates:
+                    f.write(f"{key}={updates[key]}\n")
+                    seen.add(key)
+                else:
+                    f.write(line)
 
-        for key, value in updates.items():
-            if key not in seen:
-                f.write(f"{key}={value}\n")
+            for key, value in updates.items():
+                if key not in seen:
+                    f.write(f"{key}={value}\n")
 
 
 def clean_form_value(value: str) -> str:
@@ -572,19 +573,183 @@ def clean_form_value(value: str) -> str:
     return re.sub(r'\s+', ' ', value).strip()
 
 
+_COOKIES_MIN_BYTES = 8_000    # mismo umbral que engine.py (~8 KB)
+
+def _portal_cookies_ok(portal: str) -> bool:
+    """True si el archivo Cookies del portal tiene tamaño suficiente."""
+    cookies_path = os.path.join(_SESSIONS_DIR, portal, "Default", "Network", "Cookies")
+    try:
+        return os.path.getsize(cookies_path) >= _COOKIES_MIN_BYTES
+    except OSError:
+        return False
+
+
 def get_session_status() -> dict:
-    """Detecta qué portales tienen sesión guardada (carpeta sessions/<portal> no vacía)."""
+    """Detecta qué portales tienen sesión válida (archivo Cookies >= 35 KB)."""
     status = {}
     for portal in _KNOWN_PORTALS:
-        portal_dir = os.path.join(_SESSIONS_DIR, portal)
-        has_session = False
-        if os.path.exists(portal_dir):
-            try:
-                has_session = any(True for _ in os.scandir(portal_dir))
-            except OSError:
-                pass
-        status[portal] = has_session
+        status[portal] = _portal_cookies_ok(portal)
     return status
+
+
+# Portales que requieren login real para postular
+_PORTALS_REQUIRE_LOGIN = {
+    'linkedin', 'computrabajo', 'laborum', 'trabajando',
+    'infojobs', 'chiletrabajos', 'getonyboard',
+}
+
+# Señales DOM de sesión activa por portal (espejo del engine)
+_LOGIN_SIGNALS_SERVER = {
+    "linkedin":      ["div.global-nav__me-photo", "img.global-nav__me-photo",
+                      "a[href*='/in/']", "[data-control-name='nav.settings']"],
+    "computrabajo":  ["a[href*='/candidato/']", "a[href*='mi-cv']",
+                      "[class*='user-name']", "span[class*='userName']"],
+    "laborum":       ["a[href*='/postulantes/']", "[class*='userAvatar']",
+                      "a:has-text('Mi cuenta')", "img[alt*='avatar' i]"],
+    "trabajando":    ["a[href*='/mi-cv']", "a[href*='/mi-cuenta']",
+                      "[class*='user-menu']", "[class*='userMenu']"],
+    "infojobs":      ["a[href*='/candidato/mis-candidaturas']",
+                      "a[href*='/candidato/mi-perfil']",
+                      "[data-testid='user-menu']", "[class*='UserMenu']"],
+    "chiletrabajos": ["a[href*='/mi-cuenta']", "a[href*='/mis-postulaciones']",
+                      "[class*='user-logged']"],
+    "getonyboard":   ["a[href*='/postulantes/']", "a[href*='/dashboard']",
+                      "[class*='user-avatar']", "img[alt*='avatar' i]"],
+}
+
+_HOME_URLS_SERVER = {
+    "linkedin":      "https://www.linkedin.com/feed",
+    "computrabajo":  "https://cl.computrabajo.com/candidato/",
+    "laborum":       "https://www.laborum.cl/postulantes/dashboard",
+    "trabajando":    "https://www.trabajando.cl/mi-cuenta",
+    "infojobs":      "https://www.infojobs.net/candidato/mis-candidaturas",
+    "chiletrabajos": "https://www.chiletrabajos.cl/mi-cuenta",
+    "getonyboard":   "https://www.getonbrd.com/postulantes/dashboard",
+}
+
+_session_verify_lock = threading.Lock()
+_session_verify_running = False
+
+
+_LOGIN_PAGE_SIGNALS = [
+    "input[type='password']",
+    "form[action*='login']",
+    "form[action*='signin']",
+    "a:has-text('Iniciar sesión')",
+    "button:has-text('Iniciar sesión')",
+    "a:has-text('Sign in')",
+    "button:has-text('Sign In')",
+    "input[name='session_password']",
+    "input[id*='password']",
+]
+
+_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/124.0.0.0 Safari/537.36"
+)
+
+
+def _verify_session_headless(portal: str) -> str:
+    """
+    Abre browser headless con user-agent real, navega a la home del portal
+    y verifica sesión por DOM + URL. Robusto ante SPAs y anti-bot básico.
+    Retorna: 'ok' | 'expired' | 'no_cookies' | 'error'
+    """
+    if not _portal_cookies_ok(portal):
+        return "no_cookies"
+
+    session_dir = os.path.join(_SESSIONS_DIR, portal)
+    home_url    = _HOME_URLS_SERVER.get(portal)
+    sels        = _LOGIN_SIGNALS_SERVER.get(portal, [])
+
+    if not home_url:
+        return "ok"   # sin URL de check → asumir ok si cookies existen
+
+    try:
+        from playwright.sync_api import sync_playwright
+        with sync_playwright() as pw:
+            ctx = pw.chromium.launch_persistent_context(
+                session_dir,
+                headless    = True,
+                user_agent  = _UA,
+                viewport    = {"width": 1280, "height": 800},
+                locale      = "es-CL",
+                timezone_id = "America/Santiago",
+                args        = [
+                    "--no-sandbox",
+                    "--disable-blink-features=AutomationControlled",
+                    "--disable-dev-shm-usage",
+                ],
+                ignore_default_args=["--enable-automation"],
+            )
+            pg = ctx.new_page()
+            # Ocultar webdriver
+            pg.add_init_script(
+                "Object.defineProperty(navigator,'webdriver',{get:()=>undefined})"
+            )
+            try:
+                # Navegar — esperar hasta networkidle para SPAs
+                try:
+                    pg.goto(home_url, wait_until="networkidle", timeout=25_000)
+                except Exception:
+                    try:
+                        pg.goto(home_url, wait_until="domcontentloaded", timeout=20_000)
+                        pg.wait_for_timeout(4000)
+                    except Exception:
+                        pass
+
+                pg.wait_for_timeout(2500)   # margen extra para render JS
+
+                current_url = pg.url.lower()
+
+                # Si fue redirigido a una página de login → expirada
+                login_keywords = ["login", "signin", "sign-in", "account/login",
+                                  "candidato/login", "iniciar-sesion", "auth"]
+                if any(k in current_url for k in login_keywords):
+                    return "expired"
+
+                # Chequear señales negativas (form de login visible)
+                for bad_sel in _LOGIN_PAGE_SIGNALS:
+                    try:
+                        el = pg.query_selector(bad_sel)
+                        if el and el.is_visible():
+                            return "expired"
+                    except Exception:
+                        pass
+
+                # Chequear señales positivas de sesión activa
+                if sels:
+                    for sel in sels:
+                        try:
+                            el = pg.query_selector(sel)
+                            if el and el.is_visible():
+                                return "ok"
+                        except Exception:
+                            pass
+
+                    # Segunda vuelta con wait_for_selector (más lenta pero fiable)
+                    for sel in sels[:3]:
+                        try:
+                            pg.wait_for_selector(sel, timeout=4_000)
+                            return "ok"
+                        except Exception:
+                            pass
+
+                    return "expired"
+                else:
+                    # Sin selectores definidos → si URL no redirigió a login, asumir ok
+                    return "ok"
+
+            finally:
+                try:
+                    ctx.close()
+                except Exception:
+                    pass
+
+    except Exception as exc:
+        _log.warning("[CHECK_SESSION] Error verificando %s: %s", portal, exc)
+        return "error"
 
 
 def run_bot_thread(portals, runtime_env=None):
@@ -628,7 +793,9 @@ def run_bot_thread(portals, runtime_env=None):
 
 @app.route('/')
 def index():
-    return render_template('index.html')
+    resp = make_response(render_template('index.html'))
+    resp.headers['Cache-Control'] = 'no-store'
+    return resp
 
 
 @app.route('/api/bot-state')
@@ -694,7 +861,7 @@ def _stream_process(proc, finish_log: str, finish_cb, stop_check=None):
             # Vaciar la queue para no dejar el reader-thread colgado
             while True:
                 try: q.get_nowait()
-                except: break
+                except Exception: break
             break
         try:
             line = q.get(timeout=0.2)
@@ -702,7 +869,7 @@ def _stream_process(proc, finish_log: str, finish_cb, stop_check=None):
                 break
             if line:
                 state.add_log(line)
-        except:
+        except Exception:
             if proc.poll() is not None:   # proceso ya murió
                 # Drenar lo que quede
                 while True:
@@ -710,7 +877,7 @@ def _stream_process(proc, finish_log: str, finish_cb, stop_check=None):
                         line = q.get_nowait()
                         if line and line is not None:
                             state.add_log(line)
-                    except:
+                    except Exception:
                         break
                 break
 
@@ -772,9 +939,14 @@ def api_postular():
     label   = portals or 'todos los portales'
     runtime_env = {}
     if data.get('keywords'):
-        runtime_env['USER_KEYWORDS'] = str(data['keywords']).strip().strip("'\"")
+        runtime_env['USER_KEYWORDS'] = str(data['keywords']).strip().strip("'\"")[:200]
     if data.get('max_offers'):
-        runtime_env['USER_MAX_OFFERS'] = str(data['max_offers']).strip().strip("'\"")
+        # SECURITY: validar que sea entero en rango [1, 100]
+        try:
+            _max = max(1, min(100, int(str(data['max_offers']).strip())))
+            runtime_env['USER_MAX_OFFERS'] = str(_max)
+        except (ValueError, TypeError):
+            pass  # ignorar valor inválido, usar el default del .env
 
     def _run():
         run_id = state.start_apply()
@@ -881,14 +1053,14 @@ def api_parse_cv():
         # Persistir la ruta en .env para que el bot siempre la encuentre
         env_path = os.path.abspath('.env')
         if not os.path.exists(env_path):
-            open(env_path, 'w').close()
+            open(env_path, 'w', encoding='utf-8').close()
         update_env_values(env_path, {'USER_CV_PATH': permanent_path})
 
         return jsonify({
             "status": "success",
             "fields": fields,
             "filename": cv_file.filename,
-            "cv_path": permanent_path,
+            "cv_path": os.path.basename(permanent_path),  # SECURITY: solo basename, no ruta absoluta
         })
     except Exception as e:
         import logging as _log; _log.getLogger("applyjob").error("parse_cv error: %s", e)
@@ -906,7 +1078,7 @@ def save_config():
         
         env_path = os.path.abspath('.env')
         if not os.path.exists(env_path):
-            with open(env_path, 'w') as f: f.write("")
+            with open(env_path, 'w', encoding='utf-8') as f: f.write("")
 
         updates = {}
 
@@ -961,6 +1133,47 @@ def api_stats():
 
 
 _RESTRICTIONS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data', 'portal_restrictions.json')
+
+@app.route('/api/check-sessions', methods=['POST'])
+def api_check_sessions():
+    """
+    Verifica sesiones de portales via browser headless.
+    Body JSON: { "portals": ["linkedin", "laborum"] }  — vacío = todos los que requieren login.
+    Retorna: { portal: "ok"|"expired"|"no_cookies"|"error" }
+    """
+    global _session_verify_running
+    with _session_verify_lock:
+        if _session_verify_running:
+            return jsonify({"error": "Verificación ya en curso"}), 429
+        _session_verify_running = True
+
+    try:
+        requested = (request.json or {}).get("portals") or list(_PORTALS_REQUIRE_LOGIN)
+        portals_to_check = [p for p in requested if p in _PORTALS_REQUIRE_LOGIN]
+
+        results = {}
+        # Primero chequeo rápido por cookies (sin browser)
+        for portal in portals_to_check:
+            results[portal] = "no_cookies" if not _portal_cookies_ok(portal) else "checking"
+
+        # Emit progreso
+        socketio.emit('session_check_progress', results, namespace='/bot')
+
+        # Verificación DOM por browser para los que tienen cookies
+        for portal in portals_to_check:
+            if results[portal] == "checking":
+                result = _verify_session_headless(portal)
+                results[portal] = result
+                socketio.emit('session_check_progress',
+                              {portal: result}, namespace='/bot')
+
+        # Actualizar dots del dashboard
+        socketio.emit('session_status', get_session_status(), namespace='/bot')
+        return jsonify(results)
+    finally:
+        with _session_verify_lock:
+            _session_verify_running = False
+
 
 @app.route('/api/portal-restrictions')
 def api_portal_restrictions():
@@ -1076,6 +1289,246 @@ def api_quick_links_clear():
         return jsonify({'ok': True})
     except Exception as e:
         return jsonify({'ok': False, 'error': str(e)}), 500
+
+
+@app.route('/api/scan-quick-links', methods=['POST'])
+def api_scan_quick_links():
+    """
+    Lanza run_scan_quick_links en un subproceso y devuelve los resultados.
+    Escanea los quick_links.json guardados para recopilar preguntas de ATS externos.
+    """
+    import subprocess
+    import threading
+
+    result_holder = {}
+    done_event = threading.Event()
+
+    def _run():
+        try:
+            proc = subprocess.run(
+                [sys.executable, '-u', 'main.py', '--scan-quick-links', '--headless'],
+                capture_output=True, text=True, encoding='utf-8', errors='replace',
+                cwd=os.path.dirname(os.path.abspath(__file__)),
+                timeout=300,
+            )
+            output = proc.stdout + proc.stderr
+            # Parse top_questions from output
+            top_qs = []
+            already = queued = failed = scanned = 0
+            for line in output.splitlines():
+                if '  Escaneadas' in line:
+                    try: scanned = int(line.split(':')[-1].strip())
+                    except ValueError: pass
+                elif 'Ya respondidas' in line:
+                    try: already = int(line.split(':')[-1].strip())
+                    except ValueError: pass
+                elif 'En cola' in line:
+                    try: queued = int(line.split(':')[-1].strip())
+                    except ValueError: pass
+                elif 'Sin formulario' in line:
+                    try: failed = int(line.split(':')[-1].strip())
+                    except ValueError: pass
+                elif line.strip().startswith(tuple(str(i)+'.' for i in range(1,20))):
+                    # Líneas de formato "  N. [Mx] Pregunta..."
+                    import re as _re
+                    m = _re.match(r'\s*\d+\.\s*(?:\[\d+x\]\s*)?(.+)', line)
+                    if m:
+                        top_qs.append(m.group(1).strip()[:80])
+            result_holder.update({
+                'scanned': scanned, 'already_answered': already,
+                'queued': queued, 'failed': failed,
+                'top_questions': top_qs[:15],
+                'output': output[-2000:],
+            })
+        except subprocess.TimeoutExpired:
+            result_holder.update({'error': 'Timeout (300s)', 'scanned': 0})
+        except Exception as e:
+            result_holder.update({'error': str(e), 'scanned': 0})
+        finally:
+            done_event.set()
+
+    t = threading.Thread(target=_run, daemon=True)
+    t.start()
+    done_event.wait(timeout=310)
+
+    if 'error' in result_holder and 'scanned' not in result_holder:
+        return jsonify({'ok': False, 'error': result_holder.get('error', 'unknown')}), 500
+    return jsonify({**result_holder, 'ok': True})
+
+
+@app.route('/api/auto-answer-pending', methods=['POST'])
+def api_auto_answer_pending():
+    """
+    Recorre pending_questions.json y responde automáticamente las que tienen
+    answered=False usando _auto_answer() + _match_qa() del CV del usuario.
+    No requiere browser — es solo procesamiento Python.
+    """
+    try:
+        pending_path = _PENDING_Q_PATH
+        qa_cache_path = _QA_CACHE_PATH
+
+        if not os.path.exists(pending_path):
+            return jsonify({'ok': True, 'answered': 0, 'still_pending': 0})
+
+        with open(pending_path, encoding='utf-8') as f:
+            pending = json.load(f)
+
+        # Importar helpers del form_filler
+        import sys as _sys
+        _bot_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'bot')
+        if _bot_dir not in _sys.path:
+            _sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+        from bot.form_filler import _match_qa, _auto_answer, _normalize
+        from bot.config import USER_PROFILE
+
+        # Cargar qa_cache para persistir respuestas nuevas
+        qa_cache = {}
+        if os.path.exists(qa_cache_path):
+            try:
+                with open(qa_cache_path, encoding='utf-8') as f:
+                    qa_cache = json.load(f)
+            except Exception:
+                qa_cache = {}
+
+        newly_answered = 0
+        for entry in pending:
+            if entry.get('answered'):
+                continue  # ya tiene respuesta
+
+            label = entry.get('label', '')
+            norm  = entry.get('norm', '') or _normalize(label)
+            if not label:
+                continue
+
+            # Intentar respuesta automática
+            ans = _match_qa(label) or _auto_answer(label, USER_PROFILE)
+            if not ans:
+                # Fallback: cover_letter como último recurso para preguntas abiertas
+                cl = USER_PROFILE.get('cover_letter', '').strip()
+                if cl and any(kw in label.lower() for kw in (
+                    'experiencia', 'presentate', 'cuéntanos', 'cuentanos',
+                    'sobre ti', 'motivacion', 'motivación', 'background',
+                    'habilidades', 'conocimientos', 'perfil', 'describe',
+                )):
+                    ans = cl
+
+            if ans:
+                entry['answered'] = True
+                entry['answer']   = str(ans)
+                entry['source']   = 'auto'
+                # Guardar en qa_cache también
+                if norm not in qa_cache:
+                    qa_cache[norm] = str(ans)
+                newly_answered += 1
+
+        # Guardar cambios
+        with open(pending_path, 'w', encoding='utf-8') as f:
+            json.dump(pending, f, ensure_ascii=False, indent=2)
+        with open(qa_cache_path, 'w', encoding='utf-8') as f:
+            json.dump(qa_cache, f, ensure_ascii=False, indent=2)
+
+        still_pending = sum(1 for e in pending if not e.get('answered'))
+        return jsonify({
+            'ok': True,
+            'answered': newly_answered,
+            'still_pending': still_pending,
+            'total': len(pending),
+        })
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e)}), 500
+
+
+@app.route('/api/apply-quick-links', methods=['POST'])
+def api_apply_quick_links():
+    """
+    Aplica automáticamente a los quick_links.json (ATS externos).
+    Lanza run_apply_quick_links en subproceso — procesa hasta max (default 5).
+    """
+    import subprocess
+    import threading as _th
+
+    data     = request.json or {}
+    max_apply = max(1, min(20, int(data.get('max', 5))))
+
+    result_holder = {}
+    done_event    = _th.Event()
+
+    def _run():
+        try:
+            proc = subprocess.run(
+                [sys.executable, '-u', 'main.py',
+                 '--apply-quick-links', '--headless', '--max', str(max_apply)],
+                capture_output=True, text=True, encoding='utf-8', errors='replace',
+                cwd=os.path.dirname(os.path.abspath(__file__)),
+                timeout=360,
+            )
+            output = proc.stdout + proc.stderr
+            applied = pending = failed = 0
+            for line in output.splitlines():
+                if 'aplicadas' in line.lower():
+                    import re as _re
+                    m = _re.search(r'(\d+)\s+aplicadas', line, _re.I)
+                    if m: applied = int(m.group(1))
+                if 'pendientes' in line.lower():
+                    import re as _re
+                    m = _re.search(r'(\d+)\s+pendientes', line, _re.I)
+                    if m: pending = int(m.group(1))
+                if 'fallidas' in line.lower():
+                    import re as _re
+                    m = _re.search(r'(\d+)\s+fallidas', line, _re.I)
+                    if m: failed = int(m.group(1))
+            result_holder.update({
+                'applied': applied, 'pending': pending, 'failed': failed,
+                'output': output[-1500:],
+            })
+        except subprocess.TimeoutExpired:
+            result_holder.update({'error': 'Timeout (360s)', 'applied': 0})
+        except Exception as exc:
+            result_holder.update({'error': str(exc), 'applied': 0})
+        finally:
+            done_event.set()
+
+    t = _th.Thread(target=_run, daemon=True)
+    t.start()
+    done_event.wait(timeout=370)
+
+    if 'error' in result_holder and 'applied' not in result_holder:
+        return jsonify({'ok': False, 'error': result_holder.get('error')}), 500
+    return jsonify({**result_holder, 'ok': True})
+
+
+@app.route('/api/fill-curriculum', methods=['POST'])
+def api_fill_curriculum():
+    """
+    Abre trabajando.cl/mi-curriculum#/ con la sesión guardada
+    y rellena los campos del perfil con los datos del usuario.
+    """
+    result_holder = {}
+    done_event = threading.Event()
+
+    def _run():
+        try:
+            proc = subprocess.run(
+                [sys.executable, '-u', 'main.py', '--fill-curriculum', '--headless'],
+                capture_output=True, text=True, encoding='utf-8', errors='replace',
+                cwd=os.path.dirname(os.path.abspath(__file__)),
+                timeout=120,
+            )
+            output = proc.stdout + proc.stderr
+            ok = 'curriculum guardado' in output.lower() or proc.returncode == 0
+            result_holder.update({'ok': ok, 'output': output[-1500:]})
+        except subprocess.TimeoutExpired:
+            result_holder.update({'ok': False, 'error': 'Timeout (120s)'})
+        except Exception as e:
+            result_holder.update({'ok': False, 'error': str(e)})
+        finally:
+            done_event.set()
+
+    t = threading.Thread(target=_run, daemon=True)
+    t.start()
+    done_event.wait(timeout=130)
+    return jsonify(result_holder)
 
 
 def _normalize_srv(text: str) -> str:
@@ -1282,7 +1735,7 @@ def api_scan_queue():
                 "url":    e.get("url", ""),
                 "title":  e.get("title", "") or e.get("url", ""),
                 "portal": e.get("portal", ""),
-                "unanswered": e.get("unanswered_questions", []),
+                "unanswered": e.get("unanswered", e.get("unanswered_questions", [])),
             }
             for e in queue if e.get("url")
         ]
@@ -1511,14 +1964,46 @@ def handle_start(data):
         runtime_env['USER_MAX_OFFERS'] = clean_form_value(data.get('max_offers'))
 
     persistent = bool(data.get('persistent', True))  # persistente por defecto
-    min_per    = int(data.get('min_per_portal', 1))
+    try:
+        min_per = max(1, min(50, int(str(data.get('min_per_portal', 1)).strip())))
+    except (ValueError, TypeError):
+        min_per = 1
 
     def _run():
         run_id = state.start_apply()
         socketio.emit('bot_status', state.get_status() | {"status": "started"}, namespace='/bot')
 
         def _final_finish():
-            state.add_log("\n[POSTULAR] Postulación completada.\n")
+            # Resumen de sesión con conteo final
+            from bot.state import get_stats as _get_stats
+            _s = _get_stats()
+            _by_p = _s.get("by_portal", {})
+            _applied_total = sum(v.get("applied", 0) for v in _by_p.values())
+            _ext_total     = sum(
+                sum(cnt for k, cnt in v.items() if k.startswith("external"))
+                for v in _by_p.values()
+            )
+            _err_total = sum(
+                sum(cnt for k, cnt in v.items() if k.startswith("error"))
+                for v in _by_p.values()
+            )
+            state.add_log(
+                f"\n[POSTULAR] ✅ Sesión completada — "
+                f"{_applied_total} postuladas · {_ext_total} externas · {_err_total} errores\n"
+            )
+            # Enviar notificación por email/webhook si está configurado
+            try:
+                from bot.notifier import send_summary as _send_summary
+                _run_start_ts = time.time()  # aproximado — no tenemos start exacto aquí
+                _send_summary(
+                    portals=portals,
+                    applied=_applied_total,
+                    external=_ext_total,
+                    filtered=0,
+                    errors=_err_total,
+                )
+            except Exception as _ne:
+                _log.debug("[NOTIFIER] Error enviando resumen: %s", _ne)
             if state.finish_apply(run_id):
                 socketio.emit('bot_status', state.get_status() | {"status": "finished"}, namespace='/bot')
                 socketio.emit('session_status', get_session_status(), namespace='/bot')
@@ -1527,11 +2012,11 @@ def handle_start(data):
             # ── Paso 1: Búsqueda multi-keyword / persistente ─────────────────
             if persistent:
                 cmd = [sys.executable, "-u", "main.py",
-                       "--persistent",
+                       "--persistent", "--headless",
                        "--portal", ",".join(portals),
                        "--min-per-portal", str(min_per)]
             else:
-                cmd = [sys.executable, "-u", "main.py", "--multi-keyword",
+                cmd = [sys.executable, "-u", "main.py", "--multi-keyword", "--headless",
                        "--portal", ",".join(portals)]
             proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                     text=True, encoding='utf-8', errors='replace', bufsize=1,
@@ -1552,7 +2037,7 @@ def handle_start(data):
                                 f"\n[APPLY-QUEUE] ⏳ {len(_queue)} ofertas en cola "
                                 f"— procesando ahora...\n"
                             )
-                            cmd2 = [sys.executable, "-u", "main.py", "--apply-queue",
+                            cmd2 = [sys.executable, "-u", "main.py", "--apply-queue", "--headless",
                                     "--portal", ",".join(portals)]
                             proc2 = subprocess.Popen(
                                 cmd2, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -1633,47 +2118,77 @@ def api_reset_all():
 @app.route('/api/daily-stats', methods=['GET'])
 def api_daily_stats():
     """
-    Retorna conteos diarios de postulaciones de los últimos N días (default 14).
-    Response: { ok, labels: ["YYYY-MM-DD",...], applied: [int,...], external: [int,...], skipped: [int,...] }
+    Retorna conteos agrupados por fecha para los últimos N días.
+    Fuente 1: archivos logs/applied_YYYY-MM-DD.csv (persistente entre sesiones)
+    Fuente 2: bot.state en memoria (sesión actual, cubre gaps no escritos aún a disco)
+    Response: { ok, labels, applied, external, skipped }
     """
-    import sqlite3
+    import csv as _csv
     from datetime import date as _date, timedelta
-    from bot.state import DB_PATH
+    from pathlib import Path as _Path
+    from collections import defaultdict
 
     days = int(request.args.get('days', 14))
     days = min(max(days, 1), 90)
 
-    try:
-        con = sqlite3.connect(str(DB_PATH))
-        con.row_factory = sqlite3.Row
-        rows = con.execute("""
-            SELECT
-                DATE(applied_at) as day,
-                SUM(CASE WHEN status = 'applied' THEN 1 ELSE 0 END)        as applied,
-                SUM(CASE WHEN status LIKE 'external%' THEN 1 ELSE 0 END)   as external,
-                SUM(CASE WHEN status LIKE 'skipped%' THEN 1 ELSE 0 END)    as skipped
-            FROM applications
-            WHERE applied_at >= DATE('now', ?)
-            GROUP BY day
-            ORDER BY day ASC
-        """, (f'-{days} days',)).fetchall()
-        con.close()
-    except Exception as e:
-        return jsonify({'ok': False, 'error': str(e)}), 500
-
     end   = _date.today()
     start = end - timedelta(days=days - 1)
-    row_map = {r['day']: r for r in rows}
 
+    by_day: dict = defaultdict(lambda: {'applied': 0, 'external': 0, 'skipped': 0})
+
+    # ── Fuente 1: CSV logs en disco ──────────────────────────────────────────
+    logs_dir = _Path(__file__).parent / 'logs'
+    cur = start
+    while cur <= end:
+        csv_path = logs_dir / f"applied_{cur.strftime('%Y-%m-%d')}.csv"
+        if csv_path.exists():
+            try:
+                with open(csv_path, newline='', encoding='utf-8', errors='replace') as f:
+                    reader = _csv.DictReader(f)
+                    for row in reader:
+                        st  = (row.get('status') or '').strip()
+                        day = (row.get('timestamp') or '')[:10]
+                        if not day:
+                            continue
+                        if st == 'applied':
+                            by_day[day]['applied'] += 1
+                        elif st.startswith('external'):
+                            by_day[day]['external'] += 1
+                        elif st.startswith('skipped') or st == 'dry_run' or st == 'filtered':
+                            by_day[day]['skipped'] += 1
+            except Exception:
+                pass
+        cur += timedelta(days=1)
+
+    # ── Fuente 2: memoria (sesión actual — evita duplicar si ya se escribió a disco) ──
+    # Solo suma registros cuya fecha NO aparece en disco (no hay CSV para ese día aún)
+    dates_from_disk = set(by_day.keys())
+    try:
+        from bot.state import get_recent
+        for r in get_recent(limit=10000):
+            day = (r.get('applied_at') or '')[:10]
+            if not day or day in dates_from_disk:
+                continue
+            st = r.get('status', '')
+            if st == 'applied':
+                by_day[day]['applied'] += 1
+            elif st.startswith('external'):
+                by_day[day]['external'] += 1
+            elif st.startswith('skipped') or st == 'dry_run':
+                by_day[day]['skipped'] += 1
+    except Exception:
+        pass
+
+    # ── Construir arrays para el rango ──────────────────────────────────────
     labels, applied_vals, external_vals, skipped_vals = [], [], [], []
     cur = start
     while cur <= end:
-        ds = cur.strftime('%Y-%m-%d')
-        r  = row_map.get(ds)
+        ds  = cur.strftime('%Y-%m-%d')
+        row = by_day.get(ds, {})
         labels.append(ds)
-        applied_vals.append(int(r['applied'])  if r else 0)
-        external_vals.append(int(r['external']) if r else 0)
-        skipped_vals.append(int(r['skipped'])   if r else 0)
+        applied_vals.append(row.get('applied', 0))
+        external_vals.append(row.get('external', 0))
+        skipped_vals.append(row.get('skipped', 0))
         cur += timedelta(days=1)
 
     return jsonify({
@@ -1687,35 +2202,111 @@ def api_daily_stats():
 
 @app.route('/api/export-csv', methods=['GET'])
 def api_export_csv():
-    """Descarga todas las postulaciones como CSV — columnas: portal, title, status, applied_at, url."""
+    """Descarga las postulaciones de la sesión actual como Excel (.xlsx)."""
     import io
-    import csv as _csv
-    import sqlite3
     from datetime import date as _date
     from flask import Response as _Resp
-    from bot.state import DB_PATH
+    from bot.state import get_recent
+    import openpyxl
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    from openpyxl.utils import get_column_letter
 
     try:
-        con = sqlite3.connect(str(DB_PATH))
-        con.row_factory = sqlite3.Row
-        rows = con.execute(
-            "SELECT portal, title, status, applied_at, url "
-            "FROM applications ORDER BY applied_at DESC"
-        ).fetchall()
-        con.close()
+        rows = get_recent(limit=10000)
     except Exception as e:
         return jsonify({'ok': False, 'error': str(e)}), 500
 
-    output = io.StringIO()
-    writer = _csv.writer(output)
-    writer.writerow(['portal', 'title', 'status', 'applied_at', 'url'])
-    for r in rows:
-        writer.writerow([r['portal'], r['title'], r['status'], r['applied_at'], r['url']])
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Postulaciones"
 
-    filename = f"postulaciones_{_date.today().strftime('%Y-%m-%d')}.csv"
+    # Estilos
+    header_font   = Font(name='Calibri', bold=True, color='FFFFFF', size=11)
+    header_fill   = PatternFill('solid', fgColor='1A3A5C')
+    center_align  = Alignment(horizontal='center', vertical='center', wrap_text=True)
+    left_align    = Alignment(horizontal='left',   vertical='center', wrap_text=True)
+    thin_border   = Border(
+        left=Side(style='thin', color='D0D0D0'),
+        right=Side(style='thin', color='D0D0D0'),
+        top=Side(style='thin', color='D0D0D0'),
+        bottom=Side(style='thin', color='D0D0D0'),
+    )
+    even_fill = PatternFill('solid', fgColor='EFF6FF')
+
+    # Status → color de celda
+    status_colors = {
+        'applied':   '00C853',   # verde
+        'external':  '0288D1',   # azul
+        'filtered':  'FFB300',   # amarillo
+        'error':     'E53935',   # rojo
+        'no_nav':    'F4511E',   # naranja
+    }
+
+    # Encabezados
+    headers = ['#', 'Portal', 'Título', 'Estado', 'Fecha / Hora', 'URL']
+    ws.append(headers)
+    for col_idx, _ in enumerate(headers, 1):
+        cell = ws.cell(row=1, column=col_idx)
+        cell.font      = header_font
+        cell.fill      = header_fill
+        cell.alignment = center_align
+        cell.border    = thin_border
+
+    # Filas de datos
+    for i, r in enumerate(rows, 1):
+        status = r.get('status', '')
+        ws.append([
+            i,
+            r.get('portal', ''),
+            r.get('title', ''),
+            status,
+            r.get('applied_at', ''),
+            r.get('url', ''),
+        ])
+        row_idx = i + 1
+        for col_idx in range(1, 7):
+            cell = ws.cell(row=row_idx, column=col_idx)
+            cell.border    = thin_border
+            cell.alignment = center_align if col_idx != 3 else left_align
+            if i % 2 == 0:
+                cell.fill = even_fill
+
+        # Color de estado
+        status_cell = ws.cell(row=row_idx, column=4)
+        color = status_colors.get(status)
+        if color:
+            status_cell.fill = PatternFill('solid', fgColor=color)
+            status_cell.font = Font(color='FFFFFF', bold=True, size=10)
+
+        # URL como hipervínculo
+        url = r.get('url', '')
+        if url:
+            url_cell = ws.cell(row=row_idx, column=6)
+            url_cell.hyperlink = url
+            url_cell.font = Font(color='0563C1', underline='single')
+
+    # Anchos de columna
+    col_widths = [5, 14, 48, 12, 20, 50]
+    for idx, width in enumerate(col_widths, 1):
+        ws.column_dimensions[get_column_letter(idx)].width = width
+
+    # Altura de filas
+    ws.row_dimensions[1].height = 22
+    for row_idx in range(2, len(rows) + 2):
+        ws.row_dimensions[row_idx].height = 18
+
+    # Freeze header + filtros automáticos
+    ws.freeze_panes = 'A2'
+    ws.auto_filter.ref = f"A1:F{len(rows) + 1}"
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+
+    filename = f"postulaciones_{_date.today().strftime('%Y-%m-%d')}.xlsx"
     return _Resp(
-        output.getvalue().encode('utf-8'),
-        mimetype='text/csv',
+        buf.getvalue(),
+        mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
         headers={'Content-Disposition': f'attachment; filename="{filename}"'}
     )
 
@@ -1725,6 +2316,63 @@ def api_stop():
     """Endpoint HTTP de stop — fallback por si el SocketIO no llega."""
     killed = _do_stop()
     return jsonify({'ok': True, 'killed': killed})
+
+
+@app.route('/api/reset-sessions', methods=['POST'])
+def api_reset_sessions():
+    """Borra cookies de todos los portales para forzar re-login en el próximo run."""
+    _clear_session_auth()
+    return jsonify({'ok': True, 'msg': 'Sesiones borradas — el bot pedirá login en cada portal'})
+
+
+@app.route('/api/login-portals', methods=['POST'])
+def api_login_portals():
+    """Abre browser visible para login manual en los portales indicados."""
+    data    = request.get_json(force=True) or {}
+    portals = data.get('portals', [])
+    if not portals:
+        return jsonify({'ok': False, 'error': 'Sin portales'}), 400
+
+    # Bloquear SCAN/POSTULAR antes del thread — evita race condition
+    with state.lock:
+        state.apply_active = True
+
+    def _run_login():
+        # Detener bot activo dentro del thread — no bloquea el HTTP handler
+        if state.scan_process and state.scan_process.poll() is None:
+            state.stop_process()
+            time.sleep(1.5)
+
+        try:
+            cmd = [sys.executable, "-u", "login_portals.py"] + portals
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True, encoding='utf-8', errors='replace',
+                bufsize=1,
+                env=_make_child_env(),
+            )
+            with state.lock:
+                state.apply_process = proc
+            socketio.emit('bot_status', {'status': 'login_started', 'portals': portals}, namespace='/bot')
+            for line in proc.stdout:
+                line = line.rstrip()
+                if line:
+                    state.add_log(line)
+            proc.wait()
+        except Exception as e:
+            state.add_log(f"[LOGIN] Error: {e}")
+        finally:
+            with state.lock:
+                state.apply_active  = False
+                state.apply_process = None
+            socketio.emit('bot_status', {'status': 'login_finished'}, namespace='/bot')
+            socketio.emit('session_status', get_session_status(), namespace='/bot')
+
+    t = threading.Thread(target=_run_login, daemon=True)
+    t.start()
+    return jsonify({'ok': True})
 
 def _on_exit():
     """Limpieza al cerrar el servidor (Ctrl+C o kill)."""
@@ -1742,6 +2390,13 @@ def _on_exit():
                 except Exception:
                     pass
     _clear_stop_signal()
+    # Borrar cookies de sesión al cerrar — las sesiones solo duran mientras el servidor corre.
+    # Al reiniciar el servidor habrá que volver a loguear.
+    try:
+        _clear_session_auth()
+        _log.info("[SHUTDOWN] Sesiones de portales borradas.")
+    except Exception as _e:
+        _log.debug("[SHUTDOWN] Error borrando sesiones: %s", _e)
     _log.info("[SHUTDOWN] Limpieza completada.")
 
 atexit.register(_on_exit)
@@ -1759,50 +2414,47 @@ atexit.register(_on_exit)
 # Si el bot ya está corriendo a la hora programada, la dispara se omite silenciosamente.
 
 def _scheduler_thread():
-    """Thread daemon que dispara el bot a las horas configuradas."""
+    """Thread daemon que dispara el bot a las horas configuradas.
+    Re-lee SCHEDULE_PORTALS y SCHEDULE_TIMES en cada ciclo para reflejar
+    cambios en .env sin necesidad de reiniciar el servidor.
+    """
     import datetime as _dt
-
-    _SCHEDULE_PORTALS_RAW = os.getenv("SCHEDULE_PORTALS", "").strip()
-    _SCHEDULE_TIMES_RAW   = os.getenv("SCHEDULE_TIMES",   "").strip()
-
-    if not _SCHEDULE_PORTALS_RAW or not _SCHEDULE_TIMES_RAW:
-        _log.debug("[SCHEDULER] No configurado — SCHEDULE_PORTALS o SCHEDULE_TIMES vacíos.")
-        return
-
-    # Parsear portales
-    _VALID_SCHED = set(_KNOWN_PORTALS) | {'indeed'}
-    sched_portals = [p.strip().lower() for p in _SCHEDULE_PORTALS_RAW.split(",")
-                     if p.strip().lower() in _VALID_SCHED]
-    if not sched_portals:
-        _log.warning("[SCHEDULER] SCHEDULE_PORTALS no contiene portales válidos: %s",
-                     _SCHEDULE_PORTALS_RAW)
-        return
-
-    # Parsear horarios HH:MM
-    sched_times: list[tuple[int, int]] = []
-    for t in _SCHEDULE_TIMES_RAW.split(","):
-        t = t.strip()
-        try:
-            h, m = t.split(":")
-            sched_times.append((int(h), int(m)))
-        except (ValueError, AttributeError):
-            _log.warning("[SCHEDULER] Horario inválido ignorado: '%s'", t)
-
-    if not sched_times:
-        _log.warning("[SCHEDULER] SCHEDULE_TIMES no contiene horarios válidos: %s",
-                     _SCHEDULE_TIMES_RAW)
-        return
-
-    _log.info("[SCHEDULER] Activo — portales: %s | horarios: %s",
-              ", ".join(sched_portals),
-              ", ".join(f"{h:02d}:{m:02d}" for h, m in sched_times))
-    print(f"[SCHEDULER] Activado — {', '.join(p.upper() for p in sched_portals)} "
-          f"a las {', '.join(f'{h:02d}:{m:02d}' for h, m in sched_times)}")
 
     _last_fired: set[tuple] = set()   # (date, HH, MM) disparados hoy
 
     while True:
         try:
+            # Re-leer configuración en cada ciclo (soporta cambios en .env en caliente)
+            load_dotenv(override=True)
+            _SCHEDULE_PORTALS_RAW = os.getenv("SCHEDULE_PORTALS", "").strip()
+            _SCHEDULE_TIMES_RAW   = os.getenv("SCHEDULE_TIMES",   "").strip()
+
+            if not _SCHEDULE_PORTALS_RAW or not _SCHEDULE_TIMES_RAW:
+                time.sleep(30)
+                continue
+
+            # Parsear portales
+            _VALID_SCHED = set(_KNOWN_PORTALS) | {'indeed'}
+            sched_portals = [p.strip().lower() for p in _SCHEDULE_PORTALS_RAW.split(",")
+                             if p.strip().lower() in _VALID_SCHED]
+            if not sched_portals:
+                time.sleep(30)
+                continue
+
+            # Parsear horarios HH:MM
+            sched_times: list[tuple[int, int]] = []
+            for t in _SCHEDULE_TIMES_RAW.split(","):
+                t = t.strip()
+                try:
+                    h, m = t.split(":")
+                    sched_times.append((int(h), int(m)))
+                except (ValueError, AttributeError):
+                    pass
+
+            if not sched_times:
+                time.sleep(30)
+                continue
+
             now = _dt.datetime.now()
             today = now.date()
 
@@ -1811,13 +2463,14 @@ def _scheduler_thread():
                 if key in _last_fired:
                     continue   # ya se disparó hoy a esta hora
 
-                # Ventana de ±1 minuto para tolerar desfase del sleep
+                # Ventana de ±30 s (mitad del intervalo de sleep) — evita doble disparo
                 target = now.replace(hour=h, minute=m, second=0, microsecond=0)
                 diff   = abs((now - target).total_seconds())
-                if diff <= 60:
+                if diff <= 30:
                     if state.is_active:
                         _log.info("[SCHEDULER] %02d:%02d — bot ya activo, omitiendo.",
                                   h, m)
+                        _last_fired.add(key)  # marcar igual para no reintentar este minuto
                     else:
                         _log.info("[SCHEDULER] Disparando bot programado %02d:%02d — %s",
                                   h, m, ", ".join(sched_portals))
@@ -1831,7 +2484,7 @@ def _scheduler_thread():
                             args=(sched_portals,),
                             daemon=True,
                         ).start()
-                    _last_fired.add(key)
+                        _last_fired.add(key)  # marcar solo tras lanzar el thread
 
             # Limpiar disparos de días anteriores (evitar que el set crezca)
             _last_fired = {k for k in _last_fired if k[0] == today}
@@ -1846,13 +2499,100 @@ def _scheduler_thread():
 threading.Thread(target=_scheduler_thread, daemon=True, name="scheduler").start()
 
 
+def _clear_session_auth() -> None:
+    """
+    Borra datos de login de cada portal al iniciar el servidor.
+    Playwright guarda el perfil en user_data_dir con esta estructura real:
+      <portal>/                        ← raíz (algunos archivos aquí)
+        Login Data, Web Data, LOCK…
+        Default/
+          Login Data, Web Data…
+          Network/
+            Cookies, Cookies-journal   ← cookies reales
+          Local Storage/
+          Session Storage/
+          IndexedDB/
+          Sessions/
+    Solo se eliminan archivos de auth; se preservan model files y caché de Chromium.
+    """
+    import shutil as _shutil
+    from pathlib import Path as _Path
+
+    # Rutas relativas a cada portal_dir que contienen auth
+    # Formato: ("archivo_o_dir", es_dir)
+    AUTH_TARGETS_ROOT = [
+        ("Login Data", False), ("Login Data-journal", False),
+        ("Login Data For Account", False), ("Login Data For Account-journal", False),
+        ("Web Data", False), ("Web Data-journal", False),
+        ("Local Storage", True), ("Session Storage", True),
+        ("IndexedDB", True), ("LOCK", False),
+    ]
+    AUTH_TARGETS_DEFAULT = [
+        ("Login Data", False), ("Login Data-journal", False),
+        ("Login Data For Account", False), ("Login Data For Account-journal", False),
+        ("Web Data", False), ("Web Data-journal", False),
+        ("Local Storage", True), ("Session Storage", True),
+        ("IndexedDB", True), ("Sessions", True),
+        ("SharedStorage", False),
+    ]
+    AUTH_TARGETS_DEFAULT_NETWORK = [
+        ("Cookies", False), ("Cookies-journal", False),
+        ("Trust Tokens", False), ("Trust Tokens-journal", False),
+    ]
+
+    sessions_dir = _Path(__file__).parent / "sessions"
+    if not sessions_dir.exists():
+        return
+
+    portals_cleared = set()
+
+    def _rm(path: _Path, is_dir: bool) -> bool:
+        if not path.exists():
+            return False
+        try:
+            if is_dir:
+                _shutil.rmtree(path, ignore_errors=True)
+            else:
+                path.unlink(missing_ok=True)
+            return True
+        except Exception:
+            return False
+
+    for portal_dir in sessions_dir.iterdir():
+        if not portal_dir.is_dir():
+            continue
+        hit = False
+        # Raíz del perfil
+        for name, is_dir in AUTH_TARGETS_ROOT:
+            if _rm(portal_dir / name, is_dir):
+                hit = True
+        # Default/
+        default = portal_dir / "Default"
+        for name, is_dir in AUTH_TARGETS_DEFAULT:
+            if _rm(default / name, is_dir):
+                hit = True
+        # Default/Network/
+        net = default / "Network"
+        for name, is_dir in AUTH_TARGETS_DEFAULT_NETWORK:
+            if _rm(net / name, is_dir):
+                hit = True
+        if hit:
+            portals_cleared.add(portal_dir.name)
+
+    if portals_cleared:
+        print(f"[SESSION] Login limpiado en {len(portals_cleared)} portal(es): "
+              + ", ".join(sorted(portals_cleared)))
+    else:
+        print("[SESSION] No había datos de login previos.")
+
+
 if __name__ == '__main__':
     port = 5000
+    # _clear_session_auth()  # deshabilitado — sesiones persisten entre reinicios
     print(f"\n--- Iniciando modo maestro (producción) ---")
     print(f"URL: http://127.0.0.1:{port}")
     print(f"Servidor: SocketIO (Auto-detect)")
     print(f"-------------------------------------------\n")
-    
-    # socketio.run detectará automáticamente eventlet si está instalado
+
     app.jinja_env.auto_reload = True
     socketio.run(app, host='127.0.0.1', port=port, debug=False, use_reloader=False, allow_unsafe_werkzeug=True)

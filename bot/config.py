@@ -6,14 +6,13 @@ from dotenv import load_dotenv
 # Cargar variables de entorno desde .env
 load_dotenv()
 
-# --- Configuración dinámica de Keywords ---
-# Limpiamos keywords para evitar redundancias con los filtros automáticos de seniority
-RAW_KEYWORDS = os.getenv("USER_KEYWORDS", "it dev desarrollador bodega").replace("'", "").replace('"', "")
-# Quitamos "sin experiencia" y frases largas de la URL principal para no "marear" al buscador
-CLEAN_KEYWORDS = RAW_KEYWORDS.lower().replace("sin experiencia", "").replace("lunes a viernes am", "").replace(",", " ").strip()
-ENCODED_KEYWORDS = quote_plus(CLEAN_KEYWORDS.replace("  ", " ").replace(" ", ", "))
-# Para portales que usan guiones (ej: computrabajo, laborum)
-DASH_KEYWORDS = CLEAN_KEYWORDS.replace("  ", " ").replace(" ", "-")
+# Keywords del usuario — limpiados para URLs y codificación
+RAW_KEYWORDS      = os.getenv("USER_KEYWORDS", "it dev desarrollador bodega").replace("'", "").replace('"', "")
+CLEAN_KEYWORDS    = RAW_KEYWORDS.lower().replace("sin experiencia", "").replace("lunes a viernes am", "").replace(",", " ").strip()
+ENCODED_KEYWORDS  = quote_plus(CLEAN_KEYWORDS.replace("  ", " ").replace(" ", ", "))
+DASH_KEYWORDS     = CLEAN_KEYWORDS.replace("  ", " ").replace(" ", "-")
+# URL base (máx 4 palabras) — slug largo causa HTTP 400 en computrabajo/infojobs
+SHORT_DASH_KEYWORDS = "-".join(CLEAN_KEYWORDS.split()[:4]) or DASH_KEYWORDS
 
 # ---------------------------------------------------------------------------
 # Perfil del usuario — se usa para autocompletar formularios
@@ -54,14 +53,15 @@ USER_PROFILE = {
 SITE_CONFIG = {
     "linkedin": {
         "url_busqueda": (
-            f"https://www.linkedin.com/jobs/search/?keywords={ENCODED_KEYWORDS}&location=Santiago%2C+Regi%C3%B3n+Metropolitana%2C+Chile&f_AL=true&f_E=2%2C3"
+            f"https://www.linkedin.com/jobs/search/?keywords={ENCODED_KEYWORDS}&location=Santiago%2C+Regi%C3%B3n+Metropolitana%2C+Chile&f_AL=true&sortBy=DD&f_TPR=r604800"
         ),
         "selector_oferta":          "li[data-occludable-job-id]",
         "selector_boton_aplicar":   "button.jobs-apply-button",
         "selector_siguiente_pagina": "button[aria-label='Ver más empleos']",
         "selector_titulo_oferta":   "h1.job-details-jobs-unified-top-card__job-title",
         "tipo_postulacion":         "modal",
-        "max_offers_per_run":       10,
+        "max_offers_per_run":       30,
+        "max_pages":                4,
         "requires_login":           True,
     },
     "indeed": {
@@ -89,16 +89,16 @@ SITE_CONFIG = {
     "computrabajo": {
         # ?ordenar=2 = más recientes primero → evita ver siempre las mismas ofertas ya aplicadas
         "url_busqueda": (
-            f"https://cl.computrabajo.com/trabajo-de-{DASH_KEYWORDS}-sin-experiencia?ordenar=2"
+            f"https://cl.computrabajo.com/trabajo-de-{SHORT_DASH_KEYWORDS}?ordenar=2"
         ),
         "selector_oferta":           "article.box_offer",
         "selector_ubicacion":        "p.fs13, .p_ubic, span.fs13",
-        "selector_boton_aplicar":    "a.btn_postular, a:has-text('Postularme'), a:has-text('Postular'), button:has-text('Postularme')",
+        "selector_boton_aplicar":    "a.btn_postular, button.btn_postular, a:has-text('Postularme'), a:has-text('Postular'), button:has-text('Postularme'), button:has-text('Postular'), button:has-text('Inscribirme'), a:has-text('Inscribirme'), button:has-text('Aplicar'), [data-qa='btn-apply']",
         "selector_siguiente_pagina": "a[title='Siguiente'], a[rel='next'], a[class*='next']",
         "selector_titulo_oferta":    "h1.title_offer, h1[class*='title'], h1",
         "tipo_postulacion":          "directa",
-        "max_offers_per_run":        20,
-        "max_pages":                 5,   # 5 páginas de resultados por keyword (antes 3)
+        "max_offers_per_run":        30,
+        "max_pages":                 6,
         "requires_login":            True,
     },
     "getonyboard": {
@@ -107,13 +107,21 @@ SITE_CONFIG = {
         # Los filtros de seniority tampoco funcionan vía URL; se aplican en el bot.
         # URL por defecto para búsqueda manual / --portal getonyboard sin --multi-keyword:
         "url_busqueda": "https://www.getonbrd.com/jobs-desarrollador-junior",
-        "selector_oferta":           "a.gb-results-list__item",
+        # GetOnBoard permite navegar ofertas SIN login (es un portal público).
+        # tipo_postulacion="externa" → solo registra URLs, nunca envía formularios,
+        # por lo que NO se necesita sesión para escanear. Login solo sería necesario
+        # para postular directamente en el sitio (que el bot NO hace).
+        # Selector actualizado: GetOnBoard usa hrefs /empleos/ para jobs en castellano
+        # y /jobs/ para jobs en inglés. El selector antiguo (a.gb-results-list__item)
+        # dejó de funcionar cuando renovaron su CSS.
+        "selector_oferta":           "a[href*='/empleos/'], a[href*='getonbrd.com/jobs/']",
         "selector_boton_aplicar":    "a#apply_bottom, a#apply_bottom_short, a.js-go-to-apply",
         "selector_siguiente_pagina": None,
         "selector_titulo_oferta":    "h1.gb-landing-cover__title, h1[class*='title'], h1",
         "tipo_postulacion":          "externa",
-        "max_offers_per_run":        15,
-        "requires_login":            True,   # Siempre verificar sesión antes de buscar
+        "max_offers_per_run":        30,
+        "max_pages":                 3,
+        "requires_login":            True,    # Sesión persistente: login via LinkedIn se guarda en sessions/getonyboard/
     },
     "chiletrabajos": {
         # ChileTrabajos requiere cuenta gratuita para postular.
@@ -121,7 +129,7 @@ SITE_CONFIG = {
         # &ordenar=recientes = más recientes primero
         "url_busqueda": (
             f"https://www.chiletrabajos.cl/empleos?q={ENCODED_KEYWORDS}"
-            f"&experiencia=sin-experiencia&ordenar=recientes"
+            f"&region=13&ordenar=recientes"
         ),
         "selector_oferta":           "div.job-item",
         "selector_ubicacion":        ".job-location, .location, span[class*='location']",
@@ -129,7 +137,8 @@ SITE_CONFIG = {
         "selector_siguiente_pagina": "a[rel='next'], a[data-ci-pagination-page]",
         "selector_titulo_oferta":    "h1.job-title, h1[class*='title'], h1",
         "tipo_postulacion":          "directa",
-        "max_offers_per_run":        20,
+        "max_offers_per_run":        50,
+        "max_pages":                 8,
         "requires_login":            True,
     },
     "laborum": {
@@ -143,7 +152,8 @@ SITE_CONFIG = {
         "selector_siguiente_pagina": "a[aria-label*='iguiente'], button[aria-label*='iguiente']",
         "selector_titulo_oferta":    "h1",
         "tipo_postulacion":          "directa",
-        "max_offers_per_run":        15,
+        "max_offers_per_run":        30,
+        "max_pages":                 4,
         "requires_login":            True,
     },
 
@@ -162,9 +172,9 @@ SITE_CONFIG = {
         "selector_siguiente_pagina": None,
         "selector_titulo_oferta":    "h2.listing-header-container, h2[class*='listing'], h1",
         "tipo_postulacion":          "externa",
-        "max_offers_per_run":        20,
+        "max_offers_per_run":        30,
         "requires_login":            False,
-        "remote_intl":               True,   # skip filtros de zona/horario Chile
+        "remote_intl":               True,
         "lang":                      "en",
     },
     "remotive": {
@@ -177,7 +187,7 @@ SITE_CONFIG = {
         "selector_siguiente_pagina": None,   # scroll infinito en SPA — una sola página
         "selector_titulo_oferta":    "h1",
         "tipo_postulacion":          "externa",
-        "max_offers_per_run":        20,
+        "max_offers_per_run":        30,
         "requires_login":            False,
         "remote_intl":               True,
         "lang":                      "en",
@@ -192,39 +202,57 @@ SITE_CONFIG = {
         "selector_siguiente_pagina": "a.next, a[rel='next']",
         "selector_titulo_oferta":    "h1.job_title, h1",
         "tipo_postulacion":          "externa",
-        "max_offers_per_run":        15,
+        "max_offers_per_run":        30,
+        "max_pages":                 3,
         "requires_login":            False,
         "remote_intl":               True,
         "lang":                      "en",
     },
     "trabajando": {
-        # Trabajando.com — uno de los portales laborales más grandes de Chile.
-        # Postulación externa: redirige al formulario del empleador.
+        # Trabajando.cl — portal laboral chileno.
+        # Soporta formulario interno y redirección externa al empleador.
+        # Curriculum en: https://www.trabajando.cl/mi-curriculum#/
         "url_busqueda": (
-            f"https://www.trabajando.com/trabajo/{DASH_KEYWORDS}/"
-            "?pais=chile&orden=fecha"
+            f"https://www.trabajando.cl/empleos?s={ENCODED_KEYWORDS}"
+            f"&region=13&orden=fecha"
         ),
-        "selector_oferta":           "div.item-trabajo a.item-title, li.job-card a",
+        "selector_oferta":           "a.aviso-titulo, a[href*='/empleos/'], div.aviso-item a",
         "selector_boton_aplicar":    "a:has-text('Postular'), button:has-text('Postular')",
-        "selector_siguiente_pagina": "a[rel='next'], a.next-page",
-        "selector_titulo_oferta":    "h1.title-offer, h1",
-        "tipo_postulacion":          "external",
-        "max_offers_per_run":        15,
-        "requires_login":            False,
+        "selector_siguiente_pagina": "a[rel='next'], a.next-page, a[aria-label='Siguiente']",
+        "selector_titulo_oferta":    "h1.aviso-titulo, h1",
+        "tipo_postulacion":          "form",
+        "max_offers_per_run":        30,
+        "max_pages":                 4,
+        "requires_login":            True,
+        "curriculum_url":            "https://www.trabajando.cl/mi-curriculum#/",
     },
     "infojobs": {
         # InfoJobs Chile — portal con ofertas formales, requiere cuenta.
         # Tipo redirect: modal de InfoJobs o redirige al empleador.
         "url_busqueda": (
-            f"https://cl.infojobs.net/ofertas-trabajo/trabajo_{DASH_KEYWORDS}/"
-            "?sortBy=PUBLICATION_DATE"
+            f"https://www.infojobs.net/trabajo/?q={SHORT_DASH_KEYWORDS}"
+            "&sortBy=PUBLICATION_DATE"
         ),
-        "selector_oferta":           "li.ij-OfferCardContent, article.ij-OfferCard",
+        "selector_oferta": (
+            # Tarjetas modernas InfoJobs Chile (2024-2025)
+            "li.ij-OfferCardContent, "
+            "article.ij-OfferCard, "
+            "div[data-testid='offer-list-item'], "
+            "li[data-testid='offer-list-item'], "
+            "article[data-testid='offer-card'], "
+            "div.IFCard, "
+            "li.IFCard, "
+            "div[class*='OfferCard'], "
+            "li[class*='offer-item'], "
+            "div[class*='offer-card'], "
+            "a[href*='/empleos/oferta/']"
+        ),
         "selector_boton_aplicar":    "a.btn-apply, button:has-text('Inscribirme')",
-        "selector_siguiente_pagina": "a[data-testid='pagination-next'], a[rel='next']",
+        "selector_siguiente_pagina": "a[data-testid='pagination-next'], a[rel='next'], li.next a",
         "selector_titulo_oferta":    "h1.ij-OfferDetailHeader-title, h1",
         "tipo_postulacion":          "redirect",
-        "max_offers_per_run":        15,
+        "max_offers_per_run":        30,
+        "max_pages":                 4,
         "requires_login":            True,
     },
 }
@@ -253,6 +281,7 @@ SCHEDULE_BLACKLIST = frozenset({
     # Noche
     "turno noche", "nocturno", "nocturna", "nocturnos", "nocturnas",
     "guardia nocturna", "guardia noche", "turno noche a mañana",
+    "noche/", "(noche)", " noche -", " noche,",   # título: "Bodega Noche/Ciudad"
     # Tarde / PM (excluir explícitamente turnos vespertinos)
     "turno tarde", "jornada tarde", "horario tarde",
     "turno pm", "horario pm",
@@ -266,7 +295,9 @@ SCHEDULE_BLACKLIST = frozenset({
     "fines de semana", "fin de semana",
     "sábados y domingos", "sabados y domingos",
     "sábado y domingo", "sabado y domingo",
-    "sábados", "domingos",
+    # "sábados" solo ELIMINADO — "lunes a sábados" = jornada normal 5.5 días
+    # Solo rechazar si aparece junto a "domingos" o en contexto de fin de semana
+    "domingos",
     # 24/7
     "24x7", "24/7",
     # Códigos de turnos nocturnos Chile
@@ -347,13 +378,29 @@ _LOC_DISTANT_RM = frozenset({
 
 # Tier FAR · score 2 · Fuera del Gran Santiago o sin transporte directo → RECHAZADAS
 _LOC_FAR = frozenset({
-    # Fuera del Gran Santiago
+    # Fuera del Gran Santiago (dentro de RM pero sin transporte directo)
     "til til", "colina", "lampa", "melipilla",
-    # Comunas sin metro y muy alejadas
-    "la pintana", "san ramón", "san ramon",
-    # Regiones fuera de Santiago RM
-    "valparaíso", "valparaiso", "viña del mar", "concepción", "concepcion",
-    "antofagasta", "iquique", "temuco", "puerto montt",
+    # Regiones — Norte
+    "calama", "antofagasta", "iquique", "arica", "tocopilla",
+    "atacama", "copiapó", "copiapo", "vallenar",
+    "coquimbo", "la serena", "ovalle", "illapel",
+    # Regiones — Valparaíso
+    "valparaíso", "valparaiso", "viña del mar", "villa alemana",
+    "quillota", "los andes", "san antonio", "san felipe",
+    # Regiones — O'Higgins / Sur
+    "rancagua", "san fernando", "pichilemu",
+    "talca", "curicó", "curico", "linares", "cauquenes",
+    "chillán", "chillan", "san carlos",
+    "concepción", "concepcion", "talcahuano", "los angeles",
+    "coronel", "lota", "arauco",
+    # Regiones — Sur
+    "temuco", "villarrica", "pucón", "pucon", "angol",
+    "valdivia", "osorno", "la unión", "la union",
+    "puerto montt", "puerto varas", "castro", "ancud",
+    "coyhaique", "chile chico",
+    "punta arenas", "puerto natales",
+    # Perú/Argentina/exterior
+    "lima", "bogotá", "bogota", "buenos aires", "monterrey",
 })
 
 
@@ -407,11 +454,23 @@ _EXP_WHITELIST = frozenset({
     "entry level", "entry-level",
     "0 a 1 año", "0 a 1 años", "hasta 1 año", "hasta un año",
     "1 año de experiencia", "un año de experiencia",
-    "1 a 2 años",   # el mínimo es 1 -> aplica con 1 año
-    "2 a 3 años",   # borderline — usuario tiene 6 años exp, puede aplicar
-    "hasta 2 años", "máximo 2 años", "maximo 2 años",
-    "deseable experiencia",  # no obligatoria
-    "no excluyente",         # experiencia "no excluyente" = sin exp OK
+    # Rangos con "a" (espacio)
+    "1 a 2 años", "1 a 2 anos",
+    "2 a 3 años", "2 a 3 anos",
+    "3 a 4 años", "3 a 4 anos",
+    "3 a 5 años", "3 a 5 anos",   # usuario tiene 6 años exp total → puede aplicar
+    "4 a 5 años", "4 a 5 anos",
+    # Rangos con guión (ej: "3-5 años") — sin whitelist el regex detecta el "5" solo
+    "1-2 años", "1-2 anos", "1-3 años", "1-3 anos",
+    "2-3 años", "2-3 anos", "2-4 años", "2-4 anos",
+    "3-4 años", "3-4 anos", "3-5 años", "3-5 anos",
+    "4-5 años", "4-5 anos",
+    # Hasta N años
+    "hasta 2 años", "hasta 2 anos", "máximo 2 años", "maximo 2 anos",
+    "hasta 3 años", "hasta 3 anos",
+    "hasta 4 años", "hasta 4 anos",
+    "deseable experiencia",
+    "no excluyente",
 })
 
 # Substrings largos que indican nivel senior/directivo (seguros — no aparecen en jr)
@@ -431,12 +490,11 @@ _SENIOR_WORDS_EXACT = frozenset({"sr", "ssr", "lead", "cto", "cio", "cpo"})
 # Patrones de años de experiencia que SUPERAN lo aceptable
 import re as _re
 _EXP_YEARS_PATTERN = _re.compile(
-    # "3 años de experiencia" / "4+ años de experiencia" / "5 o más años"
-    # Umbral: 3+ años → rechazar. 2 años = aceptable (usuario tiene 6 años exp)
-    r'\b([3-9]|\d{2,})\s*(?:\+|o más|más de)?\s*años?\s*(?:de\s+)?experiencia'
+    # Umbral: 5+ años → rechazar. 1-4 = aceptable (usuario tiene 6 años exp total)
+    # a\xf1os = años con tilde; anos = sin tilde (ambas formas en portales CL)
+    r'\b([5-9]|\d{2,})\s*(?:\+|o\s+m[aá]s|m[aá]s\s+de)?\s*a(?:ñ|n)os?\b'
     r'|'
-    # "4+ años" / "3+ años"
-    r'\b([3-9]|\d{2,})\s*\+\s*años?',
+    r'\b([5-9]|\d{2,})\s*\+\s*a(?:ñ|n)os?\b',
     _re.IGNORECASE,
 )
 
@@ -528,11 +586,12 @@ _CONTRACT_BLACKLIST = frozenset({
     "por temporada", "por campaña",
     # Tiempo parcial
     "part time", "part-time", "media jornada", "medio tiempo",
-    "jornada parcial", "horas semanales",
-    # Freelance / por proyecto
-    "freelance", "por proyecto", "por obra",
-    # Honorarios (Chile: trabajo independiente sin contrato)
-    "honorarios",
+    "jornada parcial",
+    # "horas semanales" ELIMINADO — "44 horas semanales" es jornada completa estándar en Chile
+    # Freelance / por proyecto estricto (evitar falso positivo en "proyecto TI")
+    "freelance", "contrato por proyecto", "por obra",
+    # "honorarios" ELIMINADO — muchas empresas TI en Chile contratan bajo honorarios (boleta)
+    # "por proyecto" ELIMINADO — "proyecto de transformación digital" daba falso positivo
 })
 
 
@@ -599,6 +658,11 @@ _OFF_TOPIC_SUBSTRINGS = [
     # Transporte (excluir choferes, no bodega logística)
     "chofer de camion", "chofer camion", "conductor de camion",
     "taxista", "uber", "delivery conductor",
+    # Licencias de conducir requeridas (clase B/D = vehículos/transporte)
+    "licencia clase b", "licencia clase d", "licencia b", "licencia d",
+    "licencia conducir clase b", "licencia conducir clase d",
+    "con licencia clase b", "con licencia clase d",
+    "profesional de bodega con licencia",
     # Prevención de riesgos / Seguridad laboral
     "prevencionista", "prevención de riesgo", "prevencion de riesgo",
     "experto en prevencion", "experto en prevención",
@@ -618,6 +682,11 @@ _OFF_TOPIC_SUBSTRINGS = [
     "reponedor", "reponedora", "repositor",
     "atención al cliente", "atencion al cliente",
     "servicio al cliente", "call center", "teleoperador",
+    "anfitrion", "anfitrión", "anfitriona",   # host de retail/eventos
+    # Ventas sin "de ventas" explícito
+    "ejecutivo venta", "ejecutiva venta",
+    "agente de seguros", "ejecutivo seguros", "asesor de seguros",
+    "asesor seguros", "ejecutivo en seguros",
     # Limpieza / Aseo
     "auxiliar de aseo", "auxiliar aseo", "aseo y ornato",
     "camarera", "camarero", "mucama",
@@ -625,6 +694,7 @@ _OFF_TOPIC_SUBSTRINGS = [
     # Seguridad privada (guardia, no TI)
     "guardia de seguridad", "guardia privado", "vigilante",
     "guardia nocturno",
+    "guardia ",   # "Guardia Colina", "Guardia Express", etc. (con espacio para no cortar palabras)
     # Agricultura / Campo
     "agricultor", "temporero", "cosecha",
     "operario agricola", "operario agrícola",
@@ -707,75 +777,72 @@ def topic_ok_it(text: str) -> bool:
 # Generador de combinaciones — base × modificador de experiencia
 # "sin experiencia" se añade siempre en la URL via build_config_for_keyword
 # ---------------------------------------------------------------------------
-def _gen_it(label: str, bases: list, mods=("junior", "sin experiencia"), scan=True):
-    """Genera combinaciones base × modificador. Solo IT, solo junior/sin experiencia."""
-    rows = []
-    for base in bases:
-        for mod in mods:
-            rows.append({"label": label, "keyword": f"{base} {mod}", "mode": "it", "scan": scan})
-    return rows
+def _it(label: str, keyword: str) -> dict:
+    return {"label": label, "keyword": keyword, "mode": "it", "scan": True}
 
 
-def _gen_bodega(label: str, bases: list, mods=("sin experiencia",), scan=True):
-    """Genera combinaciones para bodega/logística. Modifier: sin experiencia."""
-    rows = []
-    for base in bases:
-        for mod in mods:
-            rows.append({"label": label, "keyword": f"{base} {mod}", "mode": "bodega", "scan": scan})
-    return rows
+def _bodega(keyword: str) -> dict:
+    return {"label": "Bodega", "keyword": keyword, "mode": "bodega", "scan": True}
 
 
-KEYWORD_GROUPS = (
-    # ── Desarrollo general ────────────────────────────────────────────────────
-    _gen_it("Desarrollo", [
-        "desarrollador", "programador", "developer",
-        "ingeniero de software", "software developer",
-    ]) +
-    # ── Stack / Lenguajes ─────────────────────────────────────────────────────
-    _gen_it("Stack", [
-        "python", "javascript", "sql",
-        "desarrollador web", "desarrollador backend",
-        "desarrollador frontend", "desarrollador fullstack",
-        "desarrollador react", "desarrollador node",
-    ]) +
-    # ── Analista ─────────────────────────────────────────────────────────────
-    _gen_it("Analista", [
-        "analista programador", "analista de sistemas",
-        "analista funcional", "analista SAP", "analista ERP",
-        "ingeniero en sistemas",
-    ]) +
-    # ── Datos / BI ────────────────────────────────────────────────────────────
-    _gen_it("Datos", [
-        "analista de datos", "analista BI", "data analyst",
-        "analista de informacion",
-    ]) +
-    # ── Soporte / Helpdesk ────────────────────────────────────────────────────
-    _gen_it("Soporte", [
-        "soporte tecnico", "soporte TI", "help desk",
-        "mesa de ayuda", "tecnico informatica",
-    ]) +
+# ---------------------------------------------------------------------------
+# Keywords — lean set optimizado para postulación en Chile (25 keywords)
+# Un solo modificador por base: "junior" para IT, "sin experiencia" para bodega
+# ---------------------------------------------------------------------------
+KEYWORD_GROUPS = [
+    # ── Desarrollo / Programación ─────────────────────────────────────────────
+    _it("Desarrollo",  "desarrollador junior"),
+    _it("Desarrollo",  "programador junior"),
+    _it("Desarrollo",  "desarrollador web junior"),
+    _it("Desarrollo",  "desarrollador fullstack junior"),
+    _it("Desarrollo",  "desarrollador backend junior"),
+
+    # ── Stack técnico (CV: Python, SQL, JavaScript) ───────────────────────────
+    _it("Stack",       "python junior"),
+    _it("Stack",       "javascript junior"),
+    _it("Stack",       "sql junior"),
+
+    # ── Analista — título exacto del CV ──────────────────────────────────────
+    _it("Analista",    "analista programador junior"),
+    _it("Analista",    "analista de sistemas junior"),
+    _it("Analista",    "analista SAP junior"),        # CV: SAP WM
+    _it("Analista",    "analista WMS junior"),        # CV: WMS en STL/Ripley
+
+    # ── Datos ─────────────────────────────────────────────────────────────────
+    _it("Datos",       "analista de datos junior"),
+    _it("Datos",       "data analyst junior"),
+
+    # ── Soporte — cargo más ofertado entry-level IT en Chile ──────────────────
+    _it("Soporte",     "soporte tecnico junior"),
+    _it("Soporte",     "help desk junior"),
+    _it("Soporte",     "soporte TI junior"),
+
     # ── QA / Testing ─────────────────────────────────────────────────────────
-    _gen_it("QA", [
-        "QA", "tester", "quality assurance",
-    ]) +
-    # ── Egresados — el modificador ES la identidad ────────────────────────────
-    [
-        {"label": "Egresado", "keyword": "egresado informatica",          "mode": "it", "scan": True},
-        {"label": "Egresado", "keyword": "egresado TI",                   "mode": "it", "scan": True},
-        {"label": "Egresado", "keyword": "egresado analista programador", "mode": "it", "scan": True},
-        {"label": "Egresado", "keyword": "recien egresado sistemas",      "mode": "it", "scan": True},
-        {"label": "Egresado", "keyword": "recien egresado informatica",   "mode": "it", "scan": True},
-    ] +
-    # ── Operario / Bodega / Logística — turno am, lunes a viernes, sin exp ────
-    # Filtros de horario (schedule_ok) y contrato (contract_ok) se aplican en engine
-    _gen_bodega("Bodega", [
-        "operario bodega",
-        "auxiliar bodega",
-        "bodeguero",
-        "operario logistica",
-        "auxiliar logistica",
-    ])
-)
+    _it("QA",          "tester junior"),
+    _it("QA",          "QA junior"),
+
+    # ── Egresados ─────────────────────────────────────────────────────────────
+    _it("Egresado",    "egresado informatica"),
+    _it("Egresado",    "egresado analista programador"),
+    _it("Egresado",    "egresado TI"),
+
+    # ── Bodega / Logística (CV: STL, Natura, Total Tools, Ripley) ────────────
+    _bodega("auxiliar bodega sin experiencia"),
+    _bodega("bodeguero sin experiencia"),
+    _bodega("auxiliar picking sin experiencia"),
+
+    # ── Términos más buscados en portales chilenos (sin "junior" — más resultados) ──
+    {"keyword": "tecnico informatico",     "label": "Analista", "mode": "it"},
+    {"keyword": "programador",             "label": "Desarrollo", "mode": "it"},
+    {"keyword": "soporte tecnico",         "label": "Soporte", "mode": "it"},
+    {"keyword": "help desk",               "label": "Soporte", "mode": "it"},
+    {"keyword": "desarrollador",           "label": "Desarrollo", "mode": "it"},
+    {"keyword": "analista programador",    "label": "Analista", "mode": "it"},
+    {"keyword": "practicante informatica", "label": "Egresado", "mode": "it"},
+    {"keyword": "trainee TI",              "label": "Egresado", "mode": "it"},
+    {"keyword": "operador de sistemas",    "label": "Soporte", "mode": "it"},
+    {"keyword": "digitador",               "label": "Soporte", "mode": "it"},
+]
 
 
 # ---------------------------------------------------------------------------
@@ -785,38 +852,34 @@ KEYWORD_GROUPS = (
 # Probado: cada slug devuelve ~100 ofertas reales del sector.
 # ---------------------------------------------------------------------------
 _GOB_SLUG_MAP: dict[str, str] = {
-    # Desarrollo / Programación
+    # Desarrollo
     "desarrollador junior":           "jobs-desarrollador-junior",
-    "developer junior":               "jobs-developer-junior",
     "programador junior":             "jobs-programador-junior",
+    "desarrollador web junior":       "jobs-desarrollador-web-junior",
+    "desarrollador fullstack junior": "jobs-fullstack-developer-junior",
+    "desarrollador backend junior":   "jobs-backend-developer-junior",
+    # Stack
+    "python junior":                  "jobs-python-developer-junior",
+    "javascript junior":              "jobs-javascript-developer-junior",
+    "sql junior":                     "jobs-sql-junior",
+    # Analista
     "analista programador junior":    "jobs-analista-programador",
     "analista de sistemas junior":    "jobs-analista-sistemas",
-    "ingeniero en sistemas junior":   "jobs-ingeniero-sistemas",
-    # Stack / Tecnología
-    "python junior":                  "jobs-python-developer-junior",
-    "sql junior":                     "jobs-sql-junior",
-    "desarrollador web junior":       "jobs-desarrollador-web-junior",
-    "desarrollador backend junior":   "jobs-backend-developer-junior",
-    "desarrollador fullstack junior": "jobs-fullstack-developer-junior",
-    "javascript junior":              "jobs-javascript-developer-junior",
-    # Soporte / Helpdesk
-    "soporte tecnico junior":         "jobs-soporte-tecnico-junior",
-    "soporte ti junior":              "jobs-soporte-ti",
-    "help desk junior":               "jobs-help-desk",
-    "mesa de ayuda junior":           "jobs-mesa-de-ayuda",
-    "tecnico informatica junior":     "jobs-tecnico-informatica",
-    # Datos / BI
-    "analista de datos junior":       "jobs-analista-datos",
-    "analista bi junior":             "jobs-analista-bi",
-    # Especialidades
     "analista sap junior":            "jobs-analista-sap",
-    "analista erp junior":            "jobs-analista-erp",
-    "analista funcional junior":      "jobs-analista-funcional",
-    # QA / Testing
-    "qa junior":                      "jobs-qa-junior",
+    "analista wms junior":            "jobs-analista-sap",   # slug más cercano en GOB
+    # Datos
+    "analista de datos junior":       "jobs-analista-datos",
+    "data analyst junior":            "jobs-data-analyst",
+    # Soporte
+    "soporte tecnico junior":         "jobs-soporte-tecnico-junior",
+    "help desk junior":               "jobs-help-desk",
+    "soporte ti junior":              "jobs-soporte-ti",
+    # QA
     "tester junior":                  "jobs-tester-junior",
-    # Egresados / Entrada
+    "qa junior":                      "jobs-qa-junior",
+    # Egresados
     "egresado informatica":           "jobs-desarrollador-junior",
+    "egresado analista programador":  "jobs-analista-programador",
     "egresado ti":                    "jobs-desarrollador-junior",
 }
 
@@ -936,16 +999,20 @@ def build_config_for_keyword(portal_key: str, keyword: str) -> dict:
 
     url_map = {
         "indeed":        f"https://cl.indeed.com/jobs?q={kw_encoded}{exp_indeed}&l=Santiago%2C+Regi%C3%B3n+Metropolitana&radius=25&explvl=entry_level&sort=date",
-        # ?ordenar=2 = más recientes primero — evita saturación del DB con mismas ofertas
-        "computrabajo":  f"https://cl.computrabajo.com/trabajo-de-{kw_dash}{exp_suffix_ct}?ordenar=2",
-        # Laborum: solo necesita llegar a laborum.cl con sesión válida.
-        # /busqueda?q= devuelve 404 — usar la home siempre.
+        # ordenar=2 (recientes) | provincia=Santiago | jornada completa (wt=1)
+        # Usar ruta -en-santiago-de-chile para filtro estricto de región
+        "computrabajo":  f"https://cl.computrabajo.com/trabajo-de-{kw_dash}{exp_suffix_ct}-en-santiago-de-chile?ordenar=2&wt=1",
+        # Laborum: home con sesión válida — la API recibe Region=13 en filtros
         "laborum":       "https://www.laborum.cl",
-        # ChileTrabajos: URL de búsqueda directa por keyword
-        "chiletrabajos": f"https://www.chiletrabajos.cl/empleos?q={kw_encoded}&experiencia=sin-experiencia&ordenar=recientes",
+        # ChileTrabajos: región 13 (RM) + jornada completa (jc=1) + horario AM (h=1)
+        "chiletrabajos": f"https://www.chiletrabajos.cl/empleos?q={kw_encoded}&region=13&ordenar=recientes&jornada=1",
         # GetOnBoard: usa URLs tipo slug (/jobs-{slug}), no soporta ?q= ni seniority en URL.
         "getonyboard":   _gob_slug_url(keyword),
-        "linkedin":      f"https://www.linkedin.com/jobs/search/?keywords={kw_encoded}&location=Santiago%2C+Regi%C3%B3n+Metropolitana%2C+Chile&f_AL=true&f_E=2%2C3",
+        "linkedin":      f"https://www.linkedin.com/jobs/search/?keywords={kw_encoded}&location=Santiago%2C+Regi%C3%B3n+Metropolitana%2C+Chile&f_AL=true&sortBy=DD&f_TPR=r604800",
+        # Trabajando.cl: búsqueda por keyword con orden por fecha, región RM
+        "trabajando":    f"https://www.trabajando.cl/empleos?s={kw_encoded}&region=13&orden=fecha",
+        # InfoJobs Chile: búsqueda por keyword ordenada por fecha
+        "infojobs":      f"https://www.infojobs.net/trabajo/?q={kw_encoded}&sortBy=PUBLICATION_DATE",
         # Portales remotos internacionales — usar keyword en inglés
         "weworkremotely": f"https://weworkremotely.com/remote-jobs/search?term={en_kw_encoded}",
         "remotive":       f"https://remotive.com/remote-jobs/software-dev?query={en_kw_encoded}",

@@ -26,16 +26,34 @@ from playwright.sync_api import Page, TimeoutError as PlaywrightTimeout
 from .base import BasePortal
 from ..stealth_utils import human_delay, micro_delay, take_error_screenshot
 from ..form_filler import fill_form
-from ..config import schedule_ok, experience_ok, practica_ok, topic_ok
+from ..config import schedule_ok, experience_ok, practica_ok, topic_ok, contract_ok, location_score
 
 log = logging.getLogger("applyjob.chiletrabajos")
 
 BASE_URL = "https://www.chiletrabajos.cl"
 
 SEL = {
-    # Cards en el listado de búsqueda
-    "card":         "div.job-item",
-    "card_link":    "a.font-weight-bold[href*='/trabajo/']",
+    # Cards en el listado de búsqueda — múltiples variantes en caso de cambio de HTML
+    "card":         (
+        "div.job-item, "
+        "article.job-item, "
+        "li.job-item, "
+        "div[class*='job-card'], "
+        "div[class*='aviso-item'], "
+        "article[class*='aviso'], "
+        "li[class*='aviso'], "
+        "div[class*='JobItem'], "
+        "div[data-job-id], "
+        "article[data-job-id]"
+    ),
+    "card_link":    (
+        "a.font-weight-bold[href*='/trabajo/'], "
+        "a[class*='job-title'][href*='/trabajo/'], "
+        "a[class*='titulo'][href*='/trabajo/'], "
+        "h2 a[href*='/trabajo/'], "
+        "h3 a[href*='/trabajo/'], "
+        "a[href*='/trabajo/'][class*='title']"
+    ),
 
     # Título en la página de detalle
     "job_title":    "h1.job-title, h1[class*='title'], h1",
@@ -95,17 +113,11 @@ _TECH_WORDS = {
     "qa engineer", "qa analyst", "tester", "testing",
     "cloud", "aws", "azure", "gcp", "ciberseguridad", "seguridad informática",
     "infraestructura ti", "redes y telecomunicaciones",
-    # Bodega/Logística — términos compuestos para precisión
-    "operario bodega", "operario de bodega",
-    "auxiliar bodega", "auxiliar de bodega",
-    "ayudante bodega", "ayudante de bodega",
-    "bodeguero", "jefe de bodega",
-    "operador logístico", "operador logistico",
-    "auxiliar logístico", "auxiliar logistico",
-    "logística y distribución",
-    # Niveles entrada
-    "trainee", "junior", "jr.", "practicante",
-    "recién titulado", "recien titulado", "egresado",
+    # Bodega / Logística — el bot también postula a estos rubros
+    "bodega", "bodeguero", "operario de bodega", "operario bodega",
+    "auxiliar de bodega", "auxiliar bodega", "ayudante de bodega",
+    "jefe de bodega", "operador logístico", "operador logistico",
+    "auxiliar logístico", "auxiliar logistico", "picking",
 }
 
 # Palabras que indican nivel senior/dirección — se excluyen
@@ -184,10 +196,29 @@ class ChileTrabajosPortal(BasePortal):
             try:
                 page.wait_for_selector(SEL["card"], timeout=10_000)
             except PlaywrightTimeout:
-                log.warning("ChileTrabajosPortal: tiempo de espera agotado esperando tarjetas de oferta.")
+                log.warning("ChileTrabajosPortal: timeout esperando tarjetas — intentando fallback.")
 
             cards = page.query_selector_all(SEL["card"])
             log.debug("ChileTrabajos: %d cards encontradas", len(cards))
+
+            # Fallback: si no hay cards con el selector compuesto, buscar por href directo
+            if not cards:
+                log.warning("ChileTrabajos: 0 cards con selector principal — fallback a links /trabajo/")
+                print("  [ChileTrabajos] Selector de card no encontró resultados, usando fallback de links...")
+                for a in page.query_selector_all("a[href*='/trabajo/']"):
+                    try:
+                        href = a.get_attribute("href") or ""
+                        if not href.startswith("http"):
+                            href = BASE_URL + href
+                        if "/trabajo/" in href and "/postular/" not in href and href not in seen:
+                            title = (a.text_content() or "").strip()
+                            if title and self._title_ok(title):
+                                seen.add(href)
+                                urls.append(href)
+                    except Exception:
+                        continue
+                log.debug("ChileTrabajos fallback: %d URLs extraídas", len(urls))
+                return urls
 
             for card in cards:
                 try:
@@ -220,6 +251,12 @@ class ChileTrabajosPortal(BasePortal):
                         card_text = (card.text_content() or "")[:500]
                     except Exception:
                         pass
+                    # Filtro 0: ubicación — solo Santiago RM y cercanías
+                    loc_score = location_score(card_text + " " + title)
+                    if loc_score == 2:
+                        log.info("  [ct2] Descartado (ubicación fuera de RM): %s", title[:60])
+                        continue
+
                     # Filtro 1: horario (lunes a viernes AM)
                     if not schedule_ok(card_text):
                         log.info("  [ct2] Descartado (horario): %s", card_text[:80].strip())
@@ -228,6 +265,11 @@ class ChileTrabajosPortal(BasePortal):
                     # Filtro 2: experiencia (solo junior / sin experiencia)
                     if not experience_ok(title + " " + card_text):
                         log.info("  [ct2] Descartado (senior/exp): %s", title[:60])
+                        continue
+
+                    # Filtro 3: rubro off-topic (ventas, salud, guardia, etc.)
+                    if not topic_ok(title):
+                        log.debug("  [ct2] filtrada (off-topic): %s", title[:60])
                         continue
 
                     if self._title_ok(title):
@@ -287,9 +329,13 @@ class ChileTrabajosPortal(BasePortal):
                 if not experience_ok(full_text):
                     log.info("  [ct2] Descartada (senior/experiencia): '%s'", title)
                     return "skipped_experience", title
-                if not topic_ok(full_text):
+                if not topic_ok(title):
                     log.info("  [ct2] Descartada (fuera de rubro IT/bodega): '%s'", title)
                     return "skipped_topic", title
+                # Filtro de ubicación: rechazar cualquier ciudad fuera de Santiago RM
+                if location_score(full_text) == 2:
+                    log.info("  [ct2] Descartada (ubicación fuera de RM): '%s'", title)
+                    return "skipped_location", title
             except Exception:
                 pass
 

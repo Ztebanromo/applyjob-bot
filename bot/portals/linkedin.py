@@ -32,8 +32,19 @@ log = logging.getLogger("applyjob.linkedin")
 
 # Selectores LinkedIn (actualizados a 2024)
 SEL = {
-    "job_card":          "li[data-occludable-job-id], li.scaffold-layout__list-item",
-    "job_card_link":     "a.job-card-list__title--link, a.job-card-container__link",
+    "job_card":          (
+        "li[data-occludable-job-id], "
+        "li[data-job-id], "
+        "li.scaffold-layout__list-item, "
+        "li[class*='jobs-search-results__list-item'], "
+        "div[data-job-id], "
+        "div[data-occludable-job-id]"
+    ),
+    "job_card_link":     (
+        "a.job-card-list__title--link, "
+        "a.job-card-container__link, "
+        "a[href*='/jobs/view/'][class*='title']"
+    ),
     "easy_apply_btn":    ("button.jobs-apply-button--top-card, "
                           "button[aria-label*='Easy Apply'], "
                           "button[aria-label*='Solicitud sencilla'], "
@@ -63,8 +74,7 @@ MAX_MODAL_STEPS = 6
 
 # Máximo de postulaciones LinkedIn por sesión de bot
 # (para reducir la huella de automatización y evitar checkpoint)
-# Bajado a 3 — la cuenta ya recibió restricción por automatización.
-LINKEDIN_MAX_PER_SESSION = 3
+LINKEDIN_MAX_PER_SESSION = 5
 
 # Valores que indican respuesta afirmativa en dropdowns de screening
 YES_VALUES = {"yes", "si", "sí", "true", "1", "authorized", "yes, i am authorized",
@@ -123,16 +133,22 @@ class LinkedInPortal(BasePortal):
         """
         # Esperar que las cards estén en el DOM
         try:
-            page.wait_for_selector(SEL["job_card"], timeout=8_000)
+            page.wait_for_selector(SEL["job_card"], timeout=12_000)
         except PlaywrightTimeout:
             # Puede que haya un popup bloqueando — intentar cerrarlo
             self._dismiss_auth_popup(page)
-            human_delay(1.5, 2.5)
-            # Segundo intento
+            human_delay(2.0, 3.0)
+            # Segundo intento con más tiempo
             try:
-                page.wait_for_selector(SEL["job_card"], timeout=5_000)
+                page.wait_for_selector(SEL["job_card"], timeout=8_000)
             except PlaywrightTimeout:
-                pass  # get_offer_urls retornará lista vacía
+                # Tercer intento: scroll para forzar renderizado de lista virtual
+                try:
+                    page.evaluate("window.scrollTo(0, 300)")
+                    human_delay(1.0, 1.5)
+                    page.wait_for_selector(SEL["job_card"], timeout=5_000)
+                except PlaywrightTimeout:
+                    pass  # get_offer_urls retornará lista vacía
 
         # Descartar popup si está presente (aunque hayamos encontrado cards)
         self._dismiss_auth_popup(page)
