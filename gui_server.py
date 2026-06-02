@@ -227,6 +227,16 @@ class BotState:
             self.logs.append(message)
             if len(self.logs) > 2000:
                 self.logs.pop(0)
+        # Persistir en logs/bot_YYYY-MM-DD.log
+        try:
+            import datetime as _dt
+            _logs_dir = os.path.join(os.path.dirname(__file__), "logs")
+            os.makedirs(_logs_dir, exist_ok=True)
+            _log_file = os.path.join(_logs_dir, f"bot_{_dt.date.today()}.log")
+            with open(_log_file, "a", encoding="utf-8") as _f:
+                _f.write(f"[{_dt.datetime.now().strftime('%H:%M:%S')}] {message.rstrip()}\n")
+        except Exception:
+            pass
         
         # Notificar a los clientes vía SocketIO
         socketio.emit('new_log', {"message": message}, namespace='/bot')
