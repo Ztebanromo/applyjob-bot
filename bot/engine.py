@@ -1029,6 +1029,20 @@ def _ensure_login(portal_name: str, session_dir: str) -> bool:
         if _session_is_active(portal_name, session_dir):
             print(f"[SESION_INICIADA] {portal_name.upper()} - sesion activa.")
             return True
+
+        # Portales que envían verificación por email al detectar un nuevo dispositivo.
+        # Si ya hay cookies, no abrir browser aislado (dispara la verificación).
+        # Usar la sesión existente directamente; si está expirada el scan la saltea.
+        _NO_NEW_DEVICE_PORTALS = {"laborum"}
+        if portal_name in _NO_NEW_DEVICE_PORTALS:
+            print(
+                f"\n[LOGIN] {portal_name.upper()} - sesion posiblemente expirada pero "
+                f"se usa la existente para evitar verificacion por email. "
+                f"Si el bot no puede postular, usa chrome_debug.bat para reconectar.",
+                flush=True,
+            )
+            return True
+
         print(f"\n[LOGIN_REQUERIDO] {portal_name.upper()} - sesion expirada. Abre el browser que aparece.", flush=True)
 
     attempt = 0
