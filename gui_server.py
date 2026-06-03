@@ -1083,6 +1083,76 @@ def api_import_all_sessions():
     })
 
 
+@app.route('/api/cdp-debug/<portal>', methods=['GET'])
+def api_cdp_debug(portal: str):
+    """
+    Navega al verify_url del portal en el Chrome CDP y devuelve:
+    - URL actual, título, selectores positivos/negativos visibles.
+    Útil para diagnosticar por qué un portal muestra 'expired'.
+    """
+    from bot.chrome_cdp import is_port_open
+    from bot.chrome_cdp import connect as cdp_connect
+    from bot.chrome_cdp import new_page
+    from bot.session_config import (
+        VERIFY_URLS, LOGGED_IN_SIGNALS, NOT_LOGGED_IN_SIGNALS,
+    )
+
+    if portal not in VERIFY_URLS:
+        return jsonify({'error': f'Portal {portal!r} no configurado'}), 400
+
+    if not is_port_open():
+        return jsonify({'error': 'CDP no disponible — ejecutá chrome_debug.bat'}), 503
+
+    if not cdp_connect():
+        return jsonify({'error': 'No se pudo conectar a CDP'}), 503
+
+    page = new_page()
+    if page is None:
+        return jsonify({'error': 'No se pudo abrir pestaña CDP'}), 503
+
+    result: dict = {'portal': portal}
+    try:
+        verify_url = VERIFY_URLS[portal]
+        page.goto(verify_url, wait_until='domcontentloaded', timeout=20_000)
+        page.wait_for_timeout(2500)
+
+        result['url']   = page.url
+        result['title'] = page.title()
+
+        pos_visible, neg_visible = [], []
+        for sel in LOGGED_IN_SIGNALS.get(portal, []):
+            try:
+                el = page.query_selector(sel)
+                if el and el.is_visible():
+                    pos_visible.append(sel)
+            except Exception:
+                pass
+        for sel in NOT_LOGGED_IN_SIGNALS.get(portal, []):
+            try:
+                el = page.query_selector(sel)
+                if el and el.is_visible():
+                    neg_visible.append(sel)
+            except Exception:
+                pass
+
+        result['positive_visible'] = pos_visible
+        result['negative_visible'] = neg_visible
+        result['verdict'] = (
+            'ok' if pos_visible and not neg_visible
+            else 'expired' if neg_visible
+            else 'unknown'
+        )
+    except Exception as exc:
+        result['error'] = str(exc)
+    finally:
+        try:
+            page.close()
+        except Exception:
+            pass
+
+    return jsonify(result)
+
+
 @app.route('/api/check-sessions', methods=['POST'])
 def api_check_sessions():
     """
