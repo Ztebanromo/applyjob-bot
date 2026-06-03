@@ -86,6 +86,11 @@
                 background:linear-gradient(135deg,#065f46,#10b981);color:white;border:none;border-radius:7px;padding:0.35rem 0.9rem;font-size:0.78rem;cursor:pointer;font-weight:600;">
                 ✅ Verificar sesiones
             </button>
+            <button id="cdp-import-btn" onclick="importAllSessions()" style="display:none;
+                background:linear-gradient(135deg,#1d4ed8,#2563eb);color:#fff;border:none;
+                border-radius:7px;padding:0.35rem 0.9rem;font-size:0.78rem;font-weight:600;cursor:pointer;margin-top:0.3rem;width:100%;">
+                💾 Guardar sesiones del bot
+            </button>
         </div>
         <div style="margin-top:0.6rem;font-size:0.68rem;color:#4b5563;">
             🔒 Seguro: CDP solo escucha en 127.0.0.1 (tu máquina)
@@ -2726,6 +2731,7 @@
             const connectBtn    = document.getElementById('cdp-connect-btn');
             const disconnectBtn = document.getElementById('cdp-disconnect-btn');
             const verifyBtn     = document.getElementById('cdp-verify-btn');
+            const importBtn     = document.getElementById('cdp-import-btn');
 
             if (data.connected) {
                 pill.style.background = 'linear-gradient(135deg,rgba(16,185,129,0.2),rgba(5,150,105,0.15))';
@@ -2739,6 +2745,7 @@
                 connectBtn.style.display = 'none';
                 disconnectBtn.style.display = '';
                 verifyBtn.style.display = '';
+                if (importBtn) importBtn.style.display = '';
             } else if (data.port_open) {
                 pill.style.background = 'rgba(251,191,36,0.12)';
                 pill.style.borderColor = 'rgba(251,191,36,0.4)';
@@ -2750,6 +2757,7 @@
                 connectBtn.style.display = '';
                 disconnectBtn.style.display = 'none';
                 verifyBtn.style.display = 'none';
+                if (importBtn) importBtn.style.display = 'none';
             } else {
                 pill.style.background = 'rgba(255,255,255,0.05)';
                 pill.style.borderColor = 'rgba(255,255,255,0.12)';
@@ -2761,6 +2769,7 @@
                 connectBtn.style.display = '';
                 disconnectBtn.style.display = 'none';
                 verifyBtn.style.display = 'none';
+                if (importBtn) importBtn.style.display = 'none';
             }
         }
 
@@ -2831,6 +2840,32 @@
                 appendLogLine('[CDP] ❌ ' + e.message);
             } finally {
                 btn.disabled = false; btn.innerText = '✅ Verificar sesiones';
+            }
+        }
+
+        async function importAllSessions() {
+            const btn = document.getElementById('cdp-import-btn');
+            btn.disabled = true;
+            btn.textContent = '⏳ Importando...';
+            try {
+                const res = await fetch('/api/import-all-sessions', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({}),
+                });
+                const data = await res.json();
+                if (data.ok) {
+                    appendLogLine(`[SESIONES] ${data.msg}`);
+                    btn.textContent = `✅ ${data.msg}`;
+                    setTimeout(() => { btn.textContent = '💾 Guardar sesiones del bot'; btn.disabled = false; }, 4000);
+                } else {
+                    appendLogLine(`[SESIONES] Error: ${data.msg}`);
+                    btn.textContent = '❌ Error — ejecutá chrome_debug.bat';
+                    setTimeout(() => { btn.textContent = '💾 Guardar sesiones del bot'; btn.disabled = false; }, 3000);
+                }
+            } catch(e) {
+                btn.textContent = '❌ Error de red';
+                setTimeout(() => { btn.textContent = '💾 Guardar sesiones del bot'; btn.disabled = false; }, 3000);
             }
         }
 

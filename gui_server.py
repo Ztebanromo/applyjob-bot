@@ -666,6 +666,15 @@ def run_bot_thread(portals, runtime_env=None):
             state.add_log(f"\n[FALLO] Error crítico en ejecución: {str(e)}\n")
     finally:
         state.add_log("\n[SISTEMA] Ejecución maestra finalizada.\n")
+        # Auto-save sesiones CDP si está conectado
+        try:
+            from bot.chrome_cdp import save_all_sessions
+            _saved = save_all_sessions()
+            _n = sum(1 for v in _saved.values() if v > 0)
+            if _n:
+                state.add_log(f"\n[SESIONES] Auto-save: {_n} portales guardados desde Chrome.\n")
+        except Exception:
+            pass
         if state.finish_run(run_id):
             socketio.emit('bot_status', state.get_status() | {"status": "finished"}, namespace='/bot')
             socketio.emit('session_status', get_session_status(), namespace='/bot')

@@ -36,7 +36,8 @@ def _read_locked_file_windows(path: Path) -> bytes | None:
     if sys.platform != "win32":
         return None
     try:
-        import ctypes, ctypes.wintypes
+        import ctypes
+        import ctypes.wintypes
         GENERIC_READ          = 0x80000000
         FILE_SHARE_READ       = 0x00000001
         FILE_SHARE_WRITE      = 0x00000002
