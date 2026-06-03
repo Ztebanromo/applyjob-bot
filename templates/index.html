@@ -267,44 +267,29 @@
             <div
                 style="display:flex; align-items:center; justify-content:space-between; gap:0.5rem; margin-bottom:0.6rem;">
                 <h2 style="margin-bottom:0;">🚀 Control Maestro</h2>
-                <div style="display:flex; gap:0.4rem;">
-                    <button type="button" class="toolbar-btn" id="selectAllPortalsBtn" style="background:rgba(255,255,255,0.12);">Todos</button>
-                    <button type="button" class="toolbar-btn" id="clearPortalsBtn" style="background:rgba(255,255,255,0.12);">Limpiar</button>
+                <div style="display:flex; gap:0.4rem; align-items:center;">
+                    <button type="button" class="toolbar-btn" id="selectAllPortalsBtn"
+                        style="background:rgba(255,255,255,0.10);font-size:0.72rem;padding:0.3rem 0.6rem;">Todos</button>
+                    <button type="button" class="toolbar-btn" id="clearPortalsBtn"
+                        style="background:rgba(255,255,255,0.10);font-size:0.72rem;padding:0.3rem 0.6rem;">Ninguno</button>
+                    <div style="width:1px;height:20px;background:rgba(255,255,255,0.15);margin:0 2px;"></div>
                     <button type="button" class="toolbar-btn" id="verifySessionsBtn"
-                        onclick="verifySessions()"
+                        onclick="verifyAndLogin()"
                         style="background:linear-gradient(160deg,#0e7490,#06b6d4);"
-                        title="Verificar: chequea sin abrir ventana si las sesiones siguen activas (browser invisible)">
+                        title="Verifica sesiones — si alguna expiró, abre el browser para re-loguear">
                         🔐 Verificar
-                    </button>
-                    <button type="button" class="toolbar-btn" id="loginPortalsBtn"
-                        onclick="loginPortals()"
-                        style="background:linear-gradient(160deg,#15803d,#22c55e);"
-                        title="Loguear: abre browser visible por portal. Si la sesion sigue activa cierra solo en segundos. Si expiro, espera que inicies sesion.">
-                        🔑 Loguear
                     </button>
                     <button type="button" class="toolbar-btn" id="importChromeBtn"
                         onclick="importFromChrome()"
                         style="background:linear-gradient(160deg,#1d4ed8,#3b82f6);"
-                        title="Importar cookies del Chrome real — útil para LinkedIn y portales con anti-bot">
-                        📥 Desde Chrome
-                    </button>
-                    <button type="button" class="toolbar-btn" id="resetSessionsBtn"
-                        onclick="resetSessions()"
-                        style="background:linear-gradient(160deg,#b45309,#f59e0b);"
-                        title="Re-login: borra TODAS las cookies — fuerza loguear de cero en todos los portales">
-                        🗝 Re-login
+                        title="Guarda las sesiones del bot Chrome al bot — hacé login en el Chrome del bot primero">
+                        💾 Guardar
                     </button>
                     <button type="button" class="toolbar-btn" id="resetAllBtn"
                         onclick="resetAll()"
                         style="background:linear-gradient(160deg,#991b1b,#ef4444);"
                         title="Limpia colas, estadísticas y deja todo en cero">
                         🗑 Reset
-                    </button>
-                    <button type="button" class="toolbar-btn" id="limpiarTodoBtn"
-                        onclick="limpiarTodo()"
-                        style="background:linear-gradient(160deg,#4c0519,#be123c);border:1px solid #fb7185;"
-                        title="Limpieza total: sesiones + scan + quick links + preguntas + logs">
-                        💣 Limpiar todo
                     </button>
                 </div>
             </div>
@@ -2413,6 +2398,63 @@
         };
 
         // ── Reset completo ────────────────────────────────────────────────────
+        async function verifyAndLogin() {
+            const btn = document.getElementById('verifySessionsBtn');
+            if (btn.disabled) return;
+            btn.disabled = true;
+            btn.innerText = '⏳ Verificando...';
+
+            const loginPortalsList = ['linkedin','computrabajo','laborum','trabajando','chiletrabajos','getonyboard'];
+
+            // Poner dots en amarillo
+            for (const p of loginPortalsList) {
+                const dot = document.getElementById(`session-${p}`);
+                const ps  = document.getElementById(`ps-${p}`);
+                if (dot) { dot.style.animation='pulse 0.8s infinite'; dot.style.background='#ffee00'; dot.title='Verificando...'; }
+                if (ps)  ps.innerText = 'Verificando...';
+            }
+
+            try {
+                // 1. Verificar
+                const res  = await fetch('/api/check-sessions', {
+                    method:'POST', headers:{'Content-Type':'application/json'},
+                    body: JSON.stringify({ portals: loginPortalsList })
+                });
+                const data = await res.json();
+                window._sessionVerifyResults = data;
+
+                const expired   = Object.entries(data).filter(([,v]) => v === 'expired').map(([k]) => k);
+                const noCookies = Object.entries(data).filter(([,v]) => v === 'no_cookies').map(([k]) => k);
+                const ok        = Object.entries(data).filter(([,v]) => v === 'ok').map(([k]) => k);
+                const bad       = [...expired, ...noCookies];
+
+                appendLogLine(`[SESIONES] OK: ${ok.join(', ')||'ninguna'} | Expiradas: ${bad.join(', ')||'ninguna'}`);
+
+                Object.entries(data).forEach(([p, r]) => { sessionCache[p] = (r === 'ok'); });
+                if (bad.length > 0) setOps(opsSessions, `${bad.length} sin sesión`, 'warn');
+                else if (ok.length > 0) setOps(opsSessions, `${ok.length} activas ✓`, 'ok');
+
+                // 2. Si hay expiradas → abrir login automáticamente
+                if (bad.length > 0) {
+                    btn.innerText = '🔑 Logueando...';
+                    appendLogLine(`[LOGIN] Abriendo browser para: ${bad.join(', ')} — iniciá sesión en las ventanas que aparezcan.`);
+                    try {
+                        await fetch('/api/login-portals', {
+                            method:'POST', headers:{'Content-Type':'application/json'},
+                            body: JSON.stringify({ portals: bad })
+                        });
+                    } catch(e) {
+                        appendLogLine('[LOGIN] Error al abrir login: ' + e.message);
+                    }
+                }
+            } catch(e) {
+                appendLogLine('[VERIFICAR] Error: ' + e.message);
+            } finally {
+                btn.disabled = false;
+                btn.innerText = '🔐 Verificar';
+            }
+        }
+
         async function verifySessions() {
             const btn = document.getElementById('verifySessionsBtn');
             if (btn.disabled) return;
