@@ -583,9 +583,10 @@ input:focus, textarea:focus, select:focus {
 .portal-item.disabled-hint { opacity: 0.3; }
 
 .portal-item input[type="checkbox"] {
-    width: 12px; height: 12px;
+    width: 15px; height: 15px;
     accent-color: var(--violet);
     flex-shrink: 0; cursor: pointer;
+    border-radius: 4px;
 }
 
 .portal-name {
@@ -638,7 +639,7 @@ input:focus, textarea:focus, select:focus {
     flex-shrink: 0;
 }
 
-.portal-checkbox { display: none; }
+.portal-checkbox { display: inline-block; }
 
 /* ── Session Dot ────────────────────────────────────────── */
 .session-dot {

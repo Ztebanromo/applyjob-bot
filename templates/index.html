@@ -551,6 +551,15 @@
                 const item = document.createElement('div');
                 item.className = 'portal-item' + (isDefault ? '' : ' disabled-hint');
                 item.id = `p-${portal}`;
+                item.style.cursor = 'pointer';
+                item.title = 'Click para marcar/desmarcar';
+                item.onclick = (e) => {
+                    if (e.target.tagName === 'A' || e.target.tagName === 'INPUT') return;
+                    const cb = item.querySelector('.portal-checkbox');
+                    cb.checked = !cb.checked;
+                    item.classList.toggle('disabled-hint', !cb.checked);
+                    refreshSessionSummary();
+                };
                 const portalUrl = PORTAL_URLS[portal] || '#';
                 item.innerHTML = `
                     <div style="display:flex; align-items:center; gap:8px;">
