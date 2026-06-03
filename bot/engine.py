@@ -1058,7 +1058,7 @@ def _ensure_login(portal_name: str, session_dir: str) -> bool:
         ok = _open_browser_for_manual_login(
             portal_name              = portal_name,
             session_dir              = session_dir,
-            timeout_seconds          = 60,
+            timeout_seconds          = 300,  # mantener la ventana abierta más tiempo antes de reintentar
             session_confirmed_inactive = True,
         )
         if ok:
@@ -1147,7 +1147,17 @@ def _wait_for_login_if_needed(page, portal_name: str, config: dict) -> None:
     # Portales con requires_login necesitan que el DOM esté completo para
     # detectar correctamente si el botón de login o el avatar del usuario aparece.
     # getonyboard: requires_login=True → verificar sesión LinkedIn guardada antes de postular.
-    _PORTALS_FORCE_LOGIN = ("indeed", "laborum", "linkedin", "chiletrabajos", "computrabajo", "getonyboard")
+    # Portales que siempre requieren login — EXCEPTO los que usan bypass de email-verification
+    # (para esos portales el bot acepta sesión posiblemente expirada y continúa)
+    _NO_NEW_DEVICE_PORTALS = {"laborum"}
+    if portal_name in _NO_NEW_DEVICE_PORTALS:
+        # Ya verificamos en _ensure_login — si la sesión expiró, continuar igual
+        if not _is_logged_in():
+            log.warning("[PRE-FLIGHT] %s: sesion posiblemente expirada (bypass activo) — continuando.", portal_name)
+            print(f"[PRE-FLIGHT] {portal_name.upper()}: sesion posiblemente expirada. "
+                  "Si el bot no puede postular, corré chrome_debug.bat y guardá las sesiones.")
+        return
+    _PORTALS_FORCE_LOGIN = ("indeed", "linkedin", "chiletrabajos", "computrabajo", "getonyboard")
     try:
         page.wait_for_load_state("domcontentloaded", timeout=5_000)
         page.wait_for_function("() => document.readyState === 'complete'", timeout=5_000)
@@ -2918,6 +2928,15 @@ def run_bot_multi_keywords(
         _bodega_groups = [g for g in active_groups if g.get("mode") == "bodega"]
         _other_groups  = [g for g in active_groups if g.get("mode") not in ("it", "bodega")]
         if _it_groups and _bodega_groups:
+            # Si no se definieron límites por modo, asignar 50/50 automático
+            if not _mode_max:
+                _half_it = _effective_max // 2
+                _mode_max["it"] = _half_it
+                _mode_max["bodega"] = _effective_max - _half_it
+                print(
+                    f"[MODO_BALANCE] Asignando {_mode_max['it']} IT y {_mode_max['bodega']} BODEGA "
+                    f"del total {_effective_max} porque ambas categorías están activas."
+                )
             # Shuffle IT para rotar keywords cada ciclo (evita usar siempre los mismos 5)
             import random as _rnd
             _rnd.shuffle(_it_groups)
