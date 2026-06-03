@@ -101,7 +101,8 @@ def test_check_session_login_redirect_expired(mocker):
     mock_pw, _, mock_pg = _make_playwright_ctx(
         url="https://www.linkedin.com/login?session_redirect=..."
     )
-    with patch("bot.session_checker.sync_playwright", return_value=mock_pw):
+    with patch("bot.chrome_cdp.is_port_open", return_value=False), \
+         patch("bot.session_checker.sync_playwright", return_value=mock_pw):
         result = check_session("linkedin", session)
     assert result == SessionResult.EXPIRED
 

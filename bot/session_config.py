@@ -36,6 +36,7 @@ LOGIN_URLS: dict[str, str] = {
 # Priorizar elementos en el header principal, NO dentro de dropdowns colapsados.
 LOGGED_IN_SIGNALS: dict[str, list[str]] = {
     "linkedin": [
+        "img[class*='EntityPhoto']",
         "img.global-nav__me-photo",
         "div.global-nav__me-photo",
         "img[class*='global-nav__me']",
