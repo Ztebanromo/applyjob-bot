@@ -11,7 +11,7 @@ VERIFY_URLS: dict[str, str] = {
     "linkedin":      "https://www.linkedin.com/feed",
     "computrabajo":  "https://cl.computrabajo.com/",
     "laborum":       "https://www.laborum.cl/",
-    "trabajando":    "https://www.trabajando.cl/mi-cuenta",
+    "trabajando":    "https://www.trabajando.cl/",
     "infojobs":      "https://www.infojobs.net/candidato/mi-perfil",
     "chiletrabajos": "https://www.chiletrabajos.cl/",
     "getonyboard":   "https://www.getonbrd.com",
@@ -58,13 +58,12 @@ LOGGED_IN_SIGNALS: dict[str, list[str]] = {
         "a[href*='/postulantes']",
     ],
     "trabajando": [
-        # Nuxt SPA: solo aparece cuando está logueado
+        "[class*='header-logged']",
+        "[class*='logged-menu']",
+        "[class*='profile'][class*='position-relative']",
         "div.menuLogueadoMovil",
         "[class*='menuLogueado']",
         "a[href*='/mi-cv']",
-        "a[href*='/mi-cuenta']",
-        "[class*='user-menu']",
-        "[data-testid*='user']",
     ],
     "infojobs": [
         "[class*='UserMenu']",
