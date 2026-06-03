@@ -254,6 +254,7 @@ SITE_CONFIG = {
         "max_offers_per_run":        30,
         "max_pages":                 4,
         "requires_login":            True,
+        "enabled":                   False,
     },
 }
 

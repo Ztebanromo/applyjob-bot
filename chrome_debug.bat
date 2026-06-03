@@ -31,7 +31,6 @@ start "ApplyJobBot-Chrome" %CHROME% ^
   "https://cl.computrabajo.com" ^
   "https://www.laborum.cl" ^
   "https://www.trabajando.cl" ^
-  "https://www.infojobs.net" ^
   "https://www.getonbrd.com/auth/sign_in"
 
 echo  Chrome iniciado. Cuando termines los logins, vuelve al dashboard
