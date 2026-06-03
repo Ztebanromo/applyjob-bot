@@ -12,7 +12,7 @@ VERIFY_URLS: dict[str, str] = {
     "computrabajo":  "https://cl.computrabajo.com/",
     "laborum":       "https://www.laborum.cl/",
     "trabajando":    "https://www.trabajando.cl/",
-    "infojobs":      "https://www.infojobs.net/candidato/mi-perfil",
+    "infojobs":      "https://www.infojobs.net/",
     "chiletrabajos": "https://www.chiletrabajos.cl/",
     "getonyboard":   "https://www.getonbrd.com",
     "indeed":        "https://cl.indeed.com/account/login",
@@ -67,12 +67,12 @@ LOGGED_IN_SIGNALS: dict[str, list[str]] = {
         "a[href*='/mi-cv']",
     ],
     "infojobs": [
+        "[class*='ij-HeaderDesktop-navbar-avatar']",
+        "a[href*='my-infojobs']",
+        "a[href*='/candidate/applications']",
+        "a[href*='/candidate/cv']",
         "[class*='UserMenu']",
         "[class*='navbar-user']",
-        "[data-testid='user-menu']",
-        "a[href*='/candidato/mis-candidaturas']",
-        "a[href*='/candidato/mi-perfil']",
-        "img[alt*='avatar' i]",
     ],
     "chiletrabajos": [
         # Confirmado con DOM dump: div.logged presente cuando autenticado
