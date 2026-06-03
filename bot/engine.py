@@ -2918,6 +2918,9 @@ def run_bot_multi_keywords(
         _bodega_groups = [g for g in active_groups if g.get("mode") == "bodega"]
         _other_groups  = [g for g in active_groups if g.get("mode") not in ("it", "bodega")]
         if _it_groups and _bodega_groups:
+            # Shuffle IT para rotar keywords cada ciclo (evita usar siempre los mismos 5)
+            import random as _rnd
+            _rnd.shuffle(_it_groups)
             # Intercalar: it[0], bodega[0], it[1], bodega[1], ...
             _interleaved = []
             for i in range(max(len(_it_groups), len(_bodega_groups))):
@@ -2926,7 +2929,7 @@ def run_bot_multi_keywords(
                 if i < len(_bodega_groups):
                     _interleaved.append(_bodega_groups[i])
             active_groups = _interleaved + _other_groups
-            print(f"[CICLO] Modo alternado: {len(_it_groups)} IT + {len(_bodega_groups)} bodega → intercalados")
+            print(f"[CICLO] Modo alternado (IT shuffled): {len(_it_groups)} IT + {len(_bodega_groups)} bodega intercalados")
         print(f"\n[KEYWORDS] {len(active_groups)} keywords activas para {portal_name.upper()}")
 
         # ── Tiempo por keyword dinámico ────────────────────────────────────────

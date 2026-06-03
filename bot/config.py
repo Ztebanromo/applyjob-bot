@@ -830,6 +830,11 @@ KEYWORD_GROUPS = [
     _bodega("auxiliar bodega sin experiencia"),
     _bodega("bodeguero sin experiencia"),
     _bodega("auxiliar picking sin experiencia"),
+    _bodega("auxiliar logistica sin experiencia"),
+    _bodega("operario bodega sin experiencia"),
+    _bodega("bodeguero"),
+    _bodega("auxiliar de bodega"),
+    _bodega("operario logistica"),
 
     # ── Términos más buscados en portales chilenos (sin "junior" — más resultados) ──
     {"keyword": "tecnico informatico",     "label": "Analista", "mode": "it"},
