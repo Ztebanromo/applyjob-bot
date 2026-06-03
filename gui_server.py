@@ -1923,29 +1923,6 @@ def api_answer_question():
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
-@app.route('/api/ai-answer-pending', methods=['POST'])
-def api_ai_answer_pending():
-    """
-    Usa la API de Anthropic para responder preguntas pendientes automáticamente.
-    Requiere ANTHROPIC_API_KEY en .env.
-    """
-    api_key = os.getenv("ANTHROPIC_API_KEY", "").strip()
-    if not api_key:
-        return jsonify({
-            'ok': False,
-            'msg': 'ANTHROPIC_API_KEY no configurada en .env',
-            'answered': 0,
-        }), 503
-    try:
-        from bot.ai_answerer import answer_pending_questions
-        answered = answer_pending_questions()
-        msg = f"{len(answered)} preguntas respondidas por IA." if answered else "Sin preguntas pendientes."
-        state.add_log(f"\n[AI] {msg}\n")
-        return jsonify({'ok': True, 'msg': msg, 'answered': len(answered), 'details': answered})
-    except Exception as e:
-        return jsonify({'ok': False, 'error': str(e)}), 500
-
-
 @app.route('/api/save-qa', methods=['POST'])
 def api_save_qa():
     """Guarda directamente una respuesta en question_answers.json (sin necesitar pending list)."""

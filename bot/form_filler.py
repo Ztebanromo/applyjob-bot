@@ -395,15 +395,6 @@ def _auto_answer(label: str, profile: dict) -> Optional[str]:
         # General / IT → usar el cover_letter del perfil (es específico y profesional)
         return profile.get("cover_letter", "")
 
-    # Sin patrón reconocido → intentar con la API de Anthropic (si está configurada)
-    try:
-        from bot.ai_answerer import auto_answer as _ai_answer
-        ai_resp = _ai_answer(label, job_title=profile.get("_job_title", ""))
-        if ai_resp:
-            return ai_resp
-    except Exception:
-        pass
-
     return None
 
 
