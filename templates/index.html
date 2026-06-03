@@ -1089,6 +1089,31 @@
             }
         });
 
+        function _applySessionStatus(portal, result) {
+            // result: true/false (cookie exists) o string 'ok'/'expired'/'no_cookies'
+            const isOk = result === true || result === 'ok';
+            const dot    = document.getElementById(`session-${portal}`);
+            const status = document.getElementById(`ps-${portal}`);
+            if (dot) {
+                dot.classList.toggle('active', isOk);
+                dot.classList.toggle('missing', !isOk);
+                dot.style.animation = '';
+                dot.title = isOk ? 'Sesión activa' : 'Sin sesión activa';
+            }
+            if (status) {
+                if (isOk) {
+                    status.innerText = 'Sesión activa';
+                    status.style.color = 'var(--green)';
+                } else if (result === 'expired') {
+                    status.innerText = 'Sesión expirada';
+                    status.style.color = '#f87171';
+                } else {
+                    status.innerText = 'Puede pedir login';
+                    status.style.color = 'var(--orange)';
+                }
+            }
+        }
+
         socket.on('session_status', (data) => {
             sessionCache = data || {};
             const selected = Array.from(document.querySelectorAll('.portal-checkbox:checked')).map(cb => cb.value);
@@ -1099,22 +1124,7 @@
                 setOps(opsSessions, selected.length ? 'Seleccionadas listas' : 'Sin portales seleccionados', selected.length ? 'ok' : 'warn');
             }
             for (const [portal, hasSession] of Object.entries(data)) {
-                const dot = document.getElementById(`session-${portal}`);
-                if (dot) {
-                    dot.classList.toggle('active', hasSession);
-                    dot.classList.toggle('missing', !hasSession);
-                    dot.title = hasSession ? 'Sesión guardada' : 'Sin sesión guardada; puede pedir login';
-                }
-                const status = document.getElementById(`ps-${portal}`);
-                if (status && status.innerText === 'Pendiente') {
-                    if (hasSession) {
-                        status.innerText = 'Sesión guardada';
-                        status.style.color = 'var(--green)';
-                    } else {
-                        status.innerText = 'Puede pedir login';
-                        status.style.color = 'var(--orange)';
-                    }
-                }
+                _applySessionStatus(portal, hasSession);
             }
         });
 
@@ -2428,9 +2438,13 @@
                 const ok        = Object.entries(data).filter(([,v]) => v === 'ok').map(([k]) => k);
                 const bad       = [...expired, ...noCookies];
 
-                appendLogLine(`[SESIONES] OK: ${ok.join(', ')||'ninguna'} | Expiradas: ${bad.join(', ')||'ninguna'}`);
+                appendLogLine(`[SESIONES] Activas: ${ok.join(', ')||'ninguna'} | Sin sesión: ${bad.join(', ')||'ninguna'}`);
 
-                Object.entries(data).forEach(([p, r]) => { sessionCache[p] = (r === 'ok'); });
+                // Actualizar cards con resultado real de verificación
+                Object.entries(data).forEach(([p, r]) => {
+                    sessionCache[p] = (r === 'ok');
+                    _applySessionStatus(p, r);
+                });
                 if (bad.length > 0) setOps(opsSessions, `${bad.length} sin sesión`, 'warn');
                 else if (ok.length > 0) setOps(opsSessions, `${ok.length} activas ✓`, 'ok');
 
