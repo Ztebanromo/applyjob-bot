@@ -2414,7 +2414,10 @@
             btn.disabled = true;
             btn.innerText = '⏳ Verificando...';
 
-            const loginPortalsList = ['linkedin','computrabajo','laborum','trabajando','chiletrabajos','getonyboard'];
+            // Usar portales seleccionados; si ninguno está chequeado, verificar todos
+            const ALL_LOGIN = ['linkedin','computrabajo','laborum','trabajando','chiletrabajos','getonyboard'];
+            const checked = Array.from(document.querySelectorAll('.portal-checkbox:checked')).map(c => c.value).filter(Boolean);
+            const loginPortalsList = checked.length > 0 ? checked.filter(p => ALL_LOGIN.includes(p)) : ALL_LOGIN;
 
             // Poner dots en amarillo
             for (const p of loginPortalsList) {
