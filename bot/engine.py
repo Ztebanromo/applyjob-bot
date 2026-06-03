@@ -2865,6 +2865,20 @@ def run_bot_multi_keywords(
         _env_max_str = os.getenv("USER_MAX_OFFERS", "").strip()
         _effective_max = (int(_env_max_str) if _env_max_str.isdigit()
                           else SITE_CONFIG.get(portal_name, {}).get("max_offers_per_run", 5))
+
+        # Límites por modo (IT / Bodega). Si no están definidos se usa _effective_max sin distinción.
+        _env_max_it  = os.getenv("USER_MAX_IT", "").strip()
+        _env_max_bod = os.getenv("USER_MAX_BODEGA", "").strip()
+        _mode_max: dict[str, int] = {}
+        if _env_max_it.isdigit():
+            _mode_max["it"] = int(_env_max_it)
+        if _env_max_bod.isdigit():
+            _mode_max["bodega"] = int(_env_max_bod)
+        # Si se define al menos uno, el total efectivo es la suma de los modos definidos
+        if _mode_max:
+            _effective_max = sum(_mode_max.values())
+        _mode_applied: dict[str, int] = {}   # aplicadas por modo en esta sesión
+
         _session_verified = False  # Se activa tras el primer pre-flight exitoso
         _kw_count_for_stats = 0    # contador de keywords procesados en esta sesión
         _found_count_for_stats = 0 # contador de ofertas encontradas en esta sesión
@@ -2990,6 +3004,15 @@ def run_bot_multi_keywords(
                     print(f"  [SKIP] '{keyword}' omitido en {portal_name.upper()} (plataforma tech-only)")
                     continue
 
+                # Verificar límite por modo (IT / Bodega) si está configurado
+                if mode in _mode_max:
+                    _mode_done = _mode_applied.get(mode, 0)
+                    _mode_limit = _mode_max[mode]
+                    if _mode_done >= _mode_limit:
+                        log.debug("[MODO] %s: límite %s alcanzado (%d/%d). Saltando keyword '%s'.",
+                                  portal_name, mode.upper(), _mode_done, _mode_limit, keyword)
+                        continue
+
                 config  = build_config_for_keyword(portal_name, keyword)
                 profile = dict(USER_PROFILE)
                 profile["_mode"] = mode
@@ -3002,6 +3025,10 @@ def run_bot_multi_keywords(
                     print(f"  [LIMITE_PORTAL] Limite global {_effective_max} alcanzado. "
                           f"Saltando keyword '{keyword}'.")
                     break
+                # Limitar también por presupuesto del modo
+                if mode in _mode_max:
+                    _remaining_mode = max(0, _mode_max[mode] - _mode_applied.get(mode, 0))
+                    max_offers = min(max_offers, _remaining_mode)
                 max_offers = min(max_offers, _remaining_budget)
 
                 PortalClass    = PORTAL_REGISTRY.get(portal_name)
@@ -3198,6 +3225,7 @@ def run_bot_multi_keywords(
                     break
                 # _session_verified queda False → pre-flight verifica login antes de cada keyword
                 total_applied += applied
+                _mode_applied[mode] = _mode_applied.get(mode, 0) + applied
                 _kw_count_for_stats  += 1
                 _found_count_for_stats += len(seen_titles) if seen_titles else 0
 
@@ -3205,8 +3233,13 @@ def run_bot_multi_keywords(
                     print(f"\n[AVISO] '{keyword}': 0 postulaciones - filtradas o ya en DB.")
                 print(f"\n[PORTAL_FINALIZADO] --- KEYWORD '{keyword}': {applied} postulaciones ---")
 
-                # Emitir progreso acumulado contra el límite efectivo de la sesión
-                print(f"  [PROGRESO] Aplicadas {total_applied}/{_effective_max} en {portal_name.upper()}")
+                # Emitir progreso por modo y total
+                _mode_progress = " | ".join(
+                    f"{m.upper()} {_mode_applied.get(m,0)}/{_mode_max[m]}"
+                    for m in _mode_max
+                )
+                _progress_str = f"{_mode_progress} | Total {total_applied}/{_effective_max}" if _mode_progress else f"Total {total_applied}/{_effective_max}"
+                print(f"  [PROGRESO] {_progress_str} en {portal_name.upper()}")
 
                 # Cortar keywords si ya alcanzamos el límite global de la sesión
                 if total_applied >= _effective_max:
