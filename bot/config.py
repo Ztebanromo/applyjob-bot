@@ -179,11 +179,11 @@ SITE_CONFIG = {
     },
     "remotive": {
         # Directorio curado 100% remoto, fuerte en IT/Dev/QA.
-        # Next.js SSR — espera networkidle antes de extraer cards.
-        # Categorías: /remote-jobs/software-dev  /remote-jobs/qa  /remote-jobs/devops-sysadmin
-        "url_busqueda":              "https://remotive.com/remote-jobs/software-dev?query=junior+developer",
-        "selector_oferta":           "li[data-id] a, a[href*='/remote-jobs/software-dev/']",
-        "selector_boton_aplicar":    "a:has-text('Apply for this job'), a:has-text('Apply Now')",
+        # URL 2025: /remote-jobs/software-development (slug cambió de software-dev)
+        # Selectores actualizados: li.tw-cursor-pointer + a.remotive-url-visit
+        "url_busqueda":              "https://remotive.com/remote-jobs/software-development",
+        "selector_oferta":           "li.tw-cursor-pointer a.remotive-url-visit, a[class*='remotive-url-visit']",
+        "selector_boton_aplicar":    "a:has-text('Apply for this job'), a:has-text('Apply Now'), a[class*='apply']",
         "selector_siguiente_pagina": None,   # scroll infinito en SPA — una sola página
         "selector_titulo_oferta":    "h1",
         "tipo_postulacion":          "externa",
@@ -210,16 +210,15 @@ SITE_CONFIG = {
     },
     "trabajando": {
         # Trabajando.cl — portal laboral chileno.
-        # Soporta formulario interno y redirección externa al empleador.
-        # Curriculum en: https://www.trabajando.cl/mi-curriculum#/
+        # URL nueva (2025): /trabajo-empleo/{keyword-slug}
+        # Selectores actualizados: las ofertas usan href con /trabajo-empleo/.../trabajo/{id}
         "url_busqueda": (
-            f"https://www.trabajando.cl/empleos?s={ENCODED_KEYWORDS}"
-            f"&region=13&orden=fecha"
+            f"https://www.trabajando.cl/trabajo-empleo/{SHORT_DASH_KEYWORDS}"
         ),
-        "selector_oferta":           "a.aviso-titulo, a[href*='/empleos/'], div.aviso-item a",
-        "selector_boton_aplicar":    "a:has-text('Postular'), button:has-text('Postular')",
-        "selector_siguiente_pagina": "a[rel='next'], a.next-page, a[aria-label='Siguiente']",
-        "selector_titulo_oferta":    "h1.aviso-titulo, h1",
+        "selector_oferta":           "a[href*='/trabajo-empleo/'][href*='/trabajo/']",
+        "selector_boton_aplicar":    "a:has-text('Postular'), button:has-text('Postular'), a.btn-postular",
+        "selector_siguiente_pagina": "a[rel='next'], a[aria-label='Siguiente'], li.next a",
+        "selector_titulo_oferta":    "h1",
         "tipo_postulacion":          "form",
         "max_offers_per_run":        30,
         "max_pages":                 4,
@@ -1015,13 +1014,13 @@ def build_config_for_keyword(portal_key: str, keyword: str) -> dict:
         # GetOnBoard: usa URLs tipo slug (/jobs-{slug}), no soporta ?q= ni seniority en URL.
         "getonyboard":   _gob_slug_url(keyword),
         "linkedin":      f"https://www.linkedin.com/jobs/search/?keywords={kw_encoded}&location=Santiago%2C+Regi%C3%B3n+Metropolitana%2C+Chile&f_AL=true&sortBy=DD&f_TPR=r604800",
-        # Trabajando.cl: búsqueda por keyword con orden por fecha, región RM
-        "trabajando":    f"https://www.trabajando.cl/empleos?s={kw_encoded}&region=13&orden=fecha",
+        # Trabajando.cl: nueva URL slug /trabajo-empleo/{keyword-slug}
+        "trabajando":    f"https://www.trabajando.cl/trabajo-empleo/{kw_dash}",
         # InfoJobs Chile: búsqueda por keyword ordenada por fecha
         "infojobs":      f"https://www.infojobs.net/trabajo/?q={kw_encoded}&sortBy=PUBLICATION_DATE",
         # Portales remotos internacionales — usar keyword en inglés
         "weworkremotely": f"https://weworkremotely.com/remote-jobs/search?term={en_kw_encoded}",
-        "remotive":       f"https://remotive.com/remote-jobs/software-dev?query={en_kw_encoded}",
+        "remotive":       f"https://remotive.com/remote-jobs/software-development",
         "remoteco":       f"https://remote.co/remote-jobs/search/?search_keywords={en_kw_encoded}",
     }
     if portal_key in url_map:
