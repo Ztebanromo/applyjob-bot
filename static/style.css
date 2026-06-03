@@ -582,11 +582,44 @@ input:focus, textarea:focus, select:focus {
 
 .portal-item.disabled-hint { opacity: 0.3; }
 
-.portal-item input[type="checkbox"] {
-    width: 12px; height: 12px;
-    accent-color: var(--violet);
-    flex-shrink: 0; cursor: pointer;
+/* Checkbox nativo oculto — reemplazado por toggle CSS */
+.portal-item input[type="checkbox"] { display: none; }
+
+/* Toggle switch moderno */
+.portal-toggle {
+    position: absolute;
+    top: 0.55rem; right: 0.6rem;
+    width: 32px; height: 17px;
+    background: rgba(255,255,255,0.12);
+    border-radius: 999px;
+    border: 1px solid rgba(255,255,255,0.18);
+    cursor: pointer;
+    transition: background .2s, border-color .2s, box-shadow .2s;
+    flex-shrink: 0;
 }
+.portal-toggle::after {
+    content: '';
+    position: absolute;
+    top: 2px; left: 2px;
+    width: 11px; height: 11px;
+    border-radius: 50%;
+    background: rgba(255,255,255,0.45);
+    transition: transform .2s, background .2s;
+}
+.portal-item.selected .portal-toggle {
+    background: rgba(139,92,246,0.55);
+    border-color: rgba(139,92,246,0.4);
+    box-shadow: none;
+}
+.portal-item.selected .portal-toggle::after {
+    transform: translateX(15px);
+    background: rgba(255,255,255,0.9);
+}
+.portal-item.selected {
+    border-color: rgba(139,92,246,0.25);
+    box-shadow: 0 0 0 1px rgba(0,0,0,0.25), inset 0 1px 0 rgba(255,255,255,0.12);
+}
+.portal-item.disabled-hint { opacity: 0.35; }
 
 .portal-name {
     font-size: 0.72rem;
@@ -638,7 +671,7 @@ input:focus, textarea:focus, select:focus {
     flex-shrink: 0;
 }
 
-.portal-checkbox { display: none; }
+.portal-checkbox { display: inline-block; }
 
 /* ── Session Dot ────────────────────────────────────────── */
 .session-dot {

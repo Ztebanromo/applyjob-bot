@@ -16,6 +16,16 @@ from flask import Flask, render_template, request, jsonify, Response as FlaskRes
 
 _log = _logging.getLogger("applyjob.server")
 
+# ── Session config — fuente única de verdad ────────────────────────────────────
+from bot.session_config import (
+    VERIFY_URLS         as _HOME_URLS_SERVER,
+    LOGGED_IN_SIGNALS   as _LOGIN_SIGNALS_SERVER,
+    NOT_LOGGED_IN_SIGNALS as _LOGIN_PAGE_SIGNALS_BY_PORTAL,
+    PORTALS_REQUIRE_LOGIN,
+    LOGIN_URL_KEYWORDS  as _LOGIN_URL_KEYWORDS_CFG,
+)
+from bot.session_checker import check_session as _check_session_unified, SessionResult as _SessionResult
+
 
 # ── Rate limiter ──────────────────────────────────────────────────────────────
 class _RateLimiter:
@@ -213,6 +223,16 @@ class BotState:
             self.logs.append(message)
             if len(self.logs) > 2000:
                 self.logs.pop(0)
+        # Persistir en logs/bot_YYYY-MM-DD.log
+        try:
+            import datetime as _dt
+            _logs_dir = os.path.join(os.path.dirname(__file__), "logs")
+            os.makedirs(_logs_dir, exist_ok=True)
+            _log_file = os.path.join(_logs_dir, f"bot_{_dt.date.today()}.log")
+            with open(_log_file, "a", encoding="utf-8") as _f:
+                _f.write(f"[{_dt.datetime.now().strftime('%H:%M:%S')}] {message.rstrip()}\n")
+        except Exception:
+            pass
         
         # Notificar a los clientes vía SocketIO
         socketio.emit('new_log', {"message": message}, namespace='/bot')
@@ -573,15 +593,13 @@ def clean_form_value(value: str) -> str:
     return re.sub(r'\s+', ' ', value).strip()
 
 
-_COOKIES_MIN_BYTES = 8_000    # mismo umbral que engine.py (~8 KB)
+_COOKIES_MIN_BYTES = 25_000   # mismo umbral que engine.py — SQLite vacia pesa 20480B
 
 def _portal_cookies_ok(portal: str) -> bool:
-    """True si el archivo Cookies del portal tiene tamaño suficiente."""
-    cookies_path = os.path.join(_SESSIONS_DIR, portal, "Default", "Network", "Cookies")
-    try:
-        return os.path.getsize(cookies_path) >= _COOKIES_MIN_BYTES
-    except OSError:
-        return False
+    """True si el portal tiene cookies reales guardadas. Delega a session_checker."""
+    from bot.session_checker import has_real_cookies
+    session_dir = os.path.join(_SESSIONS_DIR, portal)
+    return has_real_cookies(session_dir)
 
 
 def get_session_status() -> dict:
@@ -592,164 +610,21 @@ def get_session_status() -> dict:
     return status
 
 
-# Portales que requieren login real para postular
-_PORTALS_REQUIRE_LOGIN = {
-    'linkedin', 'computrabajo', 'laborum', 'trabajando',
-    'infojobs', 'chiletrabajos', 'getonyboard',
-}
-
-# Señales DOM de sesión activa por portal (espejo del engine)
-_LOGIN_SIGNALS_SERVER = {
-    "linkedin":      ["div.global-nav__me-photo", "img.global-nav__me-photo",
-                      "a[href*='/in/']", "[data-control-name='nav.settings']"],
-    "computrabajo":  ["a[href*='/candidato/']", "a[href*='mi-cv']",
-                      "[class*='user-name']", "span[class*='userName']"],
-    "laborum":       ["a[href*='/postulantes/']", "[class*='userAvatar']",
-                      "a:has-text('Mi cuenta')", "img[alt*='avatar' i]"],
-    "trabajando":    ["a[href*='/mi-cv']", "a[href*='/mi-cuenta']",
-                      "[class*='user-menu']", "[class*='userMenu']"],
-    "infojobs":      ["a[href*='/candidato/mis-candidaturas']",
-                      "a[href*='/candidato/mi-perfil']",
-                      "[data-testid='user-menu']", "[class*='UserMenu']"],
-    "chiletrabajos": ["a[href*='/mi-cuenta']", "a[href*='/mis-postulaciones']",
-                      "[class*='user-logged']"],
-    "getonyboard":   ["a[href*='/postulantes/']", "a[href*='/dashboard']",
-                      "[class*='user-avatar']", "img[alt*='avatar' i]"],
-}
-
-_HOME_URLS_SERVER = {
-    "linkedin":      "https://www.linkedin.com/feed",
-    "computrabajo":  "https://cl.computrabajo.com/candidato/",
-    "laborum":       "https://www.laborum.cl/postulantes/dashboard",
-    "trabajando":    "https://www.trabajando.cl/mi-cuenta",
-    "infojobs":      "https://www.infojobs.net/candidato/mis-candidaturas",
-    "chiletrabajos": "https://www.chiletrabajos.cl/mi-cuenta",
-    "getonyboard":   "https://www.getonbrd.com/postulantes/dashboard",
-}
+# Alias para compatibilidad — importado desde session_config al inicio del archivo
+_PORTALS_REQUIRE_LOGIN = PORTALS_REQUIRE_LOGIN
 
 _session_verify_lock = threading.Lock()
 _session_verify_running = False
 
 
-_LOGIN_PAGE_SIGNALS = [
-    "input[type='password']",
-    "form[action*='login']",
-    "form[action*='signin']",
-    "a:has-text('Iniciar sesión')",
-    "button:has-text('Iniciar sesión')",
-    "a:has-text('Sign in')",
-    "button:has-text('Sign In')",
-    "input[name='session_password']",
-    "input[id*='password']",
-]
-
-_UA = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-    "AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/124.0.0.0 Safari/537.36"
-)
-
-
 def _verify_session_headless(portal: str) -> str:
     """
-    Abre browser headless con user-agent real, navega a la home del portal
-    y verifica sesión por DOM + URL. Robusto ante SPAs y anti-bot básico.
+    Wrapper sobre session_checker.check_session().
     Retorna: 'ok' | 'expired' | 'no_cookies' | 'error'
     """
-    if not _portal_cookies_ok(portal):
-        return "no_cookies"
-
     session_dir = os.path.join(_SESSIONS_DIR, portal)
-    home_url    = _HOME_URLS_SERVER.get(portal)
-    sels        = _LOGIN_SIGNALS_SERVER.get(portal, [])
-
-    if not home_url:
-        return "ok"   # sin URL de check → asumir ok si cookies existen
-
-    try:
-        from playwright.sync_api import sync_playwright
-        with sync_playwright() as pw:
-            ctx = pw.chromium.launch_persistent_context(
-                session_dir,
-                headless    = True,
-                user_agent  = _UA,
-                viewport    = {"width": 1280, "height": 800},
-                locale      = "es-CL",
-                timezone_id = "America/Santiago",
-                args        = [
-                    "--no-sandbox",
-                    "--disable-blink-features=AutomationControlled",
-                    "--disable-dev-shm-usage",
-                ],
-                ignore_default_args=["--enable-automation"],
-            )
-            pg = ctx.new_page()
-            # Ocultar webdriver
-            pg.add_init_script(
-                "Object.defineProperty(navigator,'webdriver',{get:()=>undefined})"
-            )
-            try:
-                # Navegar — esperar hasta networkidle para SPAs
-                try:
-                    pg.goto(home_url, wait_until="networkidle", timeout=25_000)
-                except Exception:
-                    try:
-                        pg.goto(home_url, wait_until="domcontentloaded", timeout=20_000)
-                        pg.wait_for_timeout(4000)
-                    except Exception:
-                        pass
-
-                pg.wait_for_timeout(2500)   # margen extra para render JS
-
-                current_url = pg.url.lower()
-
-                # Si fue redirigido a una página de login → expirada
-                login_keywords = ["login", "signin", "sign-in", "account/login",
-                                  "candidato/login", "iniciar-sesion", "auth"]
-                if any(k in current_url for k in login_keywords):
-                    return "expired"
-
-                # Chequear señales negativas (form de login visible)
-                for bad_sel in _LOGIN_PAGE_SIGNALS:
-                    try:
-                        el = pg.query_selector(bad_sel)
-                        if el and el.is_visible():
-                            return "expired"
-                    except Exception:
-                        pass
-
-                # Chequear señales positivas de sesión activa
-                if sels:
-                    for sel in sels:
-                        try:
-                            el = pg.query_selector(sel)
-                            if el and el.is_visible():
-                                return "ok"
-                        except Exception:
-                            pass
-
-                    # Segunda vuelta con wait_for_selector (más lenta pero fiable)
-                    for sel in sels[:3]:
-                        try:
-                            pg.wait_for_selector(sel, timeout=4_000)
-                            return "ok"
-                        except Exception:
-                            pass
-
-                    return "expired"
-                else:
-                    # Sin selectores definidos → si URL no redirigió a login, asumir ok
-                    return "ok"
-
-            finally:
-                try:
-                    ctx.close()
-                except Exception:
-                    pass
-
-    except Exception as exc:
-        _log.warning("[CHECK_SESSION] Error verificando %s: %s", portal, exc)
-        return "error"
+    result = _check_session_unified(portal, session_dir)
+    return result.value
 
 
 def run_bot_thread(portals, runtime_env=None):
@@ -929,47 +804,7 @@ def api_scan():
     return jsonify({'ok': True, 'msg': f'Scan iniciado para {label}'})
 
 
-@app.route('/api/postular', methods=['POST'])
-def api_postular():
-    """Postulación directa — recorre portales y aplica sin necesitar scan previo."""
-    if state.apply_active:
-        return jsonify({'ok': False, 'msg': 'Ya hay una postulación en curso.'})
-    data    = request.json or {}
-    portals = _resolve_portals(data)
-    label   = portals or 'todos los portales'
-    runtime_env = {}
-    if data.get('keywords'):
-        runtime_env['USER_KEYWORDS'] = str(data['keywords']).strip().strip("'\"")[:200]
-    if data.get('max_offers'):
-        # SECURITY: validar que sea entero en rango [1, 100]
-        try:
-            _max = max(1, min(100, int(str(data['max_offers']).strip())))
-            runtime_env['USER_MAX_OFFERS'] = str(_max)
-        except (ValueError, TypeError):
-            pass  # ignorar valor inválido, usar el default del .env
-
-    def _run():
-        run_id = state.start_apply()
-        socketio.emit('bot_status', state.get_status() | {"status": "started"}, namespace='/bot')
-        try:
-            cmd = [sys.executable, "-u", "main.py", "--multi-keyword"]
-            if portals:
-                cmd += ["--portal", portals]
-            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                    text=True, encoding='utf-8', errors='replace', bufsize=1,
-                                    env=_make_child_env(runtime_env))
-            state.set_apply_process(proc)
-            _start_watchdog(proc, MASTER_TIMEOUT_S, f"postular-{portals or 'all'}")
-            def _finish():
-                if state.finish_apply(run_id):
-                    socketio.emit('bot_status', state.get_status() | {"status": "finished"}, namespace='/bot')
-            _stream_process(proc, "\n[POSTULAR] Postulación completada.\n", _finish)
-        except Exception as e:
-            state.add_log(f"\n[POSTULAR] Error: {e}\n")
-            state.finish_apply(run_id)
-
-    threading.Thread(target=_run, daemon=True).start()
-    return jsonify({'ok': True, 'msg': f'Postulación iniciada para {label}'})
+# /api/postular eliminado — el frontend usa socket.emit('start_master') directamente
 
 
 @app.route('/api/apply_queue', methods=['POST'])
@@ -1134,6 +969,13 @@ def api_stats():
 
 _RESTRICTIONS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data', 'portal_restrictions.json')
 
+
+@app.route('/api/import-all-sessions', methods=['POST'])
+def api_import_all_sessions():
+    """CDP eliminado — importación de sesiones no disponible."""
+    return jsonify({'ok': False, 'msg': 'CDP no disponible'}), 503
+
+
 @app.route('/api/check-sessions', methods=['POST'])
 def api_check_sessions():
     """
@@ -1152,27 +994,46 @@ def api_check_sessions():
         portals_to_check = [p for p in requested if p in _PORTALS_REQUIRE_LOGIN]
 
         results = {}
-        # Primero chequeo rápido por cookies (sin browser)
+
         for portal in portals_to_check:
             results[portal] = "no_cookies" if not _portal_cookies_ok(portal) else "checking"
 
-        # Emit progreso
         socketio.emit('session_check_progress', results, namespace='/bot')
 
-        # Verificación DOM por browser para los que tienen cookies
-        for portal in portals_to_check:
-            if results[portal] == "checking":
-                result = _verify_session_headless(portal)
-                results[portal] = result
-                socketio.emit('session_check_progress',
-                              {portal: result}, namespace='/bot')
+        # Solo portales que tienen cookies reales requieren verificación headless
+        needs_headless = [p for p in portals_to_check if results[p] == "checking"]
 
-        # Actualizar dots del dashboard
+        if needs_headless:
+            # Verificación paralela — hasta 3 browsers simultáneos
+            from concurrent.futures import ThreadPoolExecutor, as_completed
+
+            def _check_one(portal):
+                r = _verify_session_headless(portal)
+                socketio.emit('session_check_progress', {portal: r}, namespace='/bot')
+                return portal, r
+
+            with ThreadPoolExecutor(max_workers=3) as ex:
+                futures = {ex.submit(_check_one, p): p for p in needs_headless}
+                for fut in as_completed(futures):
+                    try:
+                        portal, result = fut.result()
+                        results[portal] = result
+                    except Exception as exc:
+                        portal = futures[fut]
+                        results[portal] = "error"
+                        socketio.emit('session_check_progress', {portal: "error"}, namespace='/bot')
+
         socketio.emit('session_status', get_session_status(), namespace='/bot')
         return jsonify(results)
     finally:
         with _session_verify_lock:
             _session_verify_running = False
+
+
+@app.route('/api/import-chrome-cookies', methods=['POST'])
+def api_import_chrome_cookies():
+    """CDP eliminado — importación de cookies no disponible."""
+    return jsonify({"ok": False, "msg": "CDP no disponible"}), 503
 
 
 @app.route('/api/portal-restrictions')
@@ -1186,45 +1047,9 @@ def api_portal_restrictions():
     except Exception as e:
         return jsonify({"error": str(e)})
 
-@app.route('/api/portal-restrictions/clear', methods=['POST'])
-def api_clear_restriction():
-    """Limpia la restricción de un portal específico."""
-    portal = (request.json or {}).get('portal', '').strip().lower()
-    if not portal:
-        return jsonify({'ok': False, 'error': 'portal requerido'}), 400
-    try:
-        data = {}
-        if os.path.exists(_RESTRICTIONS_PATH):
-            with open(_RESTRICTIONS_PATH, encoding='utf-8') as f:
-                data = json.load(f)
-        if portal in data:
-            data[portal]['restricted'] = False
-            with open(_RESTRICTIONS_PATH, 'w', encoding='utf-8') as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
-        return jsonify({'ok': True})
-    except Exception as e:
-        return jsonify({'ok': False, 'error': str(e)}), 500
-
-
-@app.route('/api/recent')
-def api_recent():
-    """Devuelve las últimas N postulaciones desde la DB SQLite."""
-    try:
-        limit = min(int(request.args.get('limit', 30)), 500)  # SECURITY: cap máximo
-        from bot.state import get_recent
-        rows = get_recent(limit)
-        return jsonify(rows)
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-@app.route('/api/db-stats')
-def api_db_stats():
-    """Estadísticas acumuladas de la DB (totales históricos)."""
-    try:
-        from bot.state import get_stats
-        return jsonify(get_stats())
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+# /api/portal-restrictions/clear — eliminado (0 usos en frontend)
+# /api/recent — eliminado (0 usos en frontend; los logs van por socketio)
+# /api/db-stats — eliminado (0 usos en frontend; estadísticas van por /api/stats)
 
 
 _PENDING_Q_PATH   = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data', 'pending_questions.json')
@@ -2115,6 +1940,51 @@ def api_reset_all():
     return jsonify({'ok': True, 'cleared': cleared, 'errors': errors})
 
 
+@app.route('/api/limpiar-todo', methods=['POST'])
+def api_limpiar_todo():
+    """
+    Limpieza total: borra sesiones, cola de scan, quick links,
+    restricciones, stats, señal de stop y logs.
+    No toca: .env, uploads/, ni la DB de postulaciones.
+    """
+    if state.is_active:
+        return jsonify({'ok': False, 'msg': 'Detén el bot antes de limpiar.'}), 409
+
+    cleared = []
+    errors  = []
+
+    # 1. Sesiones (cookies de todos los portales)
+    try:
+        _clear_session_auth()
+        cleared.append('Sesiones (cookies)')
+    except Exception as e:
+        errors.append(f'Sesiones: {e}')
+
+    # 2. Archivos de estado persistente
+    _files = [
+        (_SCAN_QUEUE_PATH,   'Cola de scan'),
+        (_QUICK_LINKS_PATH,  'Quick links'),
+        (_RESTRICTIONS_PATH, 'Restricciones de portales'),
+        (STOP_SIGNAL_PATH,   'Señal de stop'),
+        (os.path.join(_DATA_DIR, 'keyword_stats.json'), 'Stats de keywords'),
+        (_PENDING_Q_PATH,    'Preguntas pendientes'),
+    ]
+    for path, label in _files:
+        try:
+            if os.path.exists(path):
+                os.remove(path)
+                cleared.append(label)
+        except Exception as e:
+            errors.append(f'{label}: {e}')
+
+    # 3. Limpiar logs en memoria
+    state.clear_logs()
+
+    socketio.emit('bot_status', state.get_status() | {'status': 'reset'}, namespace='/bot')
+    socketio.emit('session_status', get_session_status(), namespace='/bot')
+    return jsonify({'ok': True, 'cleared': cleared, 'errors': errors})
+
+
 @app.route('/api/daily-stats', methods=['GET'])
 def api_daily_stats():
     """
@@ -2390,14 +2260,9 @@ def _on_exit():
                 except Exception:
                     pass
     _clear_stop_signal()
-    # Borrar cookies de sesión al cerrar — las sesiones solo duran mientras el servidor corre.
-    # Al reiniciar el servidor habrá que volver a loguear.
-    try:
-        _clear_session_auth()
-        _log.info("[SHUTDOWN] Sesiones de portales borradas.")
-    except Exception as _e:
-        _log.debug("[SHUTDOWN] Error borrando sesiones: %s", _e)
-    _log.info("[SHUTDOWN] Limpieza completada.")
+    # Las sesiones SE PRESERVAN entre reinicios del servidor.
+    # El usuario puede borrarlas manualmente con el botón 🗝 Re-login.
+    _log.info("[SHUTDOWN] Limpieza completada. Sesiones preservadas.")
 
 atexit.register(_on_exit)
 
@@ -2588,11 +2453,7 @@ def _clear_session_auth() -> None:
 
 if __name__ == '__main__':
     port = 5000
-    # _clear_session_auth()  # deshabilitado — sesiones persisten entre reinicios
-    print(f"\n--- Iniciando modo maestro (producción) ---")
+    print(f"\n--- ApplyJob Bot Dashboard ---")
     print(f"URL: http://127.0.0.1:{port}")
-    print(f"Servidor: SocketIO (Auto-detect)")
-    print(f"-------------------------------------------\n")
-
-    app.jinja_env.auto_reload = True
+    print(f"------------------------------\n")
     socketio.run(app, host='127.0.0.1', port=port, debug=False, use_reloader=False, allow_unsafe_werkzeug=True)

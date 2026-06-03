@@ -41,17 +41,16 @@
 <body>
     <header>
         <h1>ApplyJob</h1>
-        <div style="display:flex; gap:8px; justify-content:center; flex-wrap:wrap; margin-top:4px;">
-            <span
-                style="background:rgba(177,151,252,0.15); padding:3px 12px; border-radius:8px; font-size:0.75rem; border:1px solid rgba(177,151,252,0.35);">
-                🔑 <b id="kw-text">--</b>
+        <div style="display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin-top:6px;">
+            <span style="background:linear-gradient(135deg,rgba(177,151,252,0.18),rgba(139,92,246,0.10));padding:4px 14px;border-radius:20px;font-size:0.73rem;font-family:'Inter',sans-serif;font-weight:600;border:1px solid rgba(177,151,252,0.35);color:#c4b5fd;letter-spacing:0.02em;">
+                🔑 <span id="kw-text">--</span>
             </span>
-            <span
-                style="background:rgba(255,255,255,0.07); padding:3px 12px; border-radius:8px; font-size:0.75rem; border:1px solid rgba(255,255,255,0.15);">
-                <b id="action-text">Esperando...</b>
+            <span style="background:rgba(255,255,255,0.07);padding:4px 14px;border-radius:20px;font-size:0.73rem;font-family:'Inter',sans-serif;font-weight:600;border:1px solid rgba(255,255,255,0.15);color:rgba(255,255,255,0.75);letter-spacing:0.02em;">
+                <span id="action-text">—</span>
             </span>
         </div>
     </header>
+
 
     <!-- (banner flotante eliminado — reemplazado por iv-panel dentro del card) -->
 
@@ -60,42 +59,52 @@
         📬 <span id="session-count">0</span> postulaciones procesadas en esta sesión
     </div>
 
-    <!-- Stats: barra única -->
-    <div style="width:100%;max-width:1300px;margin:0 0 0.6rem;display:flex;flex-direction:column;gap:0.3rem;position:relative;z-index:1;">
+    <!-- Stats bar -->
+    <div style="width:100%;max-width:1320px;margin:0 0 0.65rem;position:relative;z-index:1;">
+        <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:0.4rem;">
 
-        <!-- Fila de 6 stats compactos -->
-        <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:0.3rem;">
-            <div style="background:var(--panel);border:1px solid var(--border);padding:0.45rem 0.6rem;display:flex;align-items:center;justify-content:center;gap:0.45rem;position:relative;">
-                <span style="font-family:'Orbitron',sans-serif;font-size:1.1rem;font-weight:700;color:var(--success);" id="stat-applied">0</span>
-                <span style="font-size:0.65rem;color:#7ab8d4;text-transform:uppercase;letter-spacing:0.08em;font-family:'Share Tech Mono',monospace;">✅ Postuladas</span>
+            <!-- Postuladas — verde -->
+            <div style="background:linear-gradient(145deg,rgba(52,211,153,0.10),rgba(255,255,255,0.04));-webkit-backdrop-filter:blur(16px);backdrop-filter:blur(16px);border:1px solid rgba(52,211,153,0.22);border-radius:12px;padding:0.6rem 0.7rem;display:flex;flex-direction:column;align-items:center;gap:0.1rem;box-shadow:0 0 0 1px rgba(0,0,0,0.2),inset 0 1px 0 rgba(255,255,255,0.12);">
+                <span style="font-family:'Inter',sans-serif;font-size:1.35rem;font-weight:800;color:#34d399;line-height:1;" id="stat-applied">0</span>
+                <span style="font-size:0.54rem;color:rgba(52,211,153,0.65);text-transform:uppercase;letter-spacing:0.08em;font-family:'Inter',sans-serif;font-weight:600;">Postuladas</span>
             </div>
-            <div style="background:var(--panel);border:1px solid var(--border);padding:0.45rem 0.6rem;display:flex;align-items:center;justify-content:center;gap:0.45rem;">
-                <span style="font-family:'Orbitron',sans-serif;font-size:1.1rem;font-weight:700;color:var(--accent);" id="stat-external">0</span>
-                <span style="font-size:0.65rem;color:#7ab8d4;text-transform:uppercase;letter-spacing:0.08em;font-family:'Share Tech Mono',monospace;">⚡ Externas</span>
+
+            <!-- Externas — azul -->
+            <div style="background:linear-gradient(145deg,rgba(96,165,250,0.10),rgba(255,255,255,0.04));-webkit-backdrop-filter:blur(16px);backdrop-filter:blur(16px);border:1px solid rgba(96,165,250,0.22);border-radius:12px;padding:0.6rem 0.7rem;display:flex;flex-direction:column;align-items:center;gap:0.1rem;box-shadow:0 0 0 1px rgba(0,0,0,0.2),inset 0 1px 0 rgba(255,255,255,0.12);">
+                <span style="font-family:'Inter',sans-serif;font-size:1.35rem;font-weight:800;color:#60a5fa;line-height:1;" id="stat-external">0</span>
+                <span style="font-size:0.54rem;color:rgba(96,165,250,0.65);text-transform:uppercase;letter-spacing:0.08em;font-family:'Inter',sans-serif;font-weight:600;">Externas</span>
             </div>
-            <div style="background:var(--panel);border:1px solid var(--border);padding:0.45rem 0.6rem;display:flex;align-items:center;justify-content:center;gap:0.45rem;">
-                <span style="font-family:'Orbitron',sans-serif;font-size:1.1rem;font-weight:700;color:var(--warning);" id="stat-filtered">0</span>
-                <span style="font-size:0.65rem;color:#7ab8d4;text-transform:uppercase;letter-spacing:0.08em;font-family:'Share Tech Mono',monospace;">🔻 Filtradas</span>
+
+            <!-- Filtradas — ámbar -->
+            <div style="background:linear-gradient(145deg,rgba(251,191,36,0.10),rgba(255,255,255,0.04));-webkit-backdrop-filter:blur(16px);backdrop-filter:blur(16px);border:1px solid rgba(251,191,36,0.22);border-radius:12px;padding:0.6rem 0.7rem;display:flex;flex-direction:column;align-items:center;gap:0.1rem;box-shadow:0 0 0 1px rgba(0,0,0,0.2),inset 0 1px 0 rgba(255,255,255,0.12);">
+                <span style="font-family:'Inter',sans-serif;font-size:1.35rem;font-weight:800;color:#fbbf24;line-height:1;" id="stat-filtered">0</span>
+                <span style="font-size:0.54rem;color:rgba(251,191,36,0.65);text-transform:uppercase;letter-spacing:0.08em;font-family:'Inter',sans-serif;font-weight:600;">Filtradas</span>
             </div>
-            <div style="background:var(--panel);border:1px solid var(--border);padding:0.45rem 0.6rem;display:flex;align-items:center;justify-content:center;gap:0.45rem;">
-                <span style="font-family:'Orbitron',sans-serif;font-size:1.1rem;font-weight:700;color:#f97316;" id="stat-nonav">0</span>
-                <span style="font-size:0.65rem;color:#7ab8d4;text-transform:uppercase;letter-spacing:0.08em;font-family:'Share Tech Mono',monospace;">⚠️ Sin Nav</span>
+
+            <!-- Sin Nav — naranja -->
+            <div style="background:linear-gradient(145deg,rgba(251,146,60,0.10),rgba(255,255,255,0.04));-webkit-backdrop-filter:blur(16px);backdrop-filter:blur(16px);border:1px solid rgba(251,146,60,0.22);border-radius:12px;padding:0.6rem 0.7rem;display:flex;flex-direction:column;align-items:center;gap:0.1rem;box-shadow:0 0 0 1px rgba(0,0,0,0.2),inset 0 1px 0 rgba(255,255,255,0.12);">
+                <span style="font-family:'Inter',sans-serif;font-size:1.35rem;font-weight:800;color:#fb923c;line-height:1;" id="stat-nonav">0</span>
+                <span style="font-size:0.54rem;color:rgba(251,146,60,0.65);text-transform:uppercase;letter-spacing:0.08em;font-family:'Inter',sans-serif;font-weight:600;">Sin Nav</span>
             </div>
-            <div style="background:var(--panel);border:1px solid var(--border);padding:0.45rem 0.6rem;display:flex;align-items:center;justify-content:center;gap:0.45rem;">
-                <span style="font-family:'Orbitron',sans-serif;font-size:1.1rem;font-weight:700;color:var(--danger);" id="stat-errors">0</span>
-                <span style="font-size:0.65rem;color:#7ab8d4;text-transform:uppercase;letter-spacing:0.08em;font-family:'Share Tech Mono',monospace;">❌ Errores</span>
+
+            <!-- Errores — rojo -->
+            <div style="background:linear-gradient(145deg,rgba(248,113,113,0.10),rgba(255,255,255,0.04));-webkit-backdrop-filter:blur(16px);backdrop-filter:blur(16px);border:1px solid rgba(248,113,113,0.22);border-radius:12px;padding:0.6rem 0.7rem;display:flex;flex-direction:column;align-items:center;gap:0.1rem;box-shadow:0 0 0 1px rgba(0,0,0,0.2),inset 0 1px 0 rgba(255,255,255,0.12);">
+                <span style="font-family:'Inter',sans-serif;font-size:1.35rem;font-weight:800;color:#f87171;line-height:1;" id="stat-errors">0</span>
+                <span style="font-size:0.54rem;color:rgba(248,113,113,0.65);text-transform:uppercase;letter-spacing:0.08em;font-family:'Inter',sans-serif;font-weight:600;">Errores</span>
             </div>
-            <div style="background:var(--panel);border:1px solid var(--border);padding:0.45rem 0.6rem;display:flex;align-items:center;justify-content:center;gap:0.45rem;">
-                <span style="font-family:'Orbitron',sans-serif;font-size:0.72rem;font-weight:700;color:var(--warning);" id="stat-portal">---</span>
-                <span style="font-size:0.65rem;color:#7ab8d4;text-transform:uppercase;letter-spacing:0.08em;font-family:'Share Tech Mono',monospace;">🌐 Portal</span>
+
+            <!-- Portal — violeta -->
+            <div style="background:linear-gradient(145deg,rgba(177,151,252,0.10),rgba(255,255,255,0.04));-webkit-backdrop-filter:blur(16px);backdrop-filter:blur(16px);border:1px solid rgba(177,151,252,0.22);border-radius:12px;padding:0.6rem 0.7rem;display:flex;flex-direction:column;align-items:center;gap:0.1rem;box-shadow:0 0 0 1px rgba(0,0,0,0.2),inset 0 1px 0 rgba(255,255,255,0.12);">
+                <span style="font-family:'JetBrains Mono',monospace;font-size:0.78rem;font-weight:700;color:#b197fc;line-height:1.3;text-align:center;word-break:break-all;" id="stat-portal">---</span>
+                <span style="font-size:0.54rem;color:rgba(177,151,252,0.65);text-transform:uppercase;letter-spacing:0.08em;font-family:'Inter',sans-serif;font-weight:600;">Portal</span>
             </div>
+
         </div>
 
         <!-- Chart oculto — canvas necesario para loadDailyChart() -->
         <div id="daily-chart-wrap" style="display:none;">
             <canvas id="dailyChart"></canvas>
         </div>
-
     </div>
 
     <div class="container">
@@ -213,26 +222,23 @@
             <div
                 style="display:flex; align-items:center; justify-content:space-between; gap:0.5rem; margin-bottom:0.6rem;">
                 <h2 style="margin-bottom:0;">🚀 Control Maestro</h2>
-                <div style="display:flex; gap:0.4rem;">
-                    <button type="button" class="toolbar-btn" id="selectAllPortalsBtn" style="background:rgba(255,255,255,0.12);">Todos</button>
-                    <button type="button" class="toolbar-btn" id="clearPortalsBtn" style="background:rgba(255,255,255,0.12);">Limpiar</button>
+                <div style="display:flex; gap:0.4rem; align-items:center;">
+                    <button type="button" class="toolbar-btn" id="selectAllPortalsBtn"
+                        style="background:rgba(255,255,255,0.10);font-size:0.72rem;padding:0.3rem 0.6rem;">Todos</button>
+                    <button type="button" class="toolbar-btn" id="clearPortalsBtn"
+                        style="background:rgba(255,255,255,0.10);font-size:0.72rem;padding:0.3rem 0.6rem;">Ninguno</button>
+                    <div style="width:1px;height:20px;background:rgba(255,255,255,0.15);margin:0 2px;"></div>
                     <button type="button" class="toolbar-btn" id="verifySessionsBtn"
-                        onclick="verifySessions()"
+                        onclick="verifyAndLogin()"
                         style="background:linear-gradient(160deg,#0e7490,#06b6d4);"
-                        title="Verificar: chequea sin abrir ventana si las sesiones siguen activas (browser invisible)">
+                        title="Verifica sesiones — si alguna expiró, abre el browser para re-loguear">
                         🔐 Verificar
                     </button>
-                    <button type="button" class="toolbar-btn" id="loginPortalsBtn"
-                        onclick="loginPortals()"
-                        style="background:linear-gradient(160deg,#15803d,#22c55e);"
-                        title="Loguear: abre browser visible por portal. Si la sesion sigue activa cierra solo en segundos. Si expiro, espera que inicies sesion.">
-                        🔑 Loguear
-                    </button>
-                    <button type="button" class="toolbar-btn" id="resetSessionsBtn"
-                        onclick="resetSessions()"
-                        style="background:linear-gradient(160deg,#b45309,#f59e0b);"
-                        title="Re-login: borra TODAS las cookies — fuerza loguear de cero en todos los portales">
-                        🗝 Re-login
+                    <button type="button" class="toolbar-btn" id="importChromeBtn"
+                        onclick="importFromChrome()"
+                        style="background:linear-gradient(160deg,#1d4ed8,#3b82f6);"
+                        title="Guarda las sesiones del bot Chrome al bot — hacé login en el Chrome del bot primero">
+                        💾 Guardar
                     </button>
                     <button type="button" class="toolbar-btn" id="resetAllBtn"
                         onclick="resetAll()"
@@ -393,7 +399,7 @@
 
     <!-- Modal CAPTCHA (overlay completo) -->
     <div id="captcha-modal"
-        style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.85); backdrop-filter:blur(8px); z-index:9999; align-items:center; justify-content:center; opacity:0; pointer-events:none; transition:opacity 0.3s ease;">
+        style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.85); -webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px); z-index:9999; align-items:center; justify-content:center; opacity:0; pointer-events:none; transition:opacity 0.3s ease;">
         <div class="card"
             style="max-width:500px; text-align:center; border:2px solid var(--warning); box-shadow:0 0 30px var(--warning);">
             <h2 style="color:var(--warning); justify-content:center;">⚠️ CAPTCHA REQUERIDO</h2>
@@ -498,22 +504,32 @@
                 const label = portalLabel(portal);
                 const isDefault = DEFAULT_PORTALS.has(portal);
                 const item = document.createElement('div');
-                item.className = 'portal-item' + (isDefault ? '' : ' disabled-hint');
+                const startSelected = isDefault;
+                item.className = 'portal-item' + (startSelected ? ' selected' : ' disabled-hint');
                 item.id = `p-${portal}`;
+                item.style.cursor = 'pointer';
+                item.title = 'Click para activar/desactivar';
+                item.onclick = (e) => {
+                    if (e.target.tagName === 'A') return;
+                    const cb = item.querySelector('.portal-checkbox');
+                    cb.checked = !cb.checked;
+                    item.classList.toggle('selected', cb.checked);
+                    item.classList.toggle('disabled-hint', !cb.checked);
+                    refreshSessionSummary();
+                };
                 const portalUrl = PORTAL_URLS[portal] || '#';
                 item.innerHTML = `
-                    <div style="display:flex; align-items:center; gap:8px;">
-                        <input type="checkbox" class="portal-checkbox" value="${portal}"
-                            ${isDefault ? 'checked' : ''}
-                            onchange="this.closest('.portal-item').classList.toggle('disabled-hint', !this.checked); refreshSessionSummary();">
+                    <input type="checkbox" class="portal-checkbox" value="${portal}" ${startSelected ? 'checked' : ''}>
+                    <span class="portal-toggle" title="${startSelected ? 'Activo' : 'Inactivo'}"></span>
+                    <div style="display:flex; align-items:center; gap:6px; padding-right:38px;">
                         <a class="portal-name" href="${portalUrl}"
                            onclick="window.open('${portalUrl}','_blank','noopener'); return false;"
-                           style="text-decoration:none; color:inherit; cursor:pointer;"
+                           style="text-decoration:none; color:inherit; cursor:pointer; font-size:0.75rem; font-weight:700;"
                            title="Abrir ${label}">${icon} ${label}</a>
-                        <span id="restr-${portal}" style="display:none; background:#7f1d1d; color:#fca5a5; border-radius:4px; padding:0.1rem 0.4rem; font-size:0.62rem; font-weight:700; margin-left:auto; white-space:nowrap;">⛔ RESTRINGIDO</span>
-                        <span class="session-dot" id="session-${portal}" title="Sin sesión" style="margin-left:6px;"></span>
+                        <span id="restr-${portal}" style="display:none; background:#7f1d1d; color:#fca5a5; border-radius:4px; padding:0.1rem 0.4rem; font-size:0.6rem; font-weight:700; white-space:nowrap;">⛔</span>
+                        <span class="session-dot" id="session-${portal}" title="Sin sesión" style="margin-left:auto;"></span>
                     </div>
-                    <div style="display:flex; justify-content:space-between; align-items:center; border-top:1px solid rgba(255,255,255,0.06); padding-top:0.5rem; margin-top:0.1rem;">
+                    <div style="display:flex; justify-content:space-between; align-items:center; border-top:1px solid rgba(255,255,255,0.06); padding-top:0.4rem; margin-top:0.15rem;">
                         <span class="portal-status-text" id="ps-${portal}">Pendiente</span>
                         <span class="portal-counter" id="pc-${portal}">0</span>
                     </div>`;
@@ -780,6 +796,17 @@
             }
         }
 
+        // ── Notificaciones de Escritorio Activas ───────────────────────────────
+        window._activeNotifications = [];
+        window.closeActiveNotifications = function() {
+            if (window._activeNotifications && window._activeNotifications.length) {
+                window._activeNotifications.forEach(n => {
+                    try { n.close(); } catch(e) {}
+                });
+                window._activeNotifications = [];
+            }
+        };
+
         // ── SocketIO ───────────────────────────────────────────────────────────
         const socket = io('/bot');
         const scanBtn    = document.getElementById('scanBtn');
@@ -798,12 +825,14 @@
                     if (!data.scan_active && !data.apply_active) {
                         setBotControls('idle');
                         _botMode = null;
+                        setAction('—');   // limpiar texto residual de sesión anterior
                     }
                 })
                 .catch(() => {
                     // Si no hay endpoint aún, al menos desbloquear
                     unlockBtns();
                     setBotControls('idle');
+                    setAction('—');
                 });
         });
 
@@ -853,7 +882,9 @@
         function setAllPortals(checked) {
             document.querySelectorAll('.portal-checkbox').forEach(cb => {
                 cb.checked = checked;
-                cb.closest('.portal-item').classList.toggle('disabled-hint', !checked);
+                const item = cb.closest('.portal-item');
+                item.classList.toggle('selected', checked);
+                item.classList.toggle('disabled-hint', !checked);
             });
             refreshSessionSummary();
         }
@@ -938,23 +969,26 @@
             // Push notification — visible aunque el tab esté en segundo plano
             const portalName = (data.portal || 'el portal').toUpperCase();
             if (Notification.permission === 'granted') {
-                new Notification('⚠ ApplyJob — Login requerido', {
+                const notif = new Notification('⚠ ApplyJob — Login requerido', {
                     body: `Ingresa a ${portalName} para continuar.`,
                     requireInteraction: true,
                 });
+                window._activeNotifications.push(notif);
             } else if (Notification.permission === 'default') {
                 Notification.requestPermission().then(perm => {
                     if (perm === 'granted') {
-                        new Notification('⚠ ApplyJob — Login requerido', {
+                        const notif = new Notification('⚠ ApplyJob — Login requerido', {
                             body: `Ingresa a ${portalName} para continuar.`,
                             requireInteraction: true,
                         });
+                        window._activeNotifications.push(notif);
                     }
                 });
             }
         });
 
         socket.on('login_resolved', () => {
+            window.closeActiveNotifications();
             hideIntervention();
             hideCaptchaModal();
             setOps(opsIntervention, 'Login resuelto', 'ok');
@@ -1002,7 +1036,50 @@
         socket.on('captcha_required', (data) => {
             showIntervention('captcha', data.portal || '');
             showCaptchaModal();
+            const portalName = (data.portal || 'el portal').toUpperCase();
+            if (Notification.permission === 'granted') {
+                const notif = new Notification('⚠ ApplyJob — CAPTCHA requerido', {
+                    body: `Resuelve el captcha en ${portalName} para continuar.`,
+                    requireInteraction: true,
+                });
+                window._activeNotifications.push(notif);
+            } else if (Notification.permission === 'default') {
+                Notification.requestPermission().then(perm => {
+                    if (perm === 'granted') {
+                        const notif = new Notification('⚠ ApplyJob — CAPTCHA requerido', {
+                            body: `Resuelve el captcha en ${portalName} para continuar.`,
+                            requireInteraction: true,
+                        });
+                        window._activeNotifications.push(notif);
+                    }
+                });
+            }
         });
+
+        function _applySessionStatus(portal, result) {
+            // result: true/false (cookie exists) o string 'ok'/'expired'/'no_cookies'
+            const isOk = result === true || result === 'ok';
+            const dot    = document.getElementById(`session-${portal}`);
+            const status = document.getElementById(`ps-${portal}`);
+            if (dot) {
+                dot.classList.toggle('active', isOk);
+                dot.classList.toggle('missing', !isOk);
+                dot.style.animation = '';
+                dot.title = isOk ? 'Sesión activa' : 'Sin sesión activa';
+            }
+            if (status) {
+                if (isOk) {
+                    status.innerText = 'Sesión activa';
+                    status.style.color = 'var(--green)';
+                } else if (result === 'expired') {
+                    status.innerText = 'Sesión expirada';
+                    status.style.color = '#f87171';
+                } else {
+                    status.innerText = 'Puede pedir login';
+                    status.style.color = 'var(--orange)';
+                }
+            }
+        }
 
         socket.on('session_status', (data) => {
             sessionCache = data || {};
@@ -1014,22 +1091,7 @@
                 setOps(opsSessions, selected.length ? 'Seleccionadas listas' : 'Sin portales seleccionados', selected.length ? 'ok' : 'warn');
             }
             for (const [portal, hasSession] of Object.entries(data)) {
-                const dot = document.getElementById(`session-${portal}`);
-                if (dot) {
-                    dot.classList.toggle('active', hasSession);
-                    dot.classList.toggle('missing', !hasSession);
-                    dot.title = hasSession ? 'Sesión guardada' : 'Sin sesión guardada; puede pedir login';
-                }
-                const status = document.getElementById(`ps-${portal}`);
-                if (status && status.innerText === 'Pendiente') {
-                    if (hasSession) {
-                        status.innerText = 'Sesión guardada';
-                        status.style.color = 'var(--green)';
-                    } else {
-                        status.innerText = 'Puede pedir login';
-                        status.style.color = 'var(--orange)';
-                    }
-                }
+                _applySessionStatus(portal, hasSession);
             }
         });
 
@@ -1848,7 +1910,9 @@
             return cleaned.length > 18 ? sentence(cleaned) : '';
         }
 
-        function appendLogLine(msg) {
+        // replay=true: muestra el log en terminal pero suprime sonidos,
+        // setAction y hideIntervention (no volver a disparar alertas de sesiones anteriores)
+        function appendLogLine(msg, replay) {
             const line = document.createElement('div');
             line.className = 'log-line';
             const m = fixMojibake(msg.trim());
@@ -1857,32 +1921,34 @@
 
             if (m.includes('[MANUAL_REQUIRED]')) {
                 line.classList.add('log-manual');
-                playManualAlarm();
-                const question = m.replace(/.*\[MANUAL_REQUIRED\]\s*/i, '').trim();
-                addManualAction(question);
+                if (!replay) {
+                    playManualAlarm();
+                    const question = m.replace(/.*\[MANUAL_REQUIRED\]\s*/i, '').trim();
+                    addManualAction(question);
+                }
             } else if (m.includes('[EXITO]') || m.includes('Postulación completada')) {
                 line.classList.add('log-success');
-                playSound(880, 0.15);
+                if (!replay) playSound(880, 0.15);
             } else if (m.includes('[FALLO]') || m.includes('Error en')) {
                 line.classList.add('log-error');
             } else if (m.includes('[FILTRO]')) {
                 line.classList.add('log-warning');
-            } else if (m.includes('[CAPTCHA]') || m.includes('[LOGIN_REQUERIDO]')) {
+            } else if (m.includes('[CAPTCHA]') || m.includes('[LOGIN_REQUERIDO]') || m.includes('[SESION_NUEVA]')) {
                 line.classList.add('log-warning');
+                if (!replay && (m.includes('[LOGIN_REQUERIDO]') || m.includes('[SESION_NUEVA]')) && !_alertRepeatTimer) {
+                    playAlertSound();
+                    startAlertRepeat();
+                }
             } else if (m.includes('[PORTAL_ACTIVO]') || m.includes('[PORTAL_FINALIZADO]')) {
                 line.classList.add('log-portal');
-                if (m.includes('[PORTAL_FINALIZADO]')) {
+                if (!replay && m.includes('[PORTAL_FINALIZADO]')) {
                     playSound(523, 0.4, 'triangle');
-                    // Marcar portal como completado en el grid
                     const portalMatch = m.match(/portal completado:\s*(\w+)/i) ||
                         m.match(/\b(linkedin|indeed|computrabajo|getonyboard|chiletrabajos|laborum|weworkremotely|remotive|remoteco)\b/i);
                     if (portalMatch) {
                         const p = (portalMatch[1] || '').toLowerCase();
                         const pEl = document.getElementById(`p-${p}`);
-                        if (pEl) {
-                            pEl.classList.remove('active');
-                            pEl.classList.add('done');
-                        }
+                        if (pEl) { pEl.classList.remove('active'); pEl.classList.add('done'); }
                         const psEl = document.getElementById(`ps-${p}`);
                         if (psEl) psEl.innerText = '✓ Completado';
                     }
@@ -1891,22 +1957,23 @@
                 line.classList.add('log-search');
             }
 
-            // Actualizar badge de acción actual
-            if (m.includes('[BUSCANDO]')) setAction('Buscando ofertas...');
-            if (m.includes('[ABRIENDO]')) setAction('Abriendo oferta...');
-            if (m.includes('[EXITO]')) setAction('Postulación exitosa');
-            if (m.includes('[FALLO]')) setAction('Error al postular');
-            if (m.includes('[FILTRO]')) setAction('Oferta filtrada por horario');
-            if (m.includes('[CAPTCHA]')) setAction('Esperando verificación humana...');
-            if (m.includes('[LOGIN_REQUERIDO]')) setAction('Esperando login manual...');
-            if (m.includes('[BUSQUEDA]')) {
-                const kw = m.match(/Buscando: '(.+)' en/);
-                if (kw) document.getElementById('kw-text').innerText = kw[1];
-            }
-            // Cerrar panel de intervención cuando el bot retoma actividad
-            if (m.includes('[SESION_INICIADA]') || m.includes('[BUSCANDO]') || m.includes('[ABRIENDO]')) {
-                hideIntervention();
-                hideCaptchaModal();
+            // Side effects de estado: solo para logs en tiempo real (no replay)
+            if (!replay) {
+                if (m.includes('[BUSCANDO]')) setAction('Buscando ofertas...');
+                if (m.includes('[ABRIENDO]')) setAction('Abriendo oferta...');
+                if (m.includes('[EXITO]')) setAction('Postulación exitosa');
+                if (m.includes('[FALLO]')) setAction('Error al postular');
+                if (m.includes('[FILTRO]')) setAction('Oferta filtrada por horario');
+                if (m.includes('[CAPTCHA]')) setAction('Esperando verificación humana...');
+                if (m.includes('[LOGIN_REQUERIDO]')) setAction('Esperando login manual...');
+                if (m.includes('[BUSQUEDA]')) {
+                    const kw = m.match(/Buscando: '(.+)' en/);
+                    if (kw) document.getElementById('kw-text').innerText = kw[1];
+                }
+                if (m.includes('[SESION_INICIADA]') || m.includes('[BUSCANDO]') || m.includes('[ABRIENDO]')) {
+                    hideIntervention();
+                    hideCaptchaModal();
+                }
             }
 
             line.innerText = displayMessage;
@@ -1971,6 +2038,7 @@
                     document.getElementById('iv-elapsed').innerText = txt;
                 }, 1000);
                 playAlertSound();
+                startAlertRepeat();   // repetir cada 30s mientras espera
             }
 
             // Actualizar barra de estado
@@ -1986,17 +2054,39 @@
         }
 
         function hideIntervention() {
+            window.closeActiveNotifications();
             document.getElementById('iv-panel').style.display = 'none';
             setOps(opsIntervention, 'Ninguna', 'info');
             clearInterval(_ivTimer);
             _ivTimer = null;
             _ivStart = null;
+            stopAlertRepeat();   // detener sonido periódico
         }
 
         function playAlertSound() {
-            playSound(440, 0.18, 'square');
-            setTimeout(() => playSound(554, 0.18, 'square'), 200);
-            setTimeout(() => playSound(440, 0.35, 'square'), 400);
+            // Secuencia más notoria: 3 tonos ascendentes + repetición
+            playSound(523, 0.20, 'square');
+            setTimeout(() => playSound(659, 0.20, 'square'), 180);
+            setTimeout(() => playSound(784, 0.30, 'square'), 360);
+            setTimeout(() => playSound(784, 0.15, 'square'), 620);
+            setTimeout(() => playSound(659, 0.25, 'square'), 780);
+        }
+
+        // Sonido periódico mientras el bot espera login (cada 30s)
+        let _alertRepeatTimer = null;
+        function startAlertRepeat() {
+            stopAlertRepeat();
+            _alertRepeatTimer = setInterval(() => {
+                const panel = document.getElementById('iv-panel');
+                if (panel && panel.style.display !== 'none') {
+                    playAlertSound();
+                } else {
+                    stopAlertRepeat();
+                }
+            }, 30_000);
+        }
+        function stopAlertRepeat() {
+            if (_alertRepeatTimer) { clearInterval(_alertRepeatTimer); _alertRepeatTimer = null; }
         }
 
         function playManualAlarm() {
@@ -2094,6 +2184,7 @@
             captchaModal.style.display = 'flex';
         }
         function hideCaptchaModal() {
+            window.closeActiveNotifications();
             captchaModal.style.opacity = '0';
             captchaModal.style.pointerEvents = 'none';
             captchaModal.style.display = 'none';
@@ -2112,9 +2203,10 @@
             setTimeout(() => {
                 if (stopBtn.disabled === false) return; // ya se actualizó
                 unlockBtns();
-                setAction('Detenido manualmente');
+                setBotControls('idle');
+                setAction('Detenido');
                 setScanStatus('');
-            }, 4000);
+            }, 6000);  // 6s: da tiempo al kill + _emit_stopped (0.8s)
         };
 
         // ── Scan & Postular — independientes, memoria compartida ──────────────
@@ -2283,6 +2375,70 @@
         };
 
         // ── Reset completo ────────────────────────────────────────────────────
+        async function verifyAndLogin() {
+            const btn = document.getElementById('verifySessionsBtn');
+            if (btn.disabled) return;
+            btn.disabled = true;
+            btn.innerText = '⏳ Verificando...';
+
+            // Usar portales seleccionados; si ninguno está chequeado, verificar todos
+            const ALL_LOGIN = ['linkedin','computrabajo','laborum','trabajando','chiletrabajos','getonyboard'];
+            const checked = Array.from(document.querySelectorAll('.portal-checkbox:checked')).map(c => c.value).filter(Boolean);
+            const loginPortalsList = checked.length > 0 ? checked.filter(p => ALL_LOGIN.includes(p)) : ALL_LOGIN;
+
+            // Poner dots en amarillo
+            for (const p of loginPortalsList) {
+                const dot = document.getElementById(`session-${p}`);
+                const ps  = document.getElementById(`ps-${p}`);
+                if (dot) { dot.style.animation='pulse 0.8s infinite'; dot.style.background='#ffee00'; dot.title='Verificando...'; }
+                if (ps)  ps.innerText = 'Verificando...';
+            }
+
+            try {
+                // 1. Verificar
+                const res  = await fetch('/api/check-sessions', {
+                    method:'POST', headers:{'Content-Type':'application/json'},
+                    body: JSON.stringify({ portals: loginPortalsList })
+                });
+                const data = await res.json();
+                window._sessionVerifyResults = data;
+
+                const expired   = Object.entries(data).filter(([,v]) => v === 'expired').map(([k]) => k);
+                const noCookies = Object.entries(data).filter(([,v]) => v === 'no_cookies').map(([k]) => k);
+                const ok        = Object.entries(data).filter(([,v]) => v === 'ok').map(([k]) => k);
+                const bad       = [...expired, ...noCookies];
+
+                appendLogLine(`[SESIONES] Activas: ${ok.join(', ')||'ninguna'} | Sin sesión: ${bad.join(', ')||'ninguna'}`);
+
+                // Actualizar cards con resultado real de verificación
+                Object.entries(data).forEach(([p, r]) => {
+                    sessionCache[p] = (r === 'ok');
+                    _applySessionStatus(p, r);
+                });
+                if (bad.length > 0) setOps(opsSessions, `${bad.length} sin sesión`, 'warn');
+                else if (ok.length > 0) setOps(opsSessions, `${ok.length} activas ✓`, 'ok');
+
+                // 2. Si hay expiradas → abrir login automáticamente
+                if (bad.length > 0) {
+                    btn.innerText = '🔑 Logueando...';
+                    appendLogLine(`[LOGIN] Abriendo browser para: ${bad.join(', ')} — iniciá sesión en las ventanas que aparezcan.`);
+                    try {
+                        await fetch('/api/login-portals', {
+                            method:'POST', headers:{'Content-Type':'application/json'},
+                            body: JSON.stringify({ portals: bad })
+                        });
+                    } catch(e) {
+                        appendLogLine('[LOGIN] Error al abrir login: ' + e.message);
+                    }
+                }
+            } catch(e) {
+                appendLogLine('[VERIFICAR] Error: ' + e.message);
+            } finally {
+                btn.disabled = false;
+                btn.innerText = '🔐 Verificar';
+            }
+        }
+
         async function verifySessions() {
             const btn = document.getElementById('verifySessionsBtn');
             if (btn.disabled) return;
@@ -2311,10 +2467,14 @@
                 });
                 const data = await res.json();
 
+                // Guardar resultados para que importFromChrome() sepa qué portales importar
+                window._sessionVerifyResults = data;
+
                 // Resumen
                 const expired  = Object.entries(data).filter(([,v]) => v === 'expired').map(([k]) => k);
                 const noCookies= Object.entries(data).filter(([,v]) => v === 'no_cookies').map(([k]) => k);
                 const ok       = Object.entries(data).filter(([,v]) => v === 'ok').map(([k]) => k);
+                const badPortals = [...expired, ...noCookies];
 
                 let msg = `🔐 Verificación completada:\n✅ Activas: ${ok.join(', ') || 'ninguna'}`;
                 if (expired.length)   msg += `\n❌ Expiradas: ${expired.join(', ')}`;
@@ -2323,6 +2483,16 @@
 
                 if (expired.length) {
                     appendLogLine('[VERIFICAR_SESIONES] ⚠️ Portales con sesión expirada: ' + expired.join(', ') + ' — debés re-ingresar antes de postular.');
+                }
+
+                // Actualizar chip SESIONES con resultado headless real (no solo tamaño de cookie)
+                Object.entries(data).forEach(([portal, result]) => {
+                    sessionCache[portal] = (result === 'ok');
+                });
+                if (badPortals.length > 0) {
+                    setOps(opsSessions, `${badPortals.length} sin sesión`, 'warn');
+                } else if (ok.length > 0) {
+                    setOps(opsSessions, `${ok.length} activas ✓`, 'ok');
                 }
             } catch(e) {
                 const msg = e.message && e.message.toLowerCase().includes('fetch')
@@ -2359,6 +2529,65 @@
             } catch(e) {
                 appendLogLine('[LOGIN] ❌ ' + e.message);
                 btn.disabled = false; btn.innerText = '🔑 Loguear';
+            }
+        }
+
+        // Importa cookies del Chrome real al bot — útil para LinkedIn y portales con anti-bot
+        async function importFromChrome() {
+            // Si ya verificamos, importar solo los expirados; si no, importar los seleccionados
+            const toImport = window._sessionVerifyResults
+                ? Object.entries(window._sessionVerifyResults)
+                    .filter(([,v]) => v !== 'ok')
+                    .map(([k]) => k)
+                : Array.from(document.querySelectorAll('.portal-checkbox:checked'))
+                    .map(c => c.value).filter(Boolean);
+
+            if (!toImport.length) {
+                appendLogLine('[CHROME_IMPORT] Primero hacé clic en Verificar para detectar portales expirados.');
+                return;
+            }
+
+            const btn = document.getElementById('importChromeBtn');
+            btn.disabled = true;
+            btn.innerText = '⏳ Importando...';
+            appendLogLine(`[CHROME_IMPORT] Importando cookies de Chrome para: ${toImport.join(', ')}`);
+
+            try {
+                const res = await fetch('/api/import-chrome-cookies', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ portals: toImport })
+                });
+
+                if (res.status === 404) {
+                    appendLogLine('[CHROME_IMPORT] ❌ Chrome no encontrado en esta máquina.');
+                    return;
+                }
+
+                const data = await res.json();
+                if (data.error) {
+                    appendLogLine(`[CHROME_IMPORT] ❌ ${data.error}`);
+                    return;
+                }
+
+                const imported  = Object.entries(data).filter(([,v]) => v === 'imported').map(([k]) => k);
+                const noCookies = Object.entries(data).filter(([,v]) => v === 'no_cookies').map(([k]) => k);
+                const errors    = Object.entries(data).filter(([,v]) => v === 'error').map(([k]) => k);
+
+                if (imported.length)  appendLogLine(`[CHROME_IMPORT] ✅ Importado: ${imported.join(', ')}`);
+                if (noCookies.length) appendLogLine(`[CHROME_IMPORT] ⚠️ Sin cookies en Chrome: ${noCookies.join(', ')}`);
+                if (errors.length)    appendLogLine(`[CHROME_IMPORT] ❌ Error: ${errors.join(', ')}`);
+
+                if (imported.length > 0) {
+                    appendLogLine('[CHROME_IMPORT] 💡 Hacé clic en Verificar para confirmar las sesiones importadas.');
+                    window._sessionVerifyResults = null;
+                }
+
+            } catch(e) {
+                appendLogLine(`[CHROME_IMPORT] ❌ ${e.message}`);
+            } finally {
+                btn.disabled = false;
+                btn.innerText = '📥 Desde Chrome';
             }
         }
 
@@ -2423,6 +2652,85 @@
                 resetBtn.innerText = '🗑 Reset';
             }
         }
+
+        async function limpiarTodo() {
+            if (!confirm(
+                '💣 LIMPIEZA TOTAL\n\n' +
+                'Esto borrará:\n' +
+                '• Sesiones guardadas (deberás loguearte de nuevo)\n' +
+                '• Cola de scan\n' +
+                '• Quick links\n' +
+                '• Preguntas pendientes\n' +
+                '• Restricciones de portales\n' +
+                '• Stats de keywords\n' +
+                '• Logs en pantalla\n\n' +
+                '⚠️ No toca: .env, CV subido, historial de postulaciones\n\n' +
+                '¿Continuar?'
+            )) return;
+
+            const btn = document.getElementById('limpiarTodoBtn');
+            btn.disabled = true;
+            btn.innerText = '⏳ Limpiando...';
+
+            try {
+                const res  = await fetch('/api/limpiar-todo', { method: 'POST' });
+                const data = await res.json();
+
+                if (!data.ok) {
+                    alert('No se puede limpiar: ' + (data.msg || data.error || 'Error'));
+                    return;
+                }
+
+                // Reset contadores
+                ['stat-applied','stat-external','stat-filtered','stat-nonav','stat-errors'].forEach(id => {
+                    const el = document.getElementById(id);
+                    if (el) el.innerText = '0';
+                });
+
+                // Limpiar terminal y paneles
+                logContainer.innerHTML = '';
+                const panels = ['scan-result-banner','sq-panel','pq-panel'];
+                panels.forEach(id => { const el = document.getElementById(id); if (el) el.style.display = 'none'; });
+
+                // Resetear contadores de scan/cola
+                const sqCount = document.getElementById('sq-count');
+                if (sqCount) sqCount.innerText = '0 ofertas en cola';
+                const pqBadge = document.getElementById('pq-badge');
+                if (pqBadge) pqBadge.innerText = '0';
+
+                // Resetear UI de sesiones (todas a "Sin sesión")
+                const portales = ['linkedin','computrabajo','laborum','trabajando','infojobs','chiletrabajos','getonyboard'];
+                portales.forEach(p => {
+                    const dot = document.getElementById(`session-${p}`);
+                    if (dot) { dot.classList.remove('active'); dot.classList.add('missing'); dot.title = 'Sin sesión guardada'; }
+                    const ps = document.getElementById(`ps-${p}`);
+                    if (ps) { ps.innerText = 'Sin sesión'; ps.style.color = 'var(--orange)'; }
+                });
+                sessionCache = {};
+                window._sessionVerifyResults = null;
+                setOps(opsSessions, 'Sin sesiones', 'warn');
+
+                setAction('—');
+                setOps(opsState, 'Listo para iniciar', 'ok');
+                setOps(opsIntervention, 'Ninguna', 'info');
+                _botMode = null;
+                setBotControls('idle');
+
+                const cleared = (data.cleared || []).join(', ') || 'todo';
+                appendLogLine(`[LIMPIAR_TODO] ✅ Limpieza completada: ${cleared}`);
+                if (data.errors && data.errors.length) {
+                    appendLogLine(`[LIMPIAR_TODO] ⚠️ Errores: ${data.errors.join(', ')}`);
+                }
+                setScanStatus('💣 Limpieza total completada — debés loguearte de nuevo.');
+
+            } catch(e) {
+                alert('Error de red: ' + e.message);
+            } finally {
+                btn.disabled = false;
+                btn.innerText = '💣 Limpiar todo';
+            }
+        }
+
 
         // ── Daily chart ───────────────────────────────────────────────────────
         let _dailyChart = null;
@@ -2592,7 +2900,7 @@
             if (data.current_portal) updatePortalUI(data.current_portal);
             if (data.intervention) showIntervention(data.intervention.type, data.intervention.portal);
             if (data.logs && logContainer.innerHTML === '') {
-                data.logs.forEach(msg => appendLogLine(msg));
+                data.logs.forEach(msg => appendLogLine(msg, true));
             }
 
             // ── Reconciliación idle al reconectar ──

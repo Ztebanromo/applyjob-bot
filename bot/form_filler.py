@@ -395,7 +395,6 @@ def _auto_answer(label: str, profile: dict) -> Optional[str]:
         # General / IT → usar el cover_letter del perfil (es específico y profesional)
         return profile.get("cover_letter", "")
 
-    # Sin patrón reconocido → guardar como pendiente para respuesta del usuario
     return None
 
 

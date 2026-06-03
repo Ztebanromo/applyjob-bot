@@ -43,6 +43,7 @@ from pathlib import Path
 log = logging.getLogger("applyjob.engine")
 
 from playwright.sync_api import sync_playwright, Page
+from bot.browser_discovery import select_browser_backend
 
 # ── Señal de parada desde gui_server ─────────────────────────────────────────
 # gui_server.py escribe este archivo cuando el usuario hace clic en Detener.
@@ -78,57 +79,11 @@ def _relevance_score(title: str, keywords: list) -> float:
     hits = sum(1 for kw in keywords if kw.lower() in t)
     return hits / len(keywords)
 
-# ---------------------------------------------------------------------------
-# Auto-detección del ejecutable de Chrome/Chromium
-# ---------------------------------------------------------------------------
-_CHROME_CANDIDATES = [
-    r"C:\Program Files\Google\Chrome\Application\chrome.exe",
-    r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
-    r"C:\Program Files\Chromium\Application\chrome.exe",
-    os.path.expandvars(r"%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe"),
-]
-
-def _find_chrome_executable() -> str | None:
-    """Retorna la ruta al ejecutable de Chrome/Chromium si está en el sistema."""
-    for path in _CHROME_CANDIDATES:
-        if Path(path).exists():
-            return path
-    return None
-
-
-_CDP_PORT = int(os.getenv("CDP_PORT", "9222"))
-
-
-def _try_cdp_connect(pw, port: int = None):
-    """Conecta a Chrome vía CDP si está disponible. Retorna (browser, ctx, page) o None."""
-    port = port or _CDP_PORT
-    try:
-        # Verificar que el puerto está abierto
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(0.8)
-        result = sock.connect_ex(("127.0.0.1", port))
-        sock.close()
-        if result != 0:
-            return None
-
-        browser = pw.chromium.connect_over_cdp(f"http://127.0.0.1:{port}")
-        # Usar el contexto existente del usuario (ya logueado)
-        ctx  = browser.contexts[0] if browser.contexts else browser.new_context()
-        page = ctx.new_page()
-        log.info("[OK] CDP conectado al Chrome del usuario (puerto %d)", port)
-        print(f"[CDP] Conectado al Chrome del usuario - sin perfil separado.")
-        return browser, ctx, page
-    except Exception as exc:
-        log.debug("CDP no disponible (%s) — usando perfil separado.", exc)
-        return None
-
 from .config import SITE_CONFIG, USER_PROFILE, location_score, schedule_ok, experience_ok, practica_ok, topic_ok, topic_ok_it, contract_ok
 from .state import already_applied, save_application
 from .stealth_utils import (
     apply_stealth, human_delay, human_scroll, human_click,
     take_error_screenshot, random_user_agent, random_viewport,
-    portal_action_delay, reading_pause, pre_form_pause,
-    scroll_to_and_pause, human_type_field, human_click_element,
 )
 from .form_filler import fill_form
 from .retry import with_retry, get_rate_limiter, RateLimitExceeded
@@ -736,307 +691,64 @@ def _process_offer_generic(
 
 
 # ---------------------------------------------------------------------------
-# Detección de login pendiente
+# Detección de login pendiente — fuente única en bot/session_config.py
 # ---------------------------------------------------------------------------
 
-# Selectores que indican que el portal pide login (señales NEGATIVAS en _is_logged_in)
-# REGLA: solo incluir elementos que DESAPARECEN al iniciar sesión.
-# NO incluir links de footer ni elementos genéricos que puedan aparecer estando logueado.
-_LOGIN_SIGNALS = {
-    "linkedin": [
-        "div.nav__button-secondary",
-        "button[data-tracking-control-name='guest_homepage-basic_sign-in-button']",
-        ".sign-in-form",
-        "#session_key",
-        # NO incluir "a[href*='/login']" — aparece en footer incluso logueado
-    ],
-    "laborum": [
-        "#ingresarNavBar",           # botón nav específico que desaparece al loguear
-        # NO incluir "button:has-text('Ingresar')" — puede aparecer en otros contextos
-        # NO incluir "input#email" — puede aparecer en formularios de newsletter estando logueado
-    ],
-    "indeed": [
-        "a[href*='/account/login']",
-        "button:has-text('Iniciar sesión')",
-        "button:has-text('Sign in')",
-        "div.desktop-sign-in-button",
-        "a[data-gnav-element-name='SignIn']",
-    ],
-    "chiletrabajos": [
-        # Solo el CTA principal — desaparece tras login
-        "a:has-text('Ingresa a tu cuenta')",
-        # NO incluir "a[href*='/login']" ni "a[href*='/ingresar']" — aparecen en el footer logueado
-        # Campos del form solo si el usuario navega a una página de login
-        "input[name='email']",
-        "input[type='password']",
-    ],
-    "computrabajo": [
-        "a:has-text('Iniciar sesión')",
-        "button:has-text('Iniciar sesión')",
-        # NO "a:has-text('Ingresar')" — puede ser ambiguo
-        "input[name='email'][placeholder*='mail']",
-        "input[type='password']",
-        "form[action*='login']",
-        "form[action*='iniciar']",
-    ],
-    "getonyboard": [
-        # GetOnBoard usa OAuth de LinkedIn — NO tiene form email/password propio
-        "a:has-text('Ingresa')",          # cubre nav/header/any — subsets son redundantes
-        "button:has-text('Ingresa')",
-        "a[href*='/auth/sign_in']",
-    ],
-    "trabajando": [
-        # Botón de login en nav que desaparece al loguear
-        "a:has-text('Iniciar sesión')",
-        "button:has-text('Iniciar sesión')",
-        "a:has-text('Ingresar')",
-        "a[href*='/login']",
-        "input[type='password']",
-    ],
-    "infojobs": [
-        # Nav button cuando no hay sesión
-        "a:has-text('Entrar')",
-        "a:has-text('Iniciar sesión')",
-        "button:has-text('Entrar')",
-        "button:has-text('Iniciar sesión')",
-        "a[href*='/login']",
-        "input[type='password']",
-    ],
-}
+from bot.session_config import (
+    LOGGED_IN_SIGNALS   as _LOGGED_IN_SIGNALS,
+    NOT_LOGGED_IN_SIGNALS as _LOGIN_SIGNALS,
+    LOGIN_URLS          as _LOGIN_URLS,
+    STEALTH_ARGS        as _STEALTH_ARGS,
+    STEALTH_IGNORE_DEFAULT_ARGS as _STEALTH_IGNORE_DEFAULT_ARGS,
+    STEALTH_INIT_SCRIPT as _STEALTH_INIT_SCRIPT,
+    STEALTH_USER_AGENT  as _STEALTH_UA,
+)
+from bot.session_checker import (
+    check_session as _check_session,
+    SessionResult as _SessionResult,
+    is_logged_in_on_page as _is_logged_in_on_page,
+)
 
-# Selectores que confirman que ya hay sesión activa
-_LOGGED_IN_SIGNALS = {
-    "chiletrabajos": [
-        # Avatar / menú del usuario logueado en el header
-        "a[href*='/candidato/perfil']",
-        "a[href*='/mi-cuenta']",
-        "a[href*='/postulaciones']",
-        "a:has-text('Mi cuenta')",
-        "a:has-text('Mis postulaciones')",
-        "a:has-text('Mi perfil')",
-        "div.user-menu, ul.user-menu",
-        "span.username, span[class*='username']",
-        # El botón "Ingresa a tu cuenta" DESAPARECE cuando hay sesión
-        # — se verifica por ausencia en _is_logged_in con lógica extra
-    ],
-    "computrabajo": [
-        # Área privada del candidato — solo visibles cuando está logueado
-        "a:has-text('Mi área')",
-        "a:has-text('Mi currículum')",
-        "a:has-text('Mis alertas')",
-        "a[href*='/mis-postulaciones']",
-        "a[href*='/mi-curriculum']",
-        # Nombre de usuario / avatar en el nav (clase específica de candidato logueado)
-        "span.userInfo, span[class*='userInfo']",
-        "a[class*='user-name'], span[class*='user-name']",
-        # Notificaciones badge (solo aparece con sesión activa)
-        "span[class*='notification'], a[class*='notification']",
-        # Área de candidato / dashboard
-        "a[href*='/candidato/cv']",
-        "a[href*='/candidato/home']",
-        "a[href*='/candidato/']",
-        # Botón de perfil / cerrar sesión
-        "a:has-text('Cerrar sesión')",
-        "a:has-text('Salir')",
-    ],
-    "linkedin": [
-        ".global-nav__me-photo",
-        "img.global-nav__me-photo",
-        "[data-control-name='nav.settings']",
-        ".feed-identity-module",
-    ],
-    "laborum": [
-        # Selectores robustos para estado logueado en Laborum
-        "[data-testid='header-user-menu']",
-        "button:has-text('Mi Perfil')",
-        "a[href*='/postulante/']",
-        "img[class*='Avatar']",
-        # Elementos visibles en el dashboard tras login
-        "a:has-text('Ir a mis postulaciones')",
-        "a:has-text('Ir a mi CV')",
-        "a[href*='/postulante/cv']",
-        "a[href*='/postulante/perfil']",
-        "a[href*='/mi-perfil']",
-        "[class*='userMenu']",
-        "[class*='UserMenu']",
-        "[class*='user-menu']",
-        # Avatar genérico en nav (círculo del usuario top-right)
-        "nav img[src*='avatar'], nav img[src*='profile'], nav img[src*='user']",
-        "header [class*='avatar'], header [class*='Avatar']",
-    ],
-    "indeed": [
-        "a[data-gnav-element-name='Account']",
-        "div[data-testid='UserDropdown']",
-        "button[aria-label*='cuenta']",
-        "img[class*='avatarImage']",
-        "#IA_AccountHamburger",
-        "a[href*='/myjobs']",
-    ],
-    "getonyboard": [
-        # GetOnBoard login es vía LinkedIn OAuth — señales post-login específicas
-        "a[href*='/workers/me']",          # enlace al perfil propio del usuario (slug "me")
-        "a[href*='/postulations']",        # mis postulaciones
-        "a:has-text('Mis postulaciones')",
-        "a:has-text('Mi perfil')",
-        "div[class*='UserMenu']",
-        "div[class*='user-menu']",
-        # Avatar CDN tras login con LinkedIn (URL no contiene "logo" ni dominio de GetOnBoard)
-        "nav img[src*='cloudfront']",
-        "nav img[src*='gravatar']",
-        "nav img[src*='linkedin']",
-        # NO incluir "header img[alt]" — el LOGO del sitio tiene alt y siempre está visible
-        # NO incluir "[class*='NavBar'] img" — matchea el logo en cualquier estado
-        # NO incluir "a[href*='/workers/']" — aparece en links de otros trabajadores en listados
-    ],
-    "trabajando": [
-        # Menú de usuario logueado en Trabajando.cl
-        "a[href*='/mi-cv']",
-        "a[href*='/mi-cuenta']",
-        "a[href*='/mis-postulaciones']",
-        "a:has-text('Mi CV')",
-        "a:has-text('Mi cuenta')",
-        "a:has-text('Mis postulaciones')",
-        "a:has-text('Cerrar sesión')",
-        "a:has-text('Salir')",
-        "li.user-menu, div.user-menu",
-        "span[class*='username'], span[class*='user-name']",
-        "img[class*='avatar'], img[alt*='perfil']",
-        # El dashboard redirige a /empleos o /inicio después del login
-    ],
-    "infojobs": [
-        # Solo rutas privadas del candidato — NO "/candidato/" genérico (aparece en listados públicos)
-        "a[href*='/candidato/mis-candidaturas']",
-        "a[href*='/candidato/mi-perfil']",
-        "a:has-text('Mis candidaturas')",
-        "a:has-text('Mis Candidaturas')",
-        "button:has-text('Mi cuenta')",
-        "[data-testid='user-menu']",
-        "[class*='userAvatar']",
-        "[class*='UserMenu']",
-        "[class*='navbar-user']",
-        "img[alt*='avatar' i]",
-        # NO incluir "a[href*='/candidato/']" — aparece en listados públicos de ofertas
-        # NO incluir "a:has-text('Mi perfil')" — aparece en CTAs de registro sin login
-    ],
-}
+# Umbral mínimo de bytes — mantenido para compatibilidad con código que lo usa
+_COOKIES_MIN_BYTES = 8_000
 
-# URLs de login por portal
-_LOGIN_URLS = {
-    "linkedin":      "https://www.linkedin.com/login",
-    "laborum":       "https://www.laborum.cl",
-    "indeed":        "https://cl.indeed.com/account/login",
-    "chiletrabajos": "https://www.chiletrabajos.cl",
-    "computrabajo":  "https://cl.computrabajo.com",
-    "getonyboard":   "https://www.getonbrd.com/auth/sign_in",
-    "infojobs":      "https://www.infojobs.net",
-    "trabajando":    "https://www.trabajando.cl",
-}
 
-# Umbral mínimo de bytes del archivo Cookies para considerar sesión existente
-_COOKIES_MIN_BYTES = 8_000    # ~8 KB; umbral conservador para detectar sesión real
+def _has_cookies_sqlite(cookies_path: Path) -> bool:
+    """Wrapper: delega a session_checker.has_real_cookies."""
+    from bot.session_checker import has_real_cookies as _hrc
+    return _hrc(cookies_path.parent.parent.parent)  # Cookies → Network → Default → session_dir
 
 
 def _session_has_cookies(session_dir: str) -> bool:
-    """
-    Retorna True si el directorio de sesión tiene un archivo Cookies con tamaño
-    suficiente para indicar que el usuario ha iniciado sesión al menos una vez.
-    """
-    cookies_path = Path(session_dir) / "Default" / "Network" / "Cookies"
-    if not cookies_path.exists():
-        return False
-    try:
-        return cookies_path.stat().st_size >= _COOKIES_MIN_BYTES
-    except OSError:
-        return False
+    """True si el directorio tiene cookies reales."""
+    from bot.session_checker import has_real_cookies as _hrc
+    return _hrc(session_dir)
 
 
 def _session_is_active(portal_name: str, session_dir: str) -> bool:
     """
-    Chequeo headless rápido: navega a la home del portal con las cookies guardadas
-    y verifica si la sesión sigue activa por DOM.
-
-    Retorna True  → sesión válida (skip en Loguear).
-    Retorna False → sesion expirada o sin cookies (abrir browser visible).
+    Wrapper sobre session_checker.check_session().
+    Retorna True si la sesión está activa, False en cualquier otro caso.
     """
-    if not _session_has_cookies(session_dir):
-        return False
-
-    login_url = _LOGIN_URLS.get(portal_name, SITE_CONFIG.get(portal_name, {}).get("url_busqueda", ""))
-    if not login_url:
-        return False
-
-    neg_sels = _LOGIN_SIGNALS.get(portal_name, ["input[type='password']"])
-    pos_sels = _LOGGED_IN_SIGNALS.get(portal_name, [])
-
-    try:
-        with sync_playwright() as pw:
-            ctx = pw.chromium.launch_persistent_context(
-                session_dir,
-                headless    = True,
-                args        = ["--no-sandbox", "--disable-blink-features=AutomationControlled"],
-                locale      = "es-CL",
-                timezone_id = "America/Santiago",
-            )
-            pg = ctx.new_page()
-            try:
-                pg.goto(login_url, wait_until="domcontentloaded", timeout=20_000)
-                pg.wait_for_timeout(3000)
-            except Exception:
-                pass
-
-            # Chequeo DOM estricto:
-            # - Si aparece señal negativa (form de login) → NO logueado
-            # - Si aparece señal positiva (menú usuario) → logueado
-            # - Sin fallback URL (portal puede mostrar homepage sin login form aunque no esté logueado)
-            logged_in = False
-            try:
-                # 1. Señales negativas fuertes → no logueado
-                neg_visible = False
-                for sel in neg_sels:
-                    try:
-                        el = pg.query_selector(sel)
-                        if el and el.is_visible():
-                            neg_visible = True
-                            break
-                    except Exception:
-                        pass
-
-                if not neg_visible:
-                    # 2. Señales positivas explícitas → logueado
-                    for sel in pos_sels:
-                        try:
-                            el = pg.query_selector(sel)
-                            if el and el.is_visible():
-                                logged_in = True
-                                break
-                        except Exception:
-                            pass
-            except Exception:
-                pass
-
-            try:
-                ctx.close()
-            except Exception:
-                pass
-
-        return logged_in
-    except Exception as exc:
-        log.debug("[SESSION_CHECK] Error en chequeo headless de %s: %s", portal_name, exc)
-        return False
+    result = _check_session(portal_name, session_dir)
+    return result == _SessionResult.OK
 
 
 def _open_browser_for_manual_login(
     portal_name: str,
     session_dir: str,
-    chrome_exe: str | None,
     locale: str = "es-CL",
     tz: str = "America/Santiago",
     timeout_seconds: int = 300,
+    session_confirmed_inactive: bool = False,
 ) -> bool:
     """
-    Abre Chromium visible para que el usuario inicie sesión manualmente.
-    Detecta el login por DOM (señales negativas + positivas + fallback URL).
-    Navega a la URL de búsqueda para forzar flush de cookies y cierra el browser.
+    Abre el browser para que el usuario inicie sesión manualmente.
+
+    Estrategia:
+      1. Si hay Chrome real disponible → abrir nueva pestaña en Chrome del usuario
+         (evita la detección de nuevo dispositivo que causa verificación por email)
+      2. Si no → abrir Chromium aislado como siempre
 
     Retorna True si el login fue detectado y la sesión guardada, False si el timeout expiró.
     """
@@ -1064,42 +776,22 @@ def _open_browser_for_manual_login(
     ])
 
     # Umbral para detección de sesión pre-existente en el pre-check.
-    # 15KB separa cookies de tracking puras (5-10KB visita sin login)
-    # de cookies que incluyen sesión autenticada (15KB+).
-    _SESSION_PRECHECK_BYTES = 15_000
+    # La base de datos SQLite vacía de Chromium (sin login) pesa exactamente 20480B.
+    # Una sesión real con auth cookies pesa >= 28KB. Usamos 25KB como separador.
+    _SESSION_PRECHECK_BYTES = 25_000
 
     def _is_logged_in(pg, precheck: bool = False) -> bool:
         """
-        precheck=False (loop de espera): usuario acaba de loguear.
-          → Solo DOM positivo. Estricto.
-
-        precheck=True (verificación inicial): sesión puede ser pre-existente.
-          → Si hay cookies grandes (>30KB) Y sin señal negativa → asumir logueado.
-            Esto cubre portales cuyos selectores positivos no matchean el DOM exacto.
+        Verifica si hay sesión activa. Usa la función centralizada de session_checker
+        y agrega fallback de tamaño de cookies para pre-check.
         """
-        # 1. Señal negativa — si login form visible: NO logueado en ningún caso
-        for sel in _neg_sels:
-            try:
-                el = pg.query_selector(sel)
-                if el and el.is_visible():
-                    log.debug("[LOGIN_MANUAL] neg: %s", sel)
-                    return False
-            except Exception:
-                pass
-
-        # 2. Señal DOM positiva — menú de usuario visible
-        for sel in _logged_in_sels:
-            try:
-                el = pg.query_selector(sel)
-                if el and el.is_visible():
-                    log.debug("[LOGIN_MANUAL] pos: %s", sel)
-                    return True
-            except Exception:
-                pass
-
-        # 3. Pre-check fallback: cookies grandes + sin señal negativa → sesión probablemente válida
-        #    Solo aplica al verificar una sesión PRE-EXISTENTE (no cuando el usuario acaba de loguear).
-        if precheck:
+        # Función centralizada de 3 capas (neg → pos → fallback URL)
+        if _is_logged_in_on_page(pg, portal_name):
+            return True
+        
+        # Fallback adicional para precheck: si cookies son grandes (>25KB)
+        # y sin señales negativas → probablemente logueado
+        if precheck and not session_confirmed_inactive:
             try:
                 ck = Path(session_dir) / "Default" / "Network" / "Cookies"
                 if ck.exists() and ck.stat().st_size >= _SESSION_PRECHECK_BYTES:
@@ -1107,32 +799,83 @@ def _open_browser_for_manual_login(
                     return True
             except Exception:
                 pass
-
+        
         return False
 
+
+    # Ruta donde guardar el storage_state (cookies + session cookies + localStorage)
+    _state_file = Path(session_dir) / "playwright_state.json"
+
     def _flush_and_close(ctx, pg) -> None:
-        """Navega a la home del portal para forzar escritura de cookies y cierra el contexto."""
+        """
+        Guarda el estado completo de la sesión y cierra el contexto.
+
+        Playwright storage_state() captura:
+          - Cookies persistentes (con expiry) desde la base SQLite
+          - Session cookies (sin expiry, is_persistent=0) desde memoria
+          - localStorage y sessionStorage
+
+        Este JSON se restaura en el bot principal via storage_state= en launch_persistent_context,
+        garantizando que session cookies (como ci_session, PHPSESSID, etc.) persistan.
+        """
+        # 1. Navegar a home del portal para activar flush de cookies del servidor
+        #    GetOnBoard: espera extra post-OAuth porque el avatar/sesión tarda en asentarse
+        _wait_extra = 5000 if portal_name == "getonyboard" else 3000
         if _home_url:
             try:
-                pg.goto(_home_url, wait_until="domcontentloaded", timeout=10_000)
+                pg.goto(_home_url, wait_until="domcontentloaded", timeout=12_000)
+                pg.wait_for_timeout(_wait_extra)
             except Exception:
                 pass
-        pg.wait_for_timeout(4000)   # dar tiempo a Chromium de escribir cookies al disco
-        ctx.close()
+
+        # 2. Guardar storage_state — captura cookies de TODOS los dominios visitados
+        #    (incluyendo linkedin.com para GetOnBoard OAuth, getonbrd.com, etc.)
+        try:
+            state = ctx.storage_state(path=str(_state_file))
+            n_cookies = len(state.get("cookies", []))
+            domains = list({c.get("domain","") for c in state.get("cookies", [])})[:5]
+            log.info("[SAVE_SESSION] %s: %d cookies guardadas (dominios: %s)",
+                     portal_name, n_cookies, ", ".join(domains))
+            try:
+                print(f"[SESION_NUEVA] {portal_name.upper()} - {n_cookies} cookies guardadas.")
+            except Exception:
+                pass
+        except Exception as exc:
+            log.warning("[SAVE_SESSION] No se pudo guardar storage_state: %s", exc)
+
+        # 3. Espera final para Chromium (escribe SQLite)
+        pg.wait_for_timeout(4000)
+
+        # 4. Cierre limpio
+        try:
+            ctx.close()
+        except Exception:
+            pass
 
     try:
         with sync_playwright() as _pw:
-            _kw: dict = dict(
-                headless    = False,
-                args        = ["--no-sandbox", "--disable-blink-features=AutomationControlled"],
-                locale      = locale,
-                timezone_id = tz,
+            from bot.browser_discovery import select_browser_backend
+            backend = select_browser_backend(
+                _pw,
+                session_dir,
+                headless=False,
+                user_agent=_STEALTH_UA,
+                args=_STEALTH_ARGS + ["--start-maximized"],
+                ignore_default_args=_STEALTH_IGNORE_DEFAULT_ARGS,
+                locale=locale,
+                timezone_id=tz,
             )
-            if chrome_exe:
-                _kw["executable_path"] = chrome_exe
+            if backend is None:
+                log.warning("[LOGIN_MANUAL] No se pudo inicializar backend de navegador")
+                return False
 
-            ctx = _pw.chromium.launch_persistent_context(session_dir, **_kw)
-            pg  = ctx.new_page()
+            ctx = backend.context
+            pg = backend.new_page()
+            if pg is None:
+                backend.close()
+                return False
+
+            pg.add_init_script(_STEALTH_INIT_SCRIPT)
             try:
                 pg.goto(login_url, wait_until="domcontentloaded", timeout=30_000)
                 pg.wait_for_timeout(5000)   # hidratación DOM (SPAs con React/Vue)
@@ -1165,11 +908,26 @@ def _open_browser_for_manual_login(
                 time.sleep(3)
                 _det = False
                 try:
+                    # GetOnBoard OAuth: durante el redirect a linkedin.com el browser
+                    # sale del dominio de GetOnBoard — esperar que vuelva antes de detectar
+                    _cur_url = ""
+                    try:
+                        _cur_url = pg.url or ""
+                    except Exception:
+                        pass
+                    if portal_name == "getonyboard" and "linkedin.com" in _cur_url:
+                        continue  # en pleno OAuth de LinkedIn, seguir esperando
                     _det = _is_logged_in(pg)
                 except Exception:
                     pass
                 if _det:
                     logged_in = True
+                    # Para GetOnBoard: esperar extra a que el avatar OAuth cargue
+                    if portal_name == "getonyboard":
+                        try:
+                            pg.wait_for_timeout(3000)
+                        except Exception:
+                            pass
                     try:
                         print(f"[SESION_NUEVA] {portal_name.upper()} - login detectado. Guardando sesion...")
                     except Exception:
@@ -1184,7 +942,7 @@ def _open_browser_for_manual_login(
 
             if not logged_in:
                 try:
-                    ctx.close()
+                    backend.close()
                 except Exception:
                     pass
 
@@ -1202,33 +960,43 @@ def _open_browser_for_manual_login(
 def _ensure_login(portal_name: str, session_dir: str) -> bool:
     """
     Garantiza sesión válida ANTES de abrir el browser principal.
-    Si la sesión ya está activa (chequeo headless) → retorna True sin abrir ventana.
-    Si no hay sesión → abre browser visible para login manual.
-    Da 60 segundos por intento y reintenta indefinidamente hasta:
-      - que el usuario se loguee (retorna True), o
-      - que se detecte señal de stop (retorna False).
 
-    Llamar antes de `run_bot` y `run_scan_pass` para portales con requires_login.
+    Orden de verificación:
+      1. Verificar con headless Playwright
+      2. Sesión no activa → abrir browser visible para login manual
     """
     if not SITE_CONFIG.get(portal_name, {}).get("requires_login", False):
         return True
 
-    # Chequeo headless silencioso: si la sesión sigue activa → no abrir browser
-    print(f"[LOGIN] {portal_name.upper()} - verificando sesion guardada...", flush=True)
-    if _session_is_active(portal_name, session_dir):
-        print(f"[SESION_INICIADA] {portal_name.upper()} - sesion activa. Continuando sin login manual.")
-        return True
+    # Detección rápida: ¿hay cookies reales en la base SQLite?
+    _ck_path = Path(session_dir) / "Default" / "Network" / "Cookies"
+    _has_ck   = _has_cookies_sqlite(_ck_path)
+
+    if not _has_ck:
+        print(f"\n[LOGIN_REQUERIDO] {portal_name.upper()} - sin sesion. Abre el browser que aparece.", flush=True)
+    else:
+        print(f"[LOGIN] {portal_name.upper()} - verificando sesion...", flush=True)
+        if _session_is_active(portal_name, session_dir):
+            print(f"[SESION_INICIADA] {portal_name.upper()} - sesion activa.")
+            return True
+
+        print(f"\n[LOGIN_REQUERIDO] {portal_name.upper()} - sesion expirada. Abre el browser que aparece.", flush=True)
 
     attempt = 0
+    _last_req_print = 0.0
     while not _should_stop():
         attempt += 1
-        print(f"\n[LOGIN] {portal_name.upper()} - sesion expirada. Abriendo browser (intento {attempt})...")
+        _now = time.time()
+        # Imprimir [LOGIN_REQUERIDO] máximo una vez cada 60 segundos para no spamear logs
+        if attempt > 1 and _now - _last_req_print >= 60:
+            print(f"\n[LOGIN_REQUERIDO] {portal_name.upper()} - intento {attempt}. Abre el browser.")
+            _last_req_print = _now
 
         ok = _open_browser_for_manual_login(
-            portal_name     = portal_name,
-            session_dir     = session_dir,
-            chrome_exe      = None,
-            timeout_seconds = 60,
+            portal_name              = portal_name,
+            session_dir              = session_dir,
+            timeout_seconds          = 300,  # mantener la ventana abierta más tiempo antes de reintentar
+            session_confirmed_inactive = True,
         )
         if ok:
             return True
@@ -1272,86 +1040,10 @@ def _wait_for_login_if_needed(page, portal_name: str, config: dict) -> None:
 
     def _is_logged_in() -> bool:
         """
-        Misma lógica de 3 capas que _open_browser_for_manual_login._is_logged_in.
-        Unifica la detección para evitar divergencias y bugs por selectores de footer.
-
-        1. NEGATIVA  : form/campo de login visible → NO logueado.
-                       Solo selectors específicos (input password, form action) —
-                       NO links de texto genéricos que aparecen también en footer.
-        2. POSITIVA  : menú/avatar de usuario visible → logueado.
-        3. FALLBACK  : sin señales negativas + URL en dominio del portal + no es
-                       página de login → asumir logueado.
+        Usa la función centralizada de session_checker para detectar logeo.
         """
-        from urllib.parse import urlparse
+        return _is_logged_in_on_page(page, portal_name)
 
-        try:
-            current_url = page.url or ""
-        except Exception:
-            return False
-
-        # Selectors negativos FUERTES — solo aparecen en páginas de login real,
-        # NO en footers ni menús de sitios ya logueados.
-        _strong_neg = [
-            "input[type='password']",
-            "input[name='email'][placeholder*='mail']",
-            "form[action*='login']",
-            "form[action*='iniciar']",
-            "form[action*='signin']",
-            "#session_key",           # LinkedIn login form
-            ".sign-in-form",          # LinkedIn
-        ]
-        # Negativos adicionales específicos por portal (solo los que son nav-level)
-        _portal_neg = {
-            "laborum":    ["#ingresarNavBar"],
-            "getonyboard":["a[href*='/auth/sign_in']"],
-        }
-
-        # 1. Señal negativa fuerte → definitivamente NO logueado
-        for sel in _strong_neg + _portal_neg.get(portal_name, []):
-            try:
-                el = page.query_selector(sel)
-                if el and el.is_visible():
-                    return False
-            except Exception:
-                pass
-
-        # 2. Señal DOM positiva → logueado
-        for sel in session_sels:
-            try:
-                el = page.query_selector(sel)
-                if el and el.is_visible():
-                    return True
-            except Exception:
-                pass
-
-        # 3. Fallback URL — mismo dominio del portal, no es ruta de login
-        _portal_domains = {
-            "linkedin":      "linkedin.com",
-            "computrabajo":  "computrabajo.com",
-            "laborum":       "laborum.cl",
-            "trabajando":    "trabajando.cl",
-            "infojobs":      "infojobs.net",
-            "chiletrabajos": "chiletrabajos.cl",
-            "getonyboard":   "getonbrd.com",
-            "indeed":        "indeed.com",
-        }
-        _LOGIN_PATH_KW = [
-            "login", "signin", "sign-in", "ingresar", "register",
-            "registro", "auth/sign", "candidato/login",
-            "checkpoint", "authwall", "iniciar-sesion",
-        ]
-        expected_domain = _portal_domains.get(portal_name, "")
-        try:
-            cur_domain = urlparse(current_url).netloc.lower()
-        except Exception:
-            cur_domain = ""
-
-        if (current_url and expected_domain
-                and expected_domain in cur_domain
-                and not any(k in current_url.lower() for k in _LOGIN_PATH_KW)):
-            return True
-
-        return False
 
     def _needs_login() -> bool:
         if _is_logged_in():
@@ -1392,7 +1084,7 @@ def _wait_for_login_if_needed(page, portal_name: str, config: dict) -> None:
     # Portales con requires_login necesitan que el DOM esté completo para
     # detectar correctamente si el botón de login o el avatar del usuario aparece.
     # getonyboard: requires_login=True → verificar sesión LinkedIn guardada antes de postular.
-    _PORTALS_FORCE_LOGIN = ("indeed", "laborum", "linkedin", "chiletrabajos", "computrabajo", "getonyboard")
+    _PORTALS_FORCE_LOGIN = ("indeed", "linkedin", "chiletrabajos", "computrabajo", "getonyboard")
     try:
         page.wait_for_load_state("domcontentloaded", timeout=5_000)
         page.wait_for_function("() => document.readyState === 'complete'", timeout=5_000)
@@ -1591,42 +1283,74 @@ def _wait_for_login_if_needed(page, portal_name: str, config: dict) -> None:
             log.debug("[GOB_LOGIN] Error en auto-login: %s", _gob_exc)
 
     # ── Sesión no activa — esperar login en el browser ya abierto ────────────────
-    # El browser del bot está visible (headless=False) o el usuario lo dejó abierto.
-    # En lugar de saltar el portal, esperamos indefinidamente en ventanas de 60s.
-    # El usuario puede iniciar sesión directamente en el browser del bot.
-    # La señal de stop (_should_stop()) interrumpe el loop.
+    # Estrategia dual:
+    # A) El usuario loguea EN ESTE BROWSER → _is_logged_in() lo detecta por DOM
+    # B) El usuario logueó en un BROWSER SEPARADO (🔑 Loguear) → las cookies en disco
+    #    cambiaron; el bot recarga la página para cargar la nueva sesión
     _portal_display = portal_name.upper()
+    _session_dir    = str(SESSIONS_DIR / portal_name)
+    _ck_path        = Path(_session_dir) / "Default" / "Network" / "Cookies"
+    _ck_size_start  = _ck_path.stat().st_size if _ck_path.exists() else 0
+    _home_url_wf    = SITE_CONFIG.get(portal_name, {}).get("url_busqueda", "") or config.get("url_busqueda", "")
+
     attempt = 0
     while not _should_stop():
         attempt += 1
-        print(f"\n[LOGIN_REQUERIDO] {_portal_display} - inicia sesion en el navegador abierto. "
-              f"(intento {attempt}, 60s)")
-        log.warning("[%s] Esperando login manual en browser abierto (intento %d).", portal_name, attempt)
+        print(f"\n[LOGIN_REQUERIDO] {_portal_display} - inicia sesion en el navegador. "
+              f"(intento {attempt})")
 
         deadline_attempt = time.time() + 60
         while time.time() < deadline_attempt:
             if _should_stop():
-                raise TimeoutError(f"{portal_name}: detenido por el usuario.")
+                raise TimeoutError(f"{portal_name}: detenido.")
             time.sleep(3)
-            # Detectar login con return FUERA del try/except para que no sea
-            # tragado si print() falla por encoding en Windows (cp1252)
+
+            # A) Detección DOM en el browser actual
             _detected = False
             try:
                 _detected = _is_logged_in()
             except Exception:
                 pass
             if _detected:
-                log.info("[%s] Login detectado tras %d intento(s).", portal_name, attempt)
+                log.info("[%s] Login detectado (DOM) tras %d intento(s).", portal_name, attempt)
                 try:
                     print(f"[SESION_INICIADA] {_portal_display} - login detectado. Continuando.")
                 except Exception:
                     pass
-                return   # siempre ejecuta, sin importar si print() fallo
+                return
+
+            # B) Cookies en disco cambiaron (login via browser separado)
+            try:
+                _ck_size_now = _ck_path.stat().st_size if _ck_path.exists() else 0
+                if _ck_size_now > _ck_size_start + 5000:  # creció >5KB = nuevas auth cookies
+                    log.info("[%s] Cookies actualizadas en disco (%d→%d bytes) — recargando.",
+                             portal_name, _ck_size_start, _ck_size_now)
+                    try:
+                        page.goto(_home_url_wf or _LOGIN_URLS.get(portal_name, ""),
+                                  wait_until="domcontentloaded", timeout=15_000)
+                        page.wait_for_timeout(3000)
+                    except Exception:
+                        pass
+                    _ck_size_start = _ck_size_now
+                    _detected2 = False
+                    try:
+                        _detected2 = _is_logged_in()
+                    except Exception:
+                        pass
+                    if _detected2:
+                        log.info("[%s] Login confirmado tras recarga de cookies.", portal_name)
+                        try:
+                            print(f"[SESION_INICIADA] {_portal_display} - sesion renovada. Continuando.")
+                        except Exception:
+                            pass
+                        return
+            except Exception:
+                pass
 
         if not _should_stop():
             print(f"[LOGIN_REQUERIDO] {_portal_display} - 60s sin login. Reintentando...")
 
-    raise TimeoutError(f"{portal_name}: detenido por el usuario.")
+    raise TimeoutError(f"{portal_name}: detenido.")
 
 
 # ---------------------------------------------------------------------------
@@ -1636,7 +1360,6 @@ def _wait_for_login_if_needed(page, portal_name: str, config: dict) -> None:
 def _run_keyword_loop(
     page, browser, portal_name: str, config: dict, profile: dict,
     max_offers: int, dry_run: bool, rate_limiter, portal_handler,
-    using_cdp: bool = False,
     session_verified: bool = False,
     deadline: float = 0.0,
 ) -> tuple[int, list[str]]:
@@ -1734,13 +1457,12 @@ def _run_keyword_loop(
                     recovered = True
             except Exception:
                 pass
-            # Intento 2: abrir página nueva y re-navegar a listing
+            # Intento 2: reusar página existente o abrir una nueva si no hay
             if not recovered:
                 try:
-                    page = (browser.new_page() if not using_cdp
-                            else browser.contexts[0].new_page())
-                    if not using_cdp:
-                        apply_stealth(page)
+                    _existing = browser.pages if hasattr(browser, "pages") else []
+                    page = (_existing[0] if _existing else browser.new_page())
+                    apply_stealth(page)
                     page.goto(config["url_busqueda"],
                               wait_until="domcontentloaded", timeout=25_000)
                     human_delay(3.0, 5.0)
@@ -1778,10 +1500,9 @@ def _run_keyword_loop(
                     pass
                 if not recovered:
                     try:
-                        page = (browser.new_page() if not using_cdp
-                                else browser.contexts[0].new_page())
-                        if not using_cdp:
-                            apply_stealth(page)
+                        _existing2 = browser.pages if hasattr(browser, "pages") else []
+                        page = (_existing2[0] if _existing2 else browser.new_page())
+                        apply_stealth(page)
                         page.goto(config["url_busqueda"],
                                   wait_until="domcontentloaded", timeout=25_000)
                         human_delay(3.0, 5.0)
@@ -1822,13 +1543,14 @@ def _run_keyword_loop(
                     log.debug("  [skip-db] %s", offer_url)
                     continue
 
-                # Recuperar página si fue cerrada
+                # Recuperar página si fue cerrada — reusar existente, no abrir nueva
                 try:
                     _ = page.url
                 except Exception:
-                    log.warning("Página cerrada inesperadamente. Recreando...")
+                    log.warning("Página cerrada inesperadamente. Recuperando...")
                     try:
-                        page = browser.new_page()
+                        _pgs = browser.pages if hasattr(browser, "pages") else []
+                        page = _pgs[0] if _pgs else browser.new_page()
                         apply_stealth(page)
                         try:
                             from playwright_stealth import Stealth
@@ -2427,26 +2149,32 @@ def run_scan_pass(portal_name: str, headless: bool = False) -> None:
     print(f"\n[SCAN] Pasada 1 en {portal_name.upper()} - sin postular, solo recolectando\n")
 
     # Pre-login: garantiza sesión antes de abrir el browser principal.
-    # Reintenta en ventanas de 60s hasta que el usuario loguee o se detenga el bot.
     if not _ensure_login(portal_name, session_dir):
         log.warning("[SCAN] Login cancelado para %s — detenido.", portal_name)
         return
 
     with sync_playwright() as pw:
-        cdp = _try_cdp_connect(pw)
-        if cdp:
-            _, _, page = cdp
-            using_cdp = True
-        else:
-            ctx = pw.chromium.launch_persistent_context(
-                session_dir, headless=headless,
-                args=["--no-sandbox", "--disable-blink-features=AutomationControlled", "--disable-popup-blocking"],
-                user_agent=random_user_agent(), viewport=random_viewport(),
-                locale="es-CL", timezone_id="America/Santiago",
-            )
-            page = ctx.new_page()
-            apply_stealth(page)
-            using_cdp = False
+        backend = select_browser_backend(
+            pw,
+            session_dir,
+            headless=headless,
+            user_agent=_STEALTH_UA,
+            args=_STEALTH_ARGS + ["--disable-popup-blocking"],
+            ignore_default_args=_STEALTH_IGNORE_DEFAULT_ARGS,
+            locale="es-CL",
+            timezone_id="America/Santiago",
+        )
+        if backend is None:
+            log.warning("[SCAN] No se pudo inicializar backend de navegador")
+            return
+
+        page = backend.new_page()
+        if page is None:
+            backend.close()
+            return
+
+        page.add_init_script(_STEALTH_INIT_SCRIPT)
+        apply_stealth(page)
 
         base_config = dict(SITE_CONFIG[portal_name])
         try:
@@ -2582,14 +2310,13 @@ def run_scan_pass(portal_name: str, headless: bool = False) -> None:
                 scan_groups.extend(new_kws)
                 print(f"  [KW_RETIRE] '{keyword}' retirada (0 ofertas) → {len(new_kws)} reemplazos")
 
-        if not using_cdp:
-            ctx.close()
-            # Portales con login: PRESERVAR la sesión (cookies válidas = recurso valioso)
-            # Portales públicos (sin login): descartar (solo cache del browser, sin valor)
-            if SITE_CONFIG.get(portal_name, {}).get("requires_login"):
-                _maybe_keep_session(session_dir, portal_name, applied=0)
-            else:
-                _discard_session(session_dir, portal_name)
+        backend.close()
+        # Portales con login: PRESERVAR la sesión (cookies válidas = recurso valioso)
+        # Portales públicos (sin login): descartar (solo cache del browser, sin valor)
+        if SITE_CONFIG.get(portal_name, {}).get("requires_login"):
+            _maybe_keep_session(session_dir, portal_name, applied=0)
+        else:
+            _discard_session(session_dir, portal_name)
 
     queue_size = len(_load_scan_queue())
     print(f"\n[SCAN] Resultado pasada 1:")
@@ -2653,27 +2380,33 @@ def run_apply_queue(portal_name: str, headless: bool = False) -> None:
     errors        = 0
     total_skipped = 0
 
-    # Límite de postulaciones por run — respeta USER_MAX_OFFERS o max_offers_per_run del portal
     _aq_max = SITE_CONFIG.get(portal_name, {}).get("max_offers_per_run", 5)
     _env_max_aq = os.getenv("USER_MAX_OFFERS", "").strip()
     if _env_max_aq.isdigit():
         _aq_max = min(_aq_max, int(_env_max_aq))
 
     with sync_playwright() as pw:
-        cdp = _try_cdp_connect(pw)
-        if cdp:
-            _, _, page = cdp
-            using_cdp = True
-        else:
-            ctx = pw.chromium.launch_persistent_context(
-                session_dir, headless=headless,
-                args=["--no-sandbox", "--disable-blink-features=AutomationControlled", "--disable-popup-blocking"],
-                user_agent=random_user_agent(), viewport=random_viewport(),
-                locale="es-CL", timezone_id="America/Santiago",
-            )
-            page = ctx.new_page()
-            apply_stealth(page)
-            using_cdp = False
+        backend = select_browser_backend(
+            pw,
+            session_dir,
+            headless=headless,
+            user_agent=_STEALTH_UA,
+            args=_STEALTH_ARGS + ["--disable-popup-blocking"],
+            ignore_default_args=_STEALTH_IGNORE_DEFAULT_ARGS,
+            locale="es-CL",
+            timezone_id="America/Santiago",
+        )
+        if backend is None:
+            log.warning("[APPLY-QUEUE] No se pudo inicializar backend de navegador")
+            return
+
+        page = backend.new_page()
+        if page is None:
+            backend.close()
+            return
+
+        page.add_init_script(_STEALTH_INIT_SCRIPT)
+        apply_stealth(page)
 
         base_config = dict(SITE_CONFIG[portal_name])
         try:
@@ -2838,9 +2571,8 @@ def run_apply_queue(portal_name: str, headless: bool = False) -> None:
                 else:
                     print(f"-> ❌ Error (fallo 1/2): {str(exc)[:50]}")
 
-        if not using_cdp:
-            ctx.close()
-            _maybe_keep_session(session_dir, portal_name, applied)
+        backend.close()
+        _maybe_keep_session(session_dir, portal_name, applied)
 
     remaining = len(_load_scan_queue())
     print(f"\n[APPLY-QUEUE] Resultado:")
@@ -2959,11 +2691,6 @@ def run_bot_multi_keywords(
     run_startup_validation(portal_name, USER_PROFILE, SITE_CONFIG[portal_name])
 
     rate_limiter = get_rate_limiter(portal_name)
-    chrome_exe   = _find_chrome_executable()
-    if chrome_exe:
-        log.info("Usando Chrome del sistema: %s", chrome_exe)
-    else:
-        log.info("Usando Chromium de Playwright")
 
     _PORTAL_LOCALE = {
         # Portales Chile — navegador en español para evitar detección
@@ -3019,50 +2746,33 @@ def run_bot_multi_keywords(
         return 0
 
     with sync_playwright() as pw:
-        # -- Intentar CDP primero (Chrome del usuario ya abierto) -------------
-        cdp_result = _try_cdp_connect(pw)
-        using_cdp  = cdp_result is not None
+        browser_backend = select_browser_backend(
+            pw,
+            session_dir,
+            headless=headless,
+            user_agent=_STEALTH_UA,
+            args=["--no-sandbox", "--disable-blink-features=AutomationControlled"],
+            ignore_default_args=_STEALTH_IGNORE_DEFAULT_ARGS,
+            locale=_locale,
+            timezone_id=_tz,
+        )
+        if browser_backend is None:
+            log.warning("[BOT] No se pudo inicializar backend de navegador")
+            return 0
 
-        if using_cdp:
-            browser_instance, browser_ctx, page = cdp_result
-            log.info("Modo CDP — usando Chrome real del usuario (puerto %d)", _CDP_PORT)
-            print(f"[CDP] [OK] Conectado a tu Chrome real - tus sesiones de Indeed/LinkedIn activas.")
-        else:
-            # -- Fallback: lanzar Chrome propio (sin sesiones reales) ---------
-            # Prioridad: CDP (Chrome DevTools Protocol) para conectar a una sesión de Chrome abierta vía iniciar_bot.bat
-            print(f"[AVISO] Chrome no esta en modo debug (puerto {_CDP_PORT} cerrado).")
-            print(f"[AVISO] Usa iniciar_bot.bat para abrir Chrome correctamente.")
-            print(f"[AVISO] Lanzando Chromium propio - puede pedir login manualmente.")
-            log.info("Modo fallback — lanzando Chromium propio")
-            # Bloquear un UA consistente para toda la sesión (evita fingerprint rotativo
-            # que algunos portales detectan como bot entre requests del mismo contexto)
-            from .stealth_utils import lock_session_ua, reset_session_ua
-            reset_session_ua()
-            _session_user_agent = lock_session_ua()
-            log.info("[UA] Session UA bloqueado: %s...", _session_user_agent[:60])
+        page = browser_backend.new_page()
+        if page is None:
+            browser_backend.close()
+            return 0
 
-            launch_kwargs = dict(
-                user_data_dir = session_dir,
-                headless      = headless,
-                user_agent    = _session_user_agent,
-                viewport      = random_viewport(),
-                locale        = _locale,
-                timezone_id   = _tz,
-                args          = ["--no-sandbox", "--disable-blink-features=AutomationControlled"],
-            )
-            if chrome_exe:
-                launch_kwargs["executable_path"] = chrome_exe
-
-            browser_ctx = pw.chromium.launch_persistent_context(**launch_kwargs)
-            page        = browser_ctx.new_page()
-            browser_instance = None # No lo necesitamos en modo no-CDP
-            apply_stealth(page)
-            try:
-                from playwright_stealth import Stealth
-                Stealth().apply_stealth_sync(page)
-                log.info("playwright-stealth activo")
-            except (ImportError, Exception) as se:
-                log.warning("playwright-stealth no disponible (%s) — usando stealth manual", se)
+        browser_ctx = browser_backend.context
+        apply_stealth(page)
+        try:
+            from playwright_stealth import Stealth
+            Stealth().apply_stealth_sync(page)
+            log.info("playwright-stealth activo")
+        except (ImportError, Exception) as se:
+            log.warning("playwright-stealth no disponible (%s) — usando stealth manual", se)
 
         total_applied     = 0
         _total_max_target = 0      # suma de max_offers de cada keyword (para referencia interna)
@@ -3070,6 +2780,20 @@ def run_bot_multi_keywords(
         _env_max_str = os.getenv("USER_MAX_OFFERS", "").strip()
         _effective_max = (int(_env_max_str) if _env_max_str.isdigit()
                           else SITE_CONFIG.get(portal_name, {}).get("max_offers_per_run", 5))
+
+        # Límites por modo (IT / Bodega). Si no están definidos se usa _effective_max sin distinción.
+        _env_max_it  = os.getenv("USER_MAX_IT", "").strip()
+        _env_max_bod = os.getenv("USER_MAX_BODEGA", "").strip()
+        _mode_max: dict[str, int] = {}
+        if _env_max_it.isdigit():
+            _mode_max["it"] = int(_env_max_it)
+        if _env_max_bod.isdigit():
+            _mode_max["bodega"] = int(_env_max_bod)
+        # Si se define al menos uno, el total efectivo es la suma de los modos definidos
+        if _mode_max:
+            _effective_max = sum(_mode_max.values())
+        _mode_applied: dict[str, int] = {}   # aplicadas por modo en esta sesión
+
         _session_verified = False  # Se activa tras el primer pre-flight exitoso
         _kw_count_for_stats = 0    # contador de keywords procesados en esta sesión
         _found_count_for_stats = 0 # contador de ofertas encontradas en esta sesión
@@ -3109,6 +2833,18 @@ def run_bot_multi_keywords(
         _bodega_groups = [g for g in active_groups if g.get("mode") == "bodega"]
         _other_groups  = [g for g in active_groups if g.get("mode") not in ("it", "bodega")]
         if _it_groups and _bodega_groups:
+            # Si no se definieron límites por modo, asignar 50/50 automático
+            if not _mode_max:
+                _half_it = _effective_max // 2
+                _mode_max["it"] = _half_it
+                _mode_max["bodega"] = _effective_max - _half_it
+                print(
+                    f"[MODO_BALANCE] Asignando {_mode_max['it']} IT y {_mode_max['bodega']} BODEGA "
+                    f"del total {_effective_max} porque ambas categorías están activas."
+                )
+            # Shuffle IT para rotar keywords cada ciclo (evita usar siempre los mismos 5)
+            import random as _rnd
+            _rnd.shuffle(_it_groups)
             # Intercalar: it[0], bodega[0], it[1], bodega[1], ...
             _interleaved = []
             for i in range(max(len(_it_groups), len(_bodega_groups))):
@@ -3117,7 +2853,7 @@ def run_bot_multi_keywords(
                 if i < len(_bodega_groups):
                     _interleaved.append(_bodega_groups[i])
             active_groups = _interleaved + _other_groups
-            print(f"[CICLO] Modo alternado: {len(_it_groups)} IT + {len(_bodega_groups)} bodega → intercalados")
+            print(f"[CICLO] Modo alternado (IT shuffled): {len(_it_groups)} IT + {len(_bodega_groups)} bodega intercalados")
         print(f"\n[KEYWORDS] {len(active_groups)} keywords activas para {portal_name.upper()}")
 
         # ── Tiempo por keyword dinámico ────────────────────────────────────────
@@ -3195,6 +2931,15 @@ def run_bot_multi_keywords(
                     print(f"  [SKIP] '{keyword}' omitido en {portal_name.upper()} (plataforma tech-only)")
                     continue
 
+                # Verificar límite por modo (IT / Bodega) si está configurado
+                if mode in _mode_max:
+                    _mode_done = _mode_applied.get(mode, 0)
+                    _mode_limit = _mode_max[mode]
+                    if _mode_done >= _mode_limit:
+                        log.debug("[MODO] %s: límite %s alcanzado (%d/%d). Saltando keyword '%s'.",
+                                  portal_name, mode.upper(), _mode_done, _mode_limit, keyword)
+                        continue
+
                 config  = build_config_for_keyword(portal_name, keyword)
                 profile = dict(USER_PROFILE)
                 profile["_mode"] = mode
@@ -3207,6 +2952,10 @@ def run_bot_multi_keywords(
                     print(f"  [LIMITE_PORTAL] Limite global {_effective_max} alcanzado. "
                           f"Saltando keyword '{keyword}'.")
                     break
+                # Limitar también por presupuesto del modo
+                if mode in _mode_max:
+                    _remaining_mode = max(0, _mode_max[mode] - _mode_applied.get(mode, 0))
+                    max_offers = min(max_offers, _remaining_mode)
                 max_offers = min(max_offers, _remaining_budget)
 
                 PortalClass    = PORTAL_REGISTRY.get(portal_name)
@@ -3229,8 +2978,7 @@ def run_bot_multi_keywords(
                     log.warning("Pagina cerrada/no responde entre keywords. Recreando...")
                     try:
                         page = browser_ctx.new_page()
-                        if not using_cdp:
-                            apply_stealth(page)
+                        apply_stealth(page)
                     except Exception as page_err:
                         log.error("No se pudo recrear la pagina: %s", page_err)
                         break
@@ -3264,7 +3012,6 @@ def run_bot_multi_keywords(
                     applied, seen_titles = _run_keyword_loop(
                         page, browser_ctx, portal_name, config, profile,
                         max_offers, dry_run, rate_limiter, portal_handler,
-                        using_cdp=using_cdp,
                         session_verified=_session_verified,
                         deadline=_kw_deadline,
                     )
@@ -3277,7 +3024,7 @@ def run_bot_multi_keywords(
                     #   3. Esperar login via DOM (máx 5 min)
                     #   4. Cerrar ventana visible
                     #   5. Reabrir headless y reintentar keyword
-                    if not using_cdp and headless:
+                    if headless:
                         print(f"\n[SESION_NUEVA] {portal_name.upper()} - sesion expirada.")
                         print(f"[SESION_NUEVA] Abriendo navegador para LOGIN MANUAL en {portal_name.upper()}.")
                         print(f"[SESION_NUEVA] Inicia sesion en el navegador y el bot continuara automaticamente.")
@@ -3293,73 +3040,30 @@ def run_bot_multi_keywords(
                                                       SITE_CONFIG.get(portal_name, {}).get("url_busqueda", ""))
                         _login_ok  = False
                         try:
-                            _vis_kwargs = dict(
-                                headless    = False,
-                                user_agent  = random_user_agent(),
-                                viewport    = random_viewport(),
-                                locale      = _locale,
-                                timezone_id = _tz,
-                                args        = ["--no-sandbox",
-                                               "--disable-blink-features=AutomationControlled"],
+                            _vis_backend = select_browser_backend(
+                                pw, session_dir,
+                                headless=False,
+                                user_agent=_STEALTH_UA,
+                                args=_STEALTH_ARGS + ["--start-maximized"],
+                                ignore_default_args=_STEALTH_IGNORE_DEFAULT_ARGS,
+                                locale=_locale,
+                                timezone_id=_tz,
                             )
-                            if chrome_exe:
-                                _vis_kwargs["executable_path"] = chrome_exe
-                            _vis_ctx  = pw.chromium.launch_persistent_context(session_dir, **_vis_kwargs)
-                            _vis_page = _vis_ctx.new_page()
+                            if _vis_backend is None:
+                                log.warning("[SESION_NUEVA] No se pudo inicializar backend para login manual.")
+                                _portal_end_reason = "login_timeout"
+                                break
+                            _vis_ctx  = _vis_backend.context
+                            _vis_page = _vis_backend.new_page()
+                            if _vis_page is None:
+                                _vis_backend.close()
+                                _portal_end_reason = "login_timeout"
+                                break
                             try:
                                 _vis_page.goto(_login_url, wait_until="domcontentloaded", timeout=30_000)
                                 _vis_page.wait_for_timeout(2000)
                             except Exception:
                                 pass
-
-                            # Selectores DOM de sesión activa (secundarios)
-                            _ses_sels = _LOGGED_IN_SIGNALS.get(portal_name, [
-                                "a[href*='logout']", "a[href*='salir']",
-                                "a[href*='/mi-perfil']", "img[class*='avatar']",
-                            ])
-                            # Dominios esperados por portal para validación de URL
-                            _portal_domains = {
-                                "linkedin": "linkedin.com",
-                                "computrabajo": "computrabajo.com",
-                                "laborum": "laborum.cl",
-                                "trabajando": "trabajando.cl",
-                                "infojobs": "infojobs.net",
-                                "chiletrabajos": "chiletrabajos.cl",
-                                "getonyboard": "getonbrd.com",
-                            }
-                            _expected_domain = _portal_domains.get(portal_name, "")
-                            _login_kws = [
-                                "login", "signin", "sign-in", "account/login",
-                                "candidato/login", "auth/sign", "checkpoint",
-                                "authwall", "uas/login", "iniciar-sesion",
-                            ]
-
-                            def _inrun_is_logged_in(pg) -> bool:
-                                """Detección multicapa: URL → DOM → cookies."""
-                                # 1. URL signal
-                                try:
-                                    _u = pg.url.lower()
-                                    if (_expected_domain and _expected_domain in _u
-                                            and not any(k in _u for k in _login_kws)):
-                                        return True
-                                except Exception:
-                                    pass
-                                # 2. DOM signal
-                                for _s in _ses_sels:
-                                    try:
-                                        _el = pg.query_selector(_s)
-                                        if _el and _el.is_visible():
-                                            return True
-                                    except Exception:
-                                        pass
-                                # 3. Cookie file
-                                try:
-                                    _ck = Path(session_dir) / "Default" / "Network" / "Cookies"
-                                    if _ck.exists() and _ck.stat().st_size >= _COOKIES_MIN_BYTES:
-                                        return True
-                                except Exception:
-                                    pass
-                                return False
 
                             # 3. Esperar login — detección multicapa cada 3s
                             _login_deadline = time.time() + 600  # 10 min
@@ -3368,7 +3072,7 @@ def run_bot_multi_keywords(
                                 time.sleep(3)
                                 _found_session = False
                                 try:
-                                    _found_session = _inrun_is_logged_in(_vis_page)
+                                    _found_session = _is_logged_in_on_page(_vis_page, portal_name)
                                 except Exception:
                                     pass
                                 if _found_session:
@@ -3404,20 +3108,21 @@ def run_bot_multi_keywords(
                                 reset_session_ua()
                                 _session_user_agent = lock_session_ua()
                             except Exception:
-                                _session_user_agent = random_user_agent()
-                            _rl_kwargs = dict(
-                                user_data_dir = session_dir,
-                                headless      = headless,
-                                user_agent    = _session_user_agent,
-                                viewport      = random_viewport(),
-                                locale        = _locale,
-                                timezone_id   = _tz,
-                                args          = ["--no-sandbox",
-                                                 "--disable-blink-features=AutomationControlled"],
+                                _session_user_agent = _STEALTH_UA
+                            _rl_backend = select_browser_backend(
+                                pw, session_dir,
+                                headless=headless,
+                                user_agent=_session_user_agent,
+                                args=_STEALTH_ARGS,
+                                ignore_default_args=_STEALTH_IGNORE_DEFAULT_ARGS,
+                                locale=_locale,
+                                timezone_id=_tz,
                             )
-                            if chrome_exe:
-                                _rl_kwargs["executable_path"] = chrome_exe
-                            browser_ctx = pw.chromium.launch_persistent_context(**_rl_kwargs)
+                            if _rl_backend is None:
+                                log.warning("[SESION_NUEVA] No se pudo reinicializar backend.")
+                                _portal_end_reason = "login_timeout"
+                                break
+                            browser_ctx = _rl_backend.context
                             page = browser_ctx.new_page()
                             apply_stealth(page)
                             _session_verified = False
@@ -3443,6 +3148,7 @@ def run_bot_multi_keywords(
                     break
                 # _session_verified queda False → pre-flight verifica login antes de cada keyword
                 total_applied += applied
+                _mode_applied[mode] = _mode_applied.get(mode, 0) + applied
                 _kw_count_for_stats  += 1
                 _found_count_for_stats += len(seen_titles) if seen_titles else 0
 
@@ -3450,8 +3156,13 @@ def run_bot_multi_keywords(
                     print(f"\n[AVISO] '{keyword}': 0 postulaciones - filtradas o ya en DB.")
                 print(f"\n[PORTAL_FINALIZADO] --- KEYWORD '{keyword}': {applied} postulaciones ---")
 
-                # Emitir progreso acumulado contra el límite efectivo de la sesión
-                print(f"  [PROGRESO] Aplicadas {total_applied}/{_effective_max} en {portal_name.upper()}")
+                # Emitir progreso por modo y total
+                _mode_progress = " | ".join(
+                    f"{m.upper()} {_mode_applied.get(m,0)}/{_mode_max[m]}"
+                    for m in _mode_max
+                )
+                _progress_str = f"{_mode_progress} | Total {total_applied}/{_effective_max}" if _mode_progress else f"Total {total_applied}/{_effective_max}"
+                print(f"  [PROGRESO] {_progress_str} en {portal_name.upper()}")
 
                 # Cortar keywords si ya alcanzamos el límite global de la sesión
                 if total_applied >= _effective_max:
@@ -3548,19 +3259,11 @@ def run_bot_multi_keywords(
             _retry_countdown(_RETRY_WAIT_INITIAL, portal_name)
             # Continúa el while True → re-ejecuta el loop de keywords completo
 
-        # En modo CDP solo cerramos la pestaña, NO el browser del usuario
-        if using_cdp:
-            try:
-                page.close()
-                log.info("Pestaña del bot cerrada. Chrome del usuario sigue abierto.")
-            except Exception:
-                pass
-        else:
-            try:
-                browser_ctx.close()
-            except Exception as close_err:
-                log.warning("browser_ctx.close() ignorado: %s", close_err)
-            _maybe_keep_session(session_dir, portal_name, total_applied)
+        try:
+            browser_ctx.close()
+        except Exception as close_err:
+            log.warning("browser_ctx.close() ignorado: %s", close_err)
+        _maybe_keep_session(session_dir, portal_name, total_applied)
 
     log.info("=== Multi-Keyword Fin. Total aplicadas: %d | Rate: %d/%d ===",
              total_applied, rate_limiter.current_count, rate_limiter.max_actions)
@@ -3699,13 +3402,24 @@ def run_scan_quick_links(headless: bool = False, max_links: int = 100) -> dict:
         return stats
 
     with sync_playwright() as pw:
-        ctx = pw.chromium.launch_persistent_context(
-            gob_session, headless=headless,
-            args=["--no-sandbox", "--disable-blink-features=AutomationControlled", "--disable-popup-blocking"],
-            user_agent=random_user_agent(), viewport=random_viewport(),
-            locale="es-CL", timezone_id="America/Santiago",
+        _scan_backend = select_browser_backend(
+            pw, gob_session,
+            headless=headless,
+            user_agent=_STEALTH_UA,
+            args=_STEALTH_ARGS + ["--disable-popup-blocking"],
+            ignore_default_args=_STEALTH_IGNORE_DEFAULT_ARGS,
+            locale="es-CL",
+            timezone_id="America/Santiago",
         )
+        if _scan_backend is None:
+            log.warning("[SCAN-QL] No se pudo inicializar backend de navegador.")
+            return stats
+        ctx = _scan_backend.context
         page = ctx.new_page()
+        if page is None:
+            _scan_backend.close()
+            return stats
+        page.add_init_script(_STEALTH_INIT_SCRIPT)
         apply_stealth(page)
 
         for entry in links:
@@ -3956,14 +3670,24 @@ def run_apply_quick_links(headless: bool = False, max_apply: int = 5) -> dict:
                 log.warning("[APPLY-QL] Login cancelado para %s — detenido.", portal_key)
                 break
 
-            ctx = pw.chromium.launch_persistent_context(
-                session_dir, headless=headless,
-                args=["--no-sandbox", "--disable-blink-features=AutomationControlled",
-                      "--disable-popup-blocking"],
-                user_agent=random_user_agent(), viewport=random_viewport(),
-                locale="es-CL", timezone_id="America/Santiago",
+            _apply_backend = select_browser_backend(
+                pw, session_dir,
+                headless=headless,
+                user_agent=_STEALTH_UA,
+                args=_STEALTH_ARGS + ["--disable-popup-blocking"],
+                ignore_default_args=_STEALTH_IGNORE_DEFAULT_ARGS,
+                locale="es-CL",
+                timezone_id="America/Santiago",
             )
+            if _apply_backend is None:
+                log.warning("[APPLY-QL] No se pudo inicializar backend para %s.", portal_key)
+                continue
+            ctx = _apply_backend.context
             page = ctx.new_page()
+            if page is None:
+                _apply_backend.close()
+                continue
+            page.add_init_script(_STEALTH_INIT_SCRIPT)
             apply_stealth(page)
 
             for entry in portal_links:
@@ -4344,12 +4068,6 @@ def run_bot(
              PortalClass.__name__ if PortalClass else "genérico",
              rate_limiter.max_actions)
 
-    chrome_exe = _find_chrome_executable()
-    if chrome_exe:
-        log.info("Usando Chrome del sistema: %s", chrome_exe)
-    else:
-        log.info("Usando Chromium de Playwright")
-
     # Ajustar locale / timezone según el portal — SIEMPRE Chile
     _PORTAL_LOCALE = {
         "indeed":         ("es-CL", "America/Santiago"),
@@ -4362,53 +4080,39 @@ def run_bot(
     _locale, _tz = _PORTAL_LOCALE.get(portal_name, ("es-CL", "America/Santiago"))
 
     def _exec(pw_obj):
-        # -- 4. Intentar CDP prioritario (Chrome del usuario ya abierto) --
-        cdp_result = _try_cdp_connect(pw_obj)
-        is_cdp = cdp_result is not None
+        backend = select_browser_backend(
+            pw_obj,
+            session_dir,
+            headless=headless,
+            user_agent=_STEALTH_UA,
+            args=["--no-sandbox", "--disable-blink-features=AutomationControlled"],
+            ignore_default_args=_STEALTH_IGNORE_DEFAULT_ARGS,
+            locale=_locale,
+            timezone_id=_tz,
+        )
+        if backend is None:
+            log.warning("No se pudo inicializar backend de navegador")
+            return 0
 
-        if is_cdp:
-            browser_instance, browser_ctx, page = cdp_result
-            log.info("Modo CDP — usando Chrome real del usuario (puerto %d)", _CDP_PORT)
-        else:
-            # Fallback: lanzar Chrome propio (sin sesiones reales)
-            from .stealth_utils import lock_session_ua, reset_session_ua
-            reset_session_ua()
-            _session_user_agent = lock_session_ua()
-            log.info("[UA] Session UA bloqueado: %s...", _session_user_agent[:60])
+        page = backend.new_page()
+        if page is None:
+            backend.close()
+            return 0
 
-            launch_kwargs = dict(
-                user_data_dir = session_dir,
-                headless      = headless,
-                user_agent    = _session_user_agent,
-                viewport      = random_viewport(),
-                locale        = _locale,
-                timezone_id   = _tz,
-                args          = ["--no-sandbox", "--disable-blink-features=AutomationControlled"],
-            )
-            if chrome_exe:
-                launch_kwargs["executable_path"] = chrome_exe
-
-            browser_ctx = pw_obj.chromium.launch_persistent_context(**launch_kwargs)
-            page = browser_ctx.new_page()
-            browser_instance = None # No lo necesitamos en modo no-CDP
-            apply_stealth(page)
-            try:
-                from playwright_stealth import Stealth
-                Stealth().apply_stealth_sync(page)
-            except Exception:
-                pass
+        browser_ctx = backend.context
+        apply_stealth(page)
+        try:
+            from playwright_stealth import Stealth
+            Stealth().apply_stealth_sync(page)
+        except Exception:
+            pass
 
         applied, _seen_titles_single = _run_keyword_loop(
             page, browser_ctx, portal_name, config, profile,
             max_offers, dry_run, rate_limiter, portal_handler,
-            using_cdp=is_cdp,
         )
 
-        if is_cdp:
-            try: page.close()
-            except Exception: pass
-        else:
-            browser_ctx.close()
+        backend.close()
         
         print(f"\n[PORTAL_FINALIZADO] --- PORTAL {portal_name.upper()} COMPLETADO ---")
         log.info("=== Fin. Procesadas: %d | Rate usado: %d/%d ===",
