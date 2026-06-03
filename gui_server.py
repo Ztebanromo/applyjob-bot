@@ -1043,6 +1043,37 @@ def api_cdp_verify_sessions():
     return jsonify(results)
 
 
+@app.route('/api/import-all-sessions', methods=['POST'])
+def api_import_all_sessions():
+    """
+    Importa cookies de todos los portales desde CDP y las guarda como
+    playwright_state.json en sessions/<portal>/.
+    Requiere Chrome con CDP activo (chrome_debug.bat).
+    """
+    from bot.session_importer import import_all_from_cdp
+    from bot.chrome_cdp import is_port_open
+
+    if not is_port_open():
+        return jsonify({
+            'ok': False,
+            'msg': 'Chrome no está en modo debug. Ejecutá chrome_debug.bat primero.',
+        }), 503
+
+    portals_param = (request.json or {}).get('portals') or None
+    results = import_all_from_cdp(portals=portals_param)
+
+    total_imported = sum(1 for n in results.values() if n > 0)
+    msg = f"{total_imported}/{len(results)} portales con cookies guardadas."
+    state.add_log(f"\n[SESIONES] {msg}\n")
+    socketio.emit('session_status', get_session_status(), namespace='/bot')
+
+    return jsonify({
+        'ok': True,
+        'msg': msg,
+        'results': {p: v for p, v in results.items()},
+    })
+
+
 @app.route('/api/check-sessions', methods=['POST'])
 def api_check_sessions():
     """

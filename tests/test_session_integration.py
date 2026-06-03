@@ -109,3 +109,32 @@ def test_no_raw_chromium_launch_count_zero():
     src = pathlib.Path("bot/engine.py").read_text(encoding="utf-8")
     count = src.count("chromium.launch_persistent_context")
     assert count == 0, f"Encontradas {count} llamadas directas a chromium.launch_persistent_context"
+
+
+def test_session_importer_module_exists():
+    """bot/session_importer.py debe existir con import_all_from_cdp."""
+    import importlib
+    mod = importlib.import_module("bot.session_importer")
+    assert hasattr(mod, "import_all_from_cdp")
+    assert hasattr(mod, "PORTALS_TO_IMPORT")
+
+
+def test_session_importer_portals_list():
+    """PORTALS_TO_IMPORT debe incluir todos los portales que requieren login."""
+    from bot.session_importer import PORTALS_TO_IMPORT
+    from bot.session_config import PORTALS_REQUIRE_LOGIN
+    for p in PORTALS_REQUIRE_LOGIN:
+        assert p in PORTALS_TO_IMPORT, f"{p} falta en PORTALS_TO_IMPORT"
+
+
+def test_import_all_from_cdp_returns_dict():
+    """import_all_from_cdp retorna dict {portal: int_cookies}."""
+    from bot.session_importer import import_all_from_cdp
+    result = import_all_from_cdp(cdp_url="http://127.0.0.1:19999")
+    assert isinstance(result, dict)
+
+
+def test_import_all_sessions_endpoint_exists():
+    """gui_server.py debe tener el endpoint /api/import-all-sessions."""
+    src = pathlib.Path("gui_server.py").read_text(encoding="utf-8")
+    assert "/api/import-all-sessions" in src
