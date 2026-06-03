@@ -549,31 +549,32 @@
                 const label = portalLabel(portal);
                 const isDefault = DEFAULT_PORTALS.has(portal);
                 const item = document.createElement('div');
-                item.className = 'portal-item' + (isDefault ? '' : ' disabled-hint');
+                const startSelected = isDefault;
+                item.className = 'portal-item' + (startSelected ? ' selected' : ' disabled-hint');
                 item.id = `p-${portal}`;
                 item.style.cursor = 'pointer';
-                item.title = 'Click para marcar/desmarcar';
+                item.title = 'Click para activar/desactivar';
                 item.onclick = (e) => {
-                    if (e.target.tagName === 'A' || e.target.tagName === 'INPUT') return;
+                    if (e.target.tagName === 'A') return;
                     const cb = item.querySelector('.portal-checkbox');
                     cb.checked = !cb.checked;
+                    item.classList.toggle('selected', cb.checked);
                     item.classList.toggle('disabled-hint', !cb.checked);
                     refreshSessionSummary();
                 };
                 const portalUrl = PORTAL_URLS[portal] || '#';
                 item.innerHTML = `
-                    <div style="display:flex; align-items:center; gap:8px;">
-                        <input type="checkbox" class="portal-checkbox" value="${portal}"
-                            ${isDefault ? 'checked' : ''}
-                            onchange="this.closest('.portal-item').classList.toggle('disabled-hint', !this.checked); refreshSessionSummary();">
+                    <input type="checkbox" class="portal-checkbox" value="${portal}" ${startSelected ? 'checked' : ''}>
+                    <span class="portal-toggle" title="${startSelected ? 'Activo' : 'Inactivo'}"></span>
+                    <div style="display:flex; align-items:center; gap:6px; padding-right:38px;">
                         <a class="portal-name" href="${portalUrl}"
                            onclick="window.open('${portalUrl}','_blank','noopener'); return false;"
-                           style="text-decoration:none; color:inherit; cursor:pointer;"
+                           style="text-decoration:none; color:inherit; cursor:pointer; font-size:0.75rem; font-weight:700;"
                            title="Abrir ${label}">${icon} ${label}</a>
-                        <span id="restr-${portal}" style="display:none; background:#7f1d1d; color:#fca5a5; border-radius:4px; padding:0.1rem 0.4rem; font-size:0.62rem; font-weight:700; margin-left:auto; white-space:nowrap;">⛔ RESTRINGIDO</span>
-                        <span class="session-dot" id="session-${portal}" title="Sin sesión" style="margin-left:6px;"></span>
+                        <span id="restr-${portal}" style="display:none; background:#7f1d1d; color:#fca5a5; border-radius:4px; padding:0.1rem 0.4rem; font-size:0.6rem; font-weight:700; white-space:nowrap;">⛔</span>
+                        <span class="session-dot" id="session-${portal}" title="Sin sesión" style="margin-left:auto;"></span>
                     </div>
-                    <div style="display:flex; justify-content:space-between; align-items:center; border-top:1px solid rgba(255,255,255,0.06); padding-top:0.5rem; margin-top:0.1rem;">
+                    <div style="display:flex; justify-content:space-between; align-items:center; border-top:1px solid rgba(255,255,255,0.06); padding-top:0.4rem; margin-top:0.15rem;">
                         <span class="portal-status-text" id="ps-${portal}">Pendiente</span>
                         <span class="portal-counter" id="pc-${portal}">0</span>
                     </div>`;
@@ -926,7 +927,9 @@
         function setAllPortals(checked) {
             document.querySelectorAll('.portal-checkbox').forEach(cb => {
                 cb.checked = checked;
-                cb.closest('.portal-item').classList.toggle('disabled-hint', !checked);
+                const item = cb.closest('.portal-item');
+                item.classList.toggle('selected', checked);
+                item.classList.toggle('disabled-hint', !checked);
             });
             refreshSessionSummary();
         }
