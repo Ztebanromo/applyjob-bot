@@ -151,13 +151,10 @@ def new_page() -> "Page | None":
         return None
 
 
-def check_session_cdp(portal: str) -> str:
+def _check_session_cdp_impl(portal: str) -> str:
     """
-    Verifica sesión del portal abriendo una pestaña en el Chrome real.
-    Retorna: 'ok' | 'expired' | 'no_connection' | 'error'
-
-    Más confiable que el headless check porque usa el Chrome real
-    con todas sus cookies y fingerprint.
+    Implementación interna del check CDP — corre en su propio thread
+    para aislar el event loop de asyncio de sync_playwright.
     """
     from bot.session_config import (
         VERIFY_URLS, LOGGED_IN_SIGNALS, NOT_LOGGED_IN_SIGNALS,
@@ -220,6 +217,31 @@ def check_session_cdp(portal: str) -> str:
                 page.close()
             except Exception:
                 pass
+
+
+def check_session_cdp(portal: str) -> str:
+    """
+    Verifica sesión del portal via CDP.
+    Retorna: 'ok' | 'expired' | 'no_connection' | 'error'
+
+    Corre en un thread separado para aislar el event loop de asyncio
+    y evitar conflicto con sync_playwright del motor principal.
+    """
+    import concurrent.futures
+
+    if not is_port_open():
+        return "no_connection"
+
+    try:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+            future = ex.submit(_check_session_cdp_impl, portal)
+            return future.result(timeout=25)
+    except concurrent.futures.TimeoutError:
+        log.warning("[CDP] Timeout verificando %s", portal)
+        return "error"
+    except Exception as exc:
+        log.warning("[CDP] Error en thread CDP para %s: %s", portal, exc)
+        return "error"
 
 
 def get_status() -> dict:
