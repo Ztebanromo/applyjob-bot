@@ -154,7 +154,8 @@ def new_page() -> "Page | None":
 def _check_session_cdp_impl(portal: str) -> str:
     """
     Implementación interna — corre en thread propio con conexión CDP fresca.
-    Abre y cierra su propia sync_playwright para no compartir el browser global.
+    Abre UNA pestaña por portal y la mantiene abierta para reutilizar.
+    Las segundas verificaciones navegan en la pestaña existente (no abren una nueva).
     """
     from playwright.sync_api import sync_playwright
     from bot.session_config import (
@@ -165,6 +166,31 @@ def _check_session_cdp_impl(portal: str) -> str:
     verify_url = VERIFY_URLS.get(portal)
     if not verify_url:
         return "ok"
+
+    def _do_check(page) -> str:
+        try:
+            page.goto(verify_url, wait_until="domcontentloaded", timeout=20_000)
+            page.wait_for_timeout(2000)
+        except Exception:
+            pass
+        current_url = page.url.lower()
+        if any(kw in current_url for kw in LOGIN_URL_KEYWORDS):
+            return "expired"
+        for sel in NOT_LOGGED_IN_SIGNALS.get(portal, []):
+            try:
+                el = page.query_selector(sel)
+                if el and el.is_visible():
+                    return "expired"
+            except Exception:
+                pass
+        for sel in LOGGED_IN_SIGNALS.get(portal, []):
+            try:
+                el = page.query_selector(sel)
+                if el and el.is_visible():
+                    return "ok"
+            except Exception:
+                pass
+        return "expired"
 
     try:
         with sync_playwright() as _pw:
@@ -178,48 +204,28 @@ def _check_session_cdp_impl(portal: str) -> str:
             if ctx is None:
                 return "no_connection"
 
-            page = None
-            try:
-                page = ctx.new_page()
-                if page is None:
-                    return "error"
-
+            # Buscar pestaña existente de este portal (por URL de dominio)
+            portal_domain = verify_url.split("/")[2]  # e.g. "www.laborum.cl"
+            existing_page = None
+            for p in ctx.pages:
                 try:
-                    page.goto(verify_url, wait_until="domcontentloaded", timeout=20_000)
-                    page.wait_for_timeout(2500)
+                    if portal_domain in p.url:
+                        existing_page = p
+                        break
                 except Exception:
                     pass
 
-                current_url = page.url.lower()
-                if any(kw in current_url for kw in LOGIN_URL_KEYWORDS):
-                    return "expired"
+            if existing_page:
+                log.debug("[CDP] %s: reutilizando pestaña existente (%s)", portal, existing_page.url[:50])
+                return _do_check(existing_page)
 
-                neg_sels = NOT_LOGGED_IN_SIGNALS.get(portal, [])
-                for sel in neg_sels:
-                    try:
-                        el = page.query_selector(sel)
-                        if el and el.is_visible():
-                            return "expired"
-                    except Exception:
-                        pass
-
-                pos_sels = LOGGED_IN_SIGNALS.get(portal, [])
-                for sel in pos_sels:
-                    try:
-                        el = page.query_selector(sel)
-                        if el and el.is_visible():
-                            return "ok"
-                    except Exception:
-                        pass
-
-                return "expired"
-
-            finally:
-                if page:
-                    try:
-                        page.close()
-                    except Exception:
-                        pass
+            # Abrir nueva pestaña y dejarla abierta
+            page = ctx.new_page()
+            if page is None:
+                return "error"
+            log.debug("[CDP] %s: abriendo pestaña nueva (queda abierta)", portal)
+            return _do_check(page)
+            # NO cerramos la página → queda abierta para próximas verificaciones
 
     except Exception as exc:
         log.warning("[CDP] Error verificando %s: %s", portal, exc)
