@@ -864,6 +864,7 @@ def _open_browser_for_manual_login(
                 ignore_default_args=_STEALTH_IGNORE_DEFAULT_ARGS,
                 locale=locale,
                 timezone_id=tz,
+            portal_name="unknown",
             )
             if backend is None:
                 log.warning("[LOGIN_MANUAL] No se pudo inicializar backend de navegador")
@@ -2163,6 +2164,7 @@ def run_scan_pass(portal_name: str, headless: bool = False) -> None:
             ignore_default_args=_STEALTH_IGNORE_DEFAULT_ARGS,
             locale="es-CL",
             timezone_id="America/Santiago",
+            portal_name=portal_name,
         )
         if backend is None:
             log.warning("[SCAN] No se pudo inicializar backend de navegador")
@@ -2395,6 +2397,7 @@ def run_apply_queue(portal_name: str, headless: bool = False) -> None:
             ignore_default_args=_STEALTH_IGNORE_DEFAULT_ARGS,
             locale="es-CL",
             timezone_id="America/Santiago",
+            portal_name=portal_name,
         )
         if backend is None:
             log.warning("[APPLY-QUEUE] No se pudo inicializar backend de navegador")
@@ -2755,6 +2758,7 @@ def run_bot_multi_keywords(
             ignore_default_args=_STEALTH_IGNORE_DEFAULT_ARGS,
             locale=_locale,
             timezone_id=_tz,
+            portal_name=portal_name,
         )
         if browser_backend is None:
             log.warning("[BOT] No se pudo inicializar backend de navegador")
@@ -3048,6 +3052,7 @@ def run_bot_multi_keywords(
                                 ignore_default_args=_STEALTH_IGNORE_DEFAULT_ARGS,
                                 locale=_locale,
                                 timezone_id=_tz,
+            portal_name=portal_name,
                             )
                             if _vis_backend is None:
                                 log.warning("[SESION_NUEVA] No se pudo inicializar backend para login manual.")
@@ -3117,6 +3122,7 @@ def run_bot_multi_keywords(
                                 ignore_default_args=_STEALTH_IGNORE_DEFAULT_ARGS,
                                 locale=_locale,
                                 timezone_id=_tz,
+            portal_name=portal_name,
                             )
                             if _rl_backend is None:
                                 log.warning("[SESION_NUEVA] No se pudo reinicializar backend.")
@@ -3410,6 +3416,7 @@ def run_scan_quick_links(headless: bool = False, max_links: int = 100) -> dict:
             ignore_default_args=_STEALTH_IGNORE_DEFAULT_ARGS,
             locale="es-CL",
             timezone_id="America/Santiago",
+            portal_name="unknown",
         )
         if _scan_backend is None:
             log.warning("[SCAN-QL] No se pudo inicializar backend de navegador.")
@@ -3678,6 +3685,7 @@ def run_apply_quick_links(headless: bool = False, max_apply: int = 5) -> dict:
                 ignore_default_args=_STEALTH_IGNORE_DEFAULT_ARGS,
                 locale="es-CL",
                 timezone_id="America/Santiago",
+            portal_name=portal_key,
             )
             if _apply_backend is None:
                 log.warning("[APPLY-QL] No se pudo inicializar backend para %s.", portal_key)
@@ -4089,6 +4097,7 @@ def run_bot(
             ignore_default_args=_STEALTH_IGNORE_DEFAULT_ARGS,
             locale=_locale,
             timezone_id=_tz,
+            portal_name=portal_name,
         )
         if backend is None:
             log.warning("No se pudo inicializar backend de navegador")
