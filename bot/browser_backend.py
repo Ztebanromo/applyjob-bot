@@ -200,6 +200,23 @@ class ChromiumLaunchBackend(BrowserBackend):
             self.context = None
             return False
 
+    def new_page(self) -> "Page | None":
+        """
+        Reutiliza la primera página existente del contexto.
+        launch_persistent_context ya abre 1 página al iniciarse —
+        no abrir otra innecesariamente.
+        """
+        if not self.connect():
+            return None
+        try:
+            pages = self.context.pages  # type: ignore[attr-defined]
+            if pages:
+                return pages[0]  # reutilizar la página ya abierta
+            return self.context.new_page()  # type: ignore[attr-defined]
+        except Exception as exc:
+            log.warning("[CHROMIUM] No se pudo obtener página: %s", exc)
+            return None
+
 
 class FirefoxBackend(BrowserBackend):
     name = "firefox"

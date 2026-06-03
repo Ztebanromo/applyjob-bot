@@ -1531,11 +1531,11 @@ def _run_keyword_loop(
                     recovered = True
             except Exception:
                 pass
-            # Intento 2: abrir página nueva y re-navegar a listing
+            # Intento 2: reusar página existente o abrir una nueva si no hay
             if not recovered:
                 try:
-                    page = (browser.new_page() if not using_cdp
-                            else browser.contexts[0].new_page())
+                    _existing = browser.pages if hasattr(browser, "pages") else []
+                    page = (_existing[0] if _existing else browser.new_page())
                     if not using_cdp:
                         apply_stealth(page)
                     page.goto(config["url_busqueda"],
@@ -1575,8 +1575,8 @@ def _run_keyword_loop(
                     pass
                 if not recovered:
                     try:
-                        page = (browser.new_page() if not using_cdp
-                                else browser.contexts[0].new_page())
+                        _existing2 = browser.pages if hasattr(browser, "pages") else []
+                        page = (_existing2[0] if _existing2 else browser.new_page())
                         if not using_cdp:
                             apply_stealth(page)
                         page.goto(config["url_busqueda"],
@@ -1619,13 +1619,14 @@ def _run_keyword_loop(
                     log.debug("  [skip-db] %s", offer_url)
                     continue
 
-                # Recuperar página si fue cerrada
+                # Recuperar página si fue cerrada — reusar existente, no abrir nueva
                 try:
                     _ = page.url
                 except Exception:
-                    log.warning("Página cerrada inesperadamente. Recreando...")
+                    log.warning("Página cerrada inesperadamente. Recuperando...")
                     try:
-                        page = browser.new_page()
+                        _pgs = browser.pages if hasattr(browser, "pages") else []
+                        page = _pgs[0] if _pgs else browser.new_page()
                         apply_stealth(page)
                         try:
                             from playwright_stealth import Stealth
