@@ -153,70 +153,77 @@ def new_page() -> "Page | None":
 
 def _check_session_cdp_impl(portal: str) -> str:
     """
-    Implementación interna del check CDP — corre en su propio thread
-    para aislar el event loop de asyncio de sync_playwright.
+    Implementación interna — corre en thread propio con conexión CDP fresca.
+    Abre y cierra su propia sync_playwright para no compartir el browser global.
     """
+    from playwright.sync_api import sync_playwright
     from bot.session_config import (
         VERIFY_URLS, LOGGED_IN_SIGNALS, NOT_LOGGED_IN_SIGNALS,
         LOGIN_URL_KEYWORDS,
     )
 
-    if not is_connected():
-        if not connect():
-            return "no_connection"
-
     verify_url = VERIFY_URLS.get(portal)
     if not verify_url:
         return "ok"
 
-    page = None
     try:
-        page = new_page()
-        if page is None:
-            return "error"
-
-        try:
-            page.goto(verify_url, wait_until="domcontentloaded", timeout=20_000)
-            page.wait_for_timeout(2500)
-        except Exception:
-            pass
-
-        current_url = page.url.lower()
-        if any(kw in current_url for kw in LOGIN_URL_KEYWORDS):
-            return "expired"
-
-        # Señales negativas
-        neg_sels = NOT_LOGGED_IN_SIGNALS.get(portal, [])
-        for sel in neg_sels:
+        with sync_playwright() as _pw:
             try:
-                el = page.query_selector(sel)
-                if el and el.is_visible():
+                _browser = _pw.chromium.connect_over_cdp(CDP_URL)
+            except Exception as exc:
+                log.debug("[CDP] connect_over_cdp falló para %s: %s", portal, exc)
+                return "no_connection"
+
+            ctx = _browser.contexts[0] if getattr(_browser, "contexts", None) else None
+            if ctx is None:
+                return "no_connection"
+
+            page = None
+            try:
+                page = ctx.new_page()
+                if page is None:
+                    return "error"
+
+                try:
+                    page.goto(verify_url, wait_until="domcontentloaded", timeout=20_000)
+                    page.wait_for_timeout(2500)
+                except Exception:
+                    pass
+
+                current_url = page.url.lower()
+                if any(kw in current_url for kw in LOGIN_URL_KEYWORDS):
                     return "expired"
-            except Exception:
-                pass
 
-        # Señales positivas
-        pos_sels = LOGGED_IN_SIGNALS.get(portal, [])
-        for sel in pos_sels:
-            try:
-                el = page.query_selector(sel)
-                if el and el.is_visible():
-                    return "ok"
-            except Exception:
-                pass
+                neg_sels = NOT_LOGGED_IN_SIGNALS.get(portal, [])
+                for sel in neg_sels:
+                    try:
+                        el = page.query_selector(sel)
+                        if el and el.is_visible():
+                            return "expired"
+                    except Exception:
+                        pass
 
-        # Sin señal positiva
-        return "expired"
+                pos_sels = LOGGED_IN_SIGNALS.get(portal, [])
+                for sel in pos_sels:
+                    try:
+                        el = page.query_selector(sel)
+                        if el and el.is_visible():
+                            return "ok"
+                    except Exception:
+                        pass
+
+                return "expired"
+
+            finally:
+                if page:
+                    try:
+                        page.close()
+                    except Exception:
+                        pass
 
     except Exception as exc:
         log.warning("[CDP] Error verificando %s: %s", portal, exc)
         return "error"
-    finally:
-        if page:
-            try:
-                page.close()
-            except Exception:
-                pass
 
 
 def check_session_cdp(portal: str) -> str:
