@@ -293,17 +293,41 @@ def _is_gob_multistep_url(url: str) -> bool:
     return "/applications/" in url and "/edit" in url
 
 
+def _get_gob_step(page) -> str:
+    """
+    Detecta en qué paso del flujo está.
+    Retorna: 'experiencia' | 'info_basica' | 'preguntas' | 'preview' | 'unknown'
+    """
+    url = page.url.lower()
+    # Por URL
+    if "step=preview"    in url: return "preview"
+    if "step=questions"  in url: return "preguntas"
+    if "step=basic_data" in url: return "info_basica"
+    if "step=basic"      in url: return "experiencia"
+    # Por indicador de paso activo en la página
+    try:
+        active = page.query_selector(
+            "li.active, [class*='active'] span, [aria-current='step'], "
+            ".gb-breadcrumb__item--active, .step--active"
+        )
+        if active:
+            txt = (active.text_content() or "").lower()
+            if "previa"    in txt or "preview" in txt: return "preview"
+            if "pregunta"  in txt or "question" in txt: return "preguntas"
+            if "b" in txt and "sica" in txt:            return "info_basica"
+            if "experiencia" in txt:                    return "experiencia"
+    except Exception:
+        pass
+    return "unknown"
+
+
 def _navigate_gob_multistep(page, profile: dict, title: str) -> bool:
     """
-    Navega el flujo multi-paso de GetOnBoard (hasta 4 pasos).
-
-    URL pattern: /applications/{id}/edit?step={basic|basic_data|questions|preview}
-
-    En cada paso:
-      1. Llena los campos con fill_form + fallback cover_letter
-      2. Clickea "Siguiente" para avanzar
-    En el último paso (preview):
-      - Clickea "Postular" / "Enviar postulación"
+    Navega el flujo multi-paso de GetOnBoard (4 pasos):
+      1. Experiencia  → fill + Siguiente
+      2. Info básica  → fill + Siguiente
+      3. Preguntas    → fill QA cache + cover_letter + Siguiente
+      4. Vista previa → click Postular
 
     Retorna True si la postulación fue enviada, False si falló.
     """
@@ -313,23 +337,19 @@ def _navigate_gob_multistep(page, profile: dict, title: str) -> bool:
     max_steps = 6
     cover = profile.get("cover_letter", "") or ""
 
-    for _ in range(max_steps):
+    for step_n in range(max_steps):
         current_url = page.url
+        step = _get_gob_step(page)
+        log.info("  [gob-multi] Paso %d: %s | %s", step_n + 1, step, current_url[:60])
+        print(f"  [GOB] Paso {step_n + 1}: {step}")
 
-        # ── Detectar paso final: preview ─────────────────────────────────────
-        is_preview = (
-            "step=preview" in current_url
-            or bool(page.query_selector(
-                "h1:has-text('Vista previa'), h2:has-text('Vista previa'), "
-                "h1:has-text('Preview'), h2:has-text('Preview')"
-            ))
-        )
-
-        if is_preview:
+        # ── Paso 4: Vista previa → enviar ─────────────────────────────────────
+        if step == "preview":
             for sel in [
                 "button:has-text('Postular'):visible",
                 "button:has-text('Enviar postulación'):visible",
-                "button:has-text('Send application'):visible",
+                "button:has-text('Enviar mi postulación'):visible",
+                "button:has-text('Submit'):visible",
                 "input[type='submit']:visible",
                 "button[type='submit']:visible",
             ]:
@@ -337,55 +357,93 @@ def _navigate_gob_multistep(page, profile: dict, title: str) -> bool:
                     btn = page.query_selector(sel)
                     if btn and btn.is_visible() and btn.is_enabled():
                         btn.click()
-                        _hd(2.0, 3.0)
+                        _hd(2.0, 3.5)
                         log.info("  [gob-multi] Postulación enviada en preview: '%s'", title)
+                        print(f"  [GOB] ✓ Postulado: {title[:60]}")
                         return True
                 except Exception:
                     pass
-            log.warning("  [gob-multi] En preview pero sin botón de envío: '%s'", title)
+            log.warning("  [gob-multi] En preview pero sin botón de envío visible")
             return False
 
-        # ── Llenar campos del paso actual ─────────────────────────────────────
+        # ── Pasos 1-3: llenar campos ──────────────────────────────────────────
+        _hd(0.8, 1.5)  # dejar que React hidrate el DOM
+
+        # fill_form usa el QA cache para preguntas y los datos del perfil para fields estándar
         try:
             fill_form(page, profile, job_title=title)
-        except Exception:
-            pass
+        except Exception as fe:
+            log.debug("  [gob-multi] fill_form error: %s", fe)
 
+        # Textareas vacíos → cover_letter (incluye el campo de motivación en step=basic)
         if cover:
             try:
                 for ta in page.query_selector_all("textarea:visible"):
                     val = (ta.evaluate("el => el.value") or "").strip()
                     if not val:
                         ta.fill(cover[:1000])
+                        log.debug("  [gob-multi] cover_letter aplicado a textarea")
             except Exception:
                 pass
 
-        # ── Avanzar al siguiente paso ─────────────────────────────────────────
-        advanced = False
-        for sel in [
+        # ── Detectar errores de validación antes de avanzar ──────────────────
+        try:
+            err = page.query_selector(
+                "[class*='error']:visible, [class*='invalid']:visible, "
+                ".field_with_errors:visible, [aria-invalid='true']:visible"
+            )
+            if err:
+                log.warning("  [gob-multi] Validación fallida en step %s: %s", step, err.text_content()[:60])
+        except Exception:
+            pass
+
+        # ── Click en "Siguiente" y verificar avance ───────────────────────────
+        SIGUIENTE_SELS = [
             "button:has-text('Siguiente'):visible",
             "a:has-text('Siguiente'):visible",
             "button:has-text('Next'):visible",
-            "button:has-text('Continue'):visible",
+            "button:has-text('Continuar'):visible",
             "input[type='submit']:visible",
-        ]:
+        ]
+        advanced = False
+        for sel in SIGUIENTE_SELS:
             try:
                 btn = page.query_selector(sel)
-                if btn and btn.is_visible() and btn.is_enabled():
-                    btn.click()
-                    _hd(1.5, 2.5)
+                if not (btn and btn.is_visible()):
+                    continue
+                # Esperar a que esté habilitado (puede estar disabled durante validación)
+                for _ in range(5):
+                    if btn.is_enabled():
+                        break
+                    _hd(0.4, 0.6)
+                if not btn.is_enabled():
+                    log.warning("  [gob-multi] Botón Siguiente deshabilitado — ¿validación pendiente?")
+                    continue
+                btn.click()
+                _hd(1.5, 2.5)
+                # Esperar cambio de URL o de contenido (SPA puede no recargar)
+                try:
+                    page.wait_for_function(
+                        f"() => window.location.href !== {repr(current_url)}",
+                        timeout=8_000
+                    )
+                except Exception:
                     try:
-                        page.wait_for_load_state("domcontentloaded", timeout=10_000)
+                        page.wait_for_load_state("domcontentloaded", timeout=5_000)
                     except Exception:
                         pass
+                new_url = page.url
+                if new_url != current_url:
+                    log.info("  [gob-multi] Avanzó: %s → %s", current_url[-30:], new_url[-30:])
                     advanced = True
-                    log.debug("  [gob-multi] Avanzó al siguiente paso: %s", page.url[:60])
-                    break
-            except Exception:
-                pass
+                else:
+                    log.warning("  [gob-multi] URL no cambió tras Siguiente — ¿validación?")
+                break
+            except Exception as ce:
+                log.debug("  [gob-multi] Click error (%s): %s", sel, ce)
 
         if not advanced:
-            log.warning("  [gob-multi] Sin botón 'Siguiente' en %s", current_url[:60])
+            log.warning("  [gob-multi] No se pudo avanzar desde paso %s", step)
             break
 
     log.warning("  [gob-multi] Flujo no completado para '%s'", title)
