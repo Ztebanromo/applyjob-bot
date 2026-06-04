@@ -121,7 +121,8 @@ SITE_CONFIG = {
         "tipo_postulacion":          "externa",
         "max_offers_per_run":        30,
         "max_pages":                 3,
-        "requires_login":            True,    # Sesión persistente: login via LinkedIn se guarda en sessions/getonyboard/
+        "requires_login":            True,
+        "enabled":                   False,   # Flujo multi-paso (4 pasos) — bot no puede completarlo
     },
     "chiletrabajos": {
         # ChileTrabajos requiere cuenta gratuita para postular.
