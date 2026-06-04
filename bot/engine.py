@@ -2990,12 +2990,14 @@ def run_bot_multi_keywords(
                     page_needs_recreation = True
 
                 if page_needs_recreation:
-                    log.warning("Pagina cerrada/no responde entre keywords. Recreando...")
+                    log.warning("Pagina cerrada/no responde entre keywords. Reutilizando existente...")
                     try:
-                        page = browser_ctx.new_page()
+                        # Reusar primera página existente — no abrir nueva tab en Chrome
+                        _existing_pages = browser_ctx.pages if hasattr(browser_ctx, "pages") else []
+                        page = _existing_pages[0] if _existing_pages else browser_ctx.new_page()
                         apply_stealth(page)
                     except Exception as page_err:
-                        log.error("No se pudo recrear la pagina: %s", page_err)
+                        log.error("No se pudo recuperar pagina: %s", page_err)
                         break
 
                 # LinkedIn: verificar restricción antes de cada keyword

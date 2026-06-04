@@ -186,8 +186,26 @@ class CDPTabBackend(BrowserBackend):
             return None
 
     def close(self) -> None:
-        # NO cerrar el contexto ni las pestañas — son del Chrome del usuario
-        # Solo desconectar la referencia local
+        """
+        Al terminar el portal: navega la pestaña a about:blank para dejarla
+        disponible para el próximo portal sin acumular URLs de trabajo.
+        NO cierra la pestaña — es el Chrome del usuario.
+        """
+        if self.context:
+            try:
+                pages = list(self.context.pages)
+                if self.portal_name:
+                    from bot.session_config import VERIFY_URLS
+                    domain = VERIFY_URLS.get(self.portal_name, "").split("/")[2] if VERIFY_URLS.get(self.portal_name) else ""
+                    for p in pages:
+                        try:
+                            if domain and domain in p.url:
+                                p.goto("about:blank", wait_until="commit", timeout=3_000)
+                                break
+                        except Exception:
+                            pass
+            except Exception:
+                pass
         self.context = None
         self.browser = None
 
