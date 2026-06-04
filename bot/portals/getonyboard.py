@@ -304,6 +304,16 @@ def _get_gob_step(page) -> str:
     if "step=questions"  in url: return "preguntas"
     if "step=basic_data" in url: return "info_basica"
     if "step=basic"      in url: return "experiencia"
+    # Por texto visible en la página (GetOnBoard puede usar rutas sin query param)
+    try:
+        body = page.evaluate("document.body?.innerText?.slice(0, 300) || ''") or ""
+        body_low = body.lower()
+        if "vista previa de tu postulacion" in body_low or "enviar postulacion ahora" in body_low:
+            return "preview"
+        if "aun no ha sido enviada" in body_low or "todavia no ha sido enviada" in body_low:
+            return "preview"
+    except Exception:
+        pass
     # Por indicador de paso activo en la página
     try:
         active = page.query_selector(
@@ -346,8 +356,11 @@ def _navigate_gob_multistep(page, profile: dict, title: str) -> bool:
         # ── Paso 4: Vista previa → enviar ─────────────────────────────────────
         if step == "preview":
             for sel in [
-                "button:has-text('Postular'):visible",
+                "button:has-text('Enviar postulación ahora'):visible",
+                "a:has-text('Enviar postulación ahora'):visible",
                 "button:has-text('Enviar postulación'):visible",
+                "a:has-text('Enviar postulación'):visible",
+                "button:has-text('Postular'):visible",
                 "button:has-text('Enviar mi postulación'):visible",
                 "button:has-text('Submit'):visible",
                 "input[type='submit']:visible",
