@@ -128,7 +128,7 @@ def _try_fill_external_ats(page, profile: dict, title: str) -> str:
             return "failed"
 
         # Usar fill_form para llenar todos los campos conocidos
-        form_result = fill_form(page, profile, job_title=title)
+        form_result = fill_form(page, profile, job_title=title, portal="getonyboard", url=apply_url)
         answered    = (form_result.get("text_fields", 0)
                        + form_result.get("radio_answers", 0)
                        + (1 if form_result.get("file_uploaded") else 0))
@@ -240,7 +240,7 @@ def _try_fill_gob_quick_apply(page, profile: dict, title: str) -> bool:
             return False
 
         # Usar fill_form del motor genérico
-        form_result = fill_form(page, profile, job_title=title)
+        form_result = fill_form(page, profile, job_title=title, portal="getonyboard", url=page.url)
         answered   = form_result.get("answered", 0)
         unanswered = form_result.get("unanswered", 0)
         log.info("  [gob-quick] fill_form: %d respondidas, %d sin respuesta", answered, unanswered)
@@ -291,6 +291,37 @@ def _try_fill_gob_quick_apply(page, profile: dict, title: str) -> bool:
 def _is_gob_multistep_url(url: str) -> bool:
     """True si la URL corresponde al flujo multi-paso de GetOnBoard (/applications/{id}/edit)."""
     return "/applications/" in url and "/edit" in url
+
+
+def _is_gob_applications_list_url(url: str) -> bool:
+    """True si la URL corresponde al dashboard de aplicaciones de GetOnBoard."""
+    lower = url.lower()
+    return "/applications" in lower and "/edit" not in lower
+
+
+def _absolute_gob_url(page: Page, href: str) -> str:
+    if href.startswith("http"):
+        return href
+    if href.startswith("/"):
+        return "https://www.getonbrd.com" + href
+    base = "/".join(page.url.split("/")[:3])
+    return base + "/" + href.lstrip("/")
+
+
+def _find_gob_application_links(page: Page) -> list[str]:
+    urls: list[str] = []
+    for anchor in page.query_selector_all("a[href*='/applications/']"):
+        try:
+            href = (anchor.get_attribute("href") or "").strip()
+            if not href:
+                continue
+            if "/edit" in href.lower():
+                abs_url = _absolute_gob_url(page, href)
+                if abs_url not in urls:
+                    urls.append(abs_url)
+        except Exception:
+            continue
+    return urls
 
 
 def _get_gob_step(page) -> str:
@@ -380,7 +411,15 @@ def _navigate_gob_multistep(page, profile: dict, title: str) -> bool:
             return False
 
         # ── Pasos 1-3: llenar campos ──────────────────────────────────────────
-        _hd(0.8, 1.5)  # dejar que React hidrate el DOM
+        _hd(0.8, 1.5)
+
+        # Detectar si el formulario requiere inglés
+        _requires_en = False
+        try:
+            body_txt = (page.evaluate("document.body?.innerText?.slice(0,500) || ''") or "").lower()
+            _requires_en = "ingles" in body_txt or "in english" in body_txt or "inglés" in body_txt
+        except Exception:
+            pass
 
         # fill_form usa el QA cache para preguntas y los datos del perfil para fields estándar
         try:
@@ -388,14 +427,42 @@ def _navigate_gob_multistep(page, profile: dict, title: str) -> bool:
         except Exception as fe:
             log.debug("  [gob-multi] fill_form error: %s", fe)
 
-        # Textareas vacíos → cover_letter (incluye el campo de motivación en step=basic)
-        if cover:
+        # Salary USD — campo numérico vacío
+        try:
+            sal_inp = page.query_selector("input[type='number']:visible, input[placeholder*='USD' i]:visible, input[placeholder*='salary' i]:visible")
+            if sal_inp:
+                val = (sal_inp.evaluate("el => el.value") or "").strip()
+                if not val or val == "0":
+                    sal_inp.fill("800")
+                    log.debug("  [gob-multi] salary USD rellenado: 800")
+        except Exception:
+            pass
+
+        # Checkbox "Certifico que tengo residencia legal en Chile"
+        try:
+            chk = page.query_selector("input[type='checkbox']:not(:checked):visible")
+            if chk:
+                chk.click()
+                log.debug("  [gob-multi] checkbox residencia marcado")
+        except Exception:
+            pass
+
+        # Textareas vacíos → cover_letter en el idioma requerido
+        _cover_text = (
+            "I am a recently graduated Programmer Analyst from INACAP (2024) with practical experience "
+            "in enterprise systems SAP WM, WMS, and RF Terminal. I handle Python for scripting and automation, "
+            "SQL for database queries, JavaScript/HTML/CSS for web development, and Git for version control. "
+            "I combine a solid technical foundation with real understanding of logistics and retail business flows. "
+            "Available immediately for a formal IT position."
+        ) if _requires_en else cover
+
+        if _cover_text:
             try:
                 for ta in page.query_selector_all("textarea:visible"):
                     val = (ta.evaluate("el => el.value") or "").strip()
                     if not val:
-                        ta.fill(cover[:1000])
-                        log.debug("  [gob-multi] cover_letter aplicado a textarea")
+                        ta.fill(_cover_text[:1000])
+                        log.debug("  [gob-multi] cover (%s) aplicado a textarea", "EN" if _requires_en else "ES")
             except Exception:
                 pass
 
@@ -558,6 +625,36 @@ class GetOnBoardPortal(BasePortal):
                         return "skipped_404", title
             except Exception:
                 pass
+
+            # Si llegamos al dashboard de aplicaciones, procesar aplicaciones incompletas
+            if _is_gob_applications_list_url(offer_url):
+                app_links = _find_gob_application_links(page)
+                if not app_links:
+                    log.info("  [gob] Dashboard de aplicaciones sin enlaces editables: %s", offer_url[:70])
+                    return "skipped_no_applications", title
+
+                applied_any = False
+                for link in app_links:
+                    try:
+                        page.goto(link, wait_until="domcontentloaded", timeout=20_000)
+                        human_delay(0.7, 1.2)
+
+                        if _is_gob_multistep_url(page.url):
+                            log.info("  [gob] Procesando aplicación GetOnBoard: %s", page.url[:70])
+                            if _navigate_gob_multistep(page, self.profile, title):
+                                applied_any = True
+                                break
+                            continue
+
+                        if _try_fill_gob_quick_apply(page, self.profile, title):
+                            applied_any = True
+                            break
+                    except Exception as exc:
+                        log.warning("  [gob] Error procesando enlace de aplicación: %s", exc)
+                        continue
+
+                status = "applied" if applied_any else "pending_saved"
+                return status, title
 
             # Extraer título (primera línea del h1 — el resto es empresa/ciudad)
             try:
