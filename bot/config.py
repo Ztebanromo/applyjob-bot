@@ -122,7 +122,7 @@ SITE_CONFIG = {
         "max_offers_per_run":        30,
         "max_pages":                 3,
         "requires_login":            True,
-        "enabled":                   False,   # Flujo multi-paso (4 pasos) — bot no puede completarlo
+        "enabled":                   True,
     },
     "chiletrabajos": {
         # ChileTrabajos requiere cuenta gratuita para postular.

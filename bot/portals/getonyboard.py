@@ -288,6 +288,110 @@ def _try_fill_gob_quick_apply(page, profile: dict, title: str) -> bool:
         return False
 
 
+def _is_gob_multistep_url(url: str) -> bool:
+    """True si la URL corresponde al flujo multi-paso de GetOnBoard (/applications/{id}/edit)."""
+    return "/applications/" in url and "/edit" in url
+
+
+def _navigate_gob_multistep(page, profile: dict, title: str) -> bool:
+    """
+    Navega el flujo multi-paso de GetOnBoard (hasta 4 pasos).
+
+    URL pattern: /applications/{id}/edit?step={basic|basic_data|questions|preview}
+
+    En cada paso:
+      1. Llena los campos con fill_form + fallback cover_letter
+      2. Clickea "Siguiente" para avanzar
+    En el último paso (preview):
+      - Clickea "Postular" / "Enviar postulación"
+
+    Retorna True si la postulación fue enviada, False si falló.
+    """
+    from ..form_filler import fill_form
+    from ..stealth_utils import human_delay as _hd
+
+    max_steps = 6
+    cover = profile.get("cover_letter", "") or ""
+
+    for _ in range(max_steps):
+        current_url = page.url
+
+        # ── Detectar paso final: preview ─────────────────────────────────────
+        is_preview = (
+            "step=preview" in current_url
+            or bool(page.query_selector(
+                "h1:has-text('Vista previa'), h2:has-text('Vista previa'), "
+                "h1:has-text('Preview'), h2:has-text('Preview')"
+            ))
+        )
+
+        if is_preview:
+            for sel in [
+                "button:has-text('Postular'):visible",
+                "button:has-text('Enviar postulación'):visible",
+                "button:has-text('Send application'):visible",
+                "input[type='submit']:visible",
+                "button[type='submit']:visible",
+            ]:
+                try:
+                    btn = page.query_selector(sel)
+                    if btn and btn.is_visible() and btn.is_enabled():
+                        btn.click()
+                        _hd(2.0, 3.0)
+                        log.info("  [gob-multi] Postulación enviada en preview: '%s'", title)
+                        return True
+                except Exception:
+                    pass
+            log.warning("  [gob-multi] En preview pero sin botón de envío: '%s'", title)
+            return False
+
+        # ── Llenar campos del paso actual ─────────────────────────────────────
+        try:
+            fill_form(page, profile, job_title=title)
+        except Exception:
+            pass
+
+        if cover:
+            try:
+                for ta in page.query_selector_all("textarea:visible"):
+                    val = (ta.evaluate("el => el.value") or "").strip()
+                    if not val:
+                        ta.fill(cover[:1000])
+            except Exception:
+                pass
+
+        # ── Avanzar al siguiente paso ─────────────────────────────────────────
+        advanced = False
+        for sel in [
+            "button:has-text('Siguiente'):visible",
+            "a:has-text('Siguiente'):visible",
+            "button:has-text('Next'):visible",
+            "button:has-text('Continue'):visible",
+            "input[type='submit']:visible",
+        ]:
+            try:
+                btn = page.query_selector(sel)
+                if btn and btn.is_visible() and btn.is_enabled():
+                    btn.click()
+                    _hd(1.5, 2.5)
+                    try:
+                        page.wait_for_load_state("domcontentloaded", timeout=10_000)
+                    except Exception:
+                        pass
+                    advanced = True
+                    log.debug("  [gob-multi] Avanzó al siguiente paso: %s", page.url[:60])
+                    break
+            except Exception:
+                pass
+
+        if not advanced:
+            log.warning("  [gob-multi] Sin botón 'Siguiente' en %s", current_url[:60])
+            break
+
+    log.warning("  [gob-multi] Flujo no completado para '%s'", title)
+    return False
+
+
 class GetOnBoardPortal(BasePortal):
 
     def get_offer_urls(self, page: Page) -> list[str]:
@@ -471,11 +575,25 @@ class GetOnBoardPortal(BasePortal):
                     new_page = new_page_info.value
                     new_page.wait_for_load_state("domcontentloaded", timeout=20_000)
                     apply_url = new_page.url
-                    log.info("  [gob] Nueva pestaña → ATS externo: %s | '%s'", apply_url[:70], title)
-                    print(f"  [GOB] ATS externo abierto: {apply_url[:60]}")
+                    log.info("  [gob] Nueva pestaña → %s | '%s'", apply_url[:70], title)
+                    print(f"  [GOB] Postulación abierta: {apply_url[:60]}")
 
-                    # ── Intentar llenar el formulario del ATS externo ──────────
                     if not self.dry_run:
+                        # ── Flujo multi-paso de GetOnBoard ─────────────────────
+                        if _is_gob_multistep_url(apply_url):
+                            log.info("  [gob] Flujo multi-paso detectado: %s", apply_url[:70])
+                            print(f"  [GOB] Flujo multi-paso — navegando pasos: {title[:60]}")
+                            multistep_ok = _navigate_gob_multistep(new_page, self.profile, title)
+                            try:
+                                new_page.close()
+                            except Exception:
+                                pass
+                            if multistep_ok:
+                                print(f"  [GOB] ✓ Postulación multi-paso enviada: {title[:60]}")
+                                return "applied", title
+                            return "external_apply", title
+
+                        # ── ATS externo genérico ────────────────────────────────
                         ats_result = _try_fill_external_ats(new_page, self.profile, title)
                         if ats_result == "applied":
                             log.info("  [gob] ATS externo completado: '%s'", title)
@@ -500,9 +618,16 @@ class GetOnBoardPortal(BasePortal):
                         pass
                     apply_url = page.url
 
-                    # ── Detectar formulario de Postulación Rápida en GetOnBoard ──────
-                    # Si seguimos en getonbrd.com y hay un formulario visible, es quick apply
                     if "getonbrd.com" in apply_url:
+                        # ── Flujo multi-paso en mismo tab ───────────────────────
+                        if _is_gob_multistep_url(apply_url):
+                            log.info("  [gob] Flujo multi-paso (mismo tab): %s", apply_url[:70])
+                            multistep_ok = _navigate_gob_multistep(page, self.profile, title)
+                            if multistep_ok:
+                                print(f"  [GOB] ✓ Postulación multi-paso enviada: {title[:60]}")
+                                return "applied", title
+
+                        # ── Postulación Rápida ──────────────────────────────────
                         quick_applied = _try_fill_gob_quick_apply(page, self.profile, title)
                         if quick_applied:
                             log.info("  [gob] Postulación Rápida completada: '%s'", title)
