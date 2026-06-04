@@ -739,7 +739,7 @@ def _open_browser_for_manual_login(
     session_dir: str,
     locale: str = "es-CL",
     tz: str = "America/Santiago",
-    timeout_seconds: int = 300,
+    timeout_seconds: int | None = None,
     session_confirmed_inactive: bool = False,
 ) -> bool:
     """
@@ -753,6 +753,14 @@ def _open_browser_for_manual_login(
     Retorna True si el login fue detectado y la sesión guardada, False si el timeout expiró.
     """
     from urllib.parse import urlparse
+
+    # Timeout configurable desde .env (LOGIN_TIMEOUT_MINUTES, default 5)
+    if timeout_seconds is None:
+        _env_min = os.getenv("LOGIN_TIMEOUT_MINUTES", "5").strip()
+        try:
+            timeout_seconds = int(_env_min) * 60
+        except ValueError:
+            timeout_seconds = 300
 
     login_url = _LOGIN_URLS.get(portal_name, SITE_CONFIG.get(portal_name, {}).get("url_busqueda", ""))
     if not login_url:
@@ -985,18 +993,18 @@ def _ensure_login(portal_name: str, session_dir: str) -> bool:
 
     attempt = 0
     _last_req_print = 0.0
-    while not _should_stop():
+    _MAX_LOGIN_ATTEMPTS = 3  # máximo 3 intentos (3 × LOGIN_TIMEOUT_MINUTES) antes de saltar portal
+    while not _should_stop() and attempt < _MAX_LOGIN_ATTEMPTS:
         attempt += 1
         _now = time.time()
-        # Imprimir [LOGIN_REQUERIDO] máximo una vez cada 60 segundos para no spamear logs
         if attempt > 1 and _now - _last_req_print >= 60:
-            print(f"\n[LOGIN_REQUERIDO] {portal_name.upper()} - intento {attempt}. Abre el browser.")
+            print(f"\n[LOGIN_REQUERIDO] {portal_name.upper()} - intento {attempt}/{_MAX_LOGIN_ATTEMPTS}. Abre el browser.")
             _last_req_print = _now
 
         ok = _open_browser_for_manual_login(
-            portal_name              = portal_name,
-            session_dir              = session_dir,
-            timeout_seconds          = 300,  # mantener la ventana abierta más tiempo antes de reintentar
+            portal_name                = portal_name,
+            session_dir                = session_dir,
+            timeout_seconds            = None,  # usa LOGIN_TIMEOUT_MINUTES del .env
             session_confirmed_inactive = True,
         )
         if ok:
@@ -1008,6 +1016,9 @@ def _ensure_login(portal_name: str, session_dir: str) -> bool:
         print(f"[LOGIN] {portal_name.upper()} - no se detecto login. Reintentando en 3s...")
         time.sleep(3)
 
+    if attempt >= _MAX_LOGIN_ATTEMPTS:
+        print(f"\n[LOGIN] {portal_name.upper()}: {_MAX_LOGIN_ATTEMPTS} intentos agotados — saltando portal.")
+        log.warning("[LOGIN] %s: max intentos (%d) agotados.", portal_name, _MAX_LOGIN_ATTEMPTS)
     return False
 
 
