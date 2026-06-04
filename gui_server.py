@@ -665,6 +665,13 @@ def run_bot_thread(portals, runtime_env=None):
         if state.finish_run(run_id):
             socketio.emit('bot_status', state.get_status() | {"status": "finished"}, namespace='/bot')
             socketio.emit('session_status', get_session_status(), namespace='/bot')
+            # Emitir resumen post-run
+            socketio.emit('run_summary', {
+                'total_applied':  state.stats.get('applied',  0),
+                'total_external': state.stats.get('external', 0),
+                'total_filtered': state.stats.get('filtered', 0),
+                'total_errors':   state.stats.get('errors',   0),
+            }, namespace='/bot')
 
 @app.route('/')
 def index():
