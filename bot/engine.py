@@ -976,14 +976,19 @@ def _ensure_login(portal_name: str, session_dir: str) -> bool:
     _has_ck   = _has_cookies_sqlite(_ck_path)
 
     if not _has_ck:
-        print(f"\n[LOGIN_REQUERIDO] {portal_name.upper()} - sin sesion. Abre el browser que aparece.", flush=True)
+        print(f"\n[LOGIN_REQUERIDO] {portal_name.upper()} - sin sesion guardada.", flush=True)
+        print(f"[LOGIN] {portal_name.upper()} - Verificá la sesión desde el dashboard y corré de nuevo.", flush=True)
+        return False  # Saltar portal: sin cookies, no esperar login manual
     else:
         print(f"[LOGIN] {portal_name.upper()} - verificando sesion...", flush=True)
         if _session_is_active(portal_name, session_dir):
             print(f"[SESION_INICIADA] {portal_name.upper()} - sesion activa.")
             return True
 
-        print(f"\n[LOGIN_REQUERIDO] {portal_name.upper()} - sesion expirada. Abre el browser que aparece.", flush=True)
+        # Sesión expirada con cookies guardadas → saltar portal, no bloquear
+        print(f"\n[LOGIN_EXPIRADO] {portal_name.upper()} - sesion expirada.", flush=True)
+        print(f"[LOGIN] Abrí el bot Chrome (chrome_debug.bat), logueate y clickeá Guardar en el dashboard.", flush=True)
+        return False  # No esperar login manual, saltar portal
 
     attempt = 0
     _last_req_print = 0.0
