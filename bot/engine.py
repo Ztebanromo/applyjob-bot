@@ -1042,6 +1042,8 @@ def _wait_for_login_if_needed(page, portal_name: str, config: dict) -> None:
                 "just a moment" in title or
                 "un momento"    in title or
                 "cf_chl"        in url   or
+                "403 forbidden" in body.lower() or
+                "access denied" in body.lower() or
                 "verifique que es un ser humano" in body.lower() or
                 "verificación adicional"         in body.lower() or
                 ("cloudflare" in body.lower() and len(body) < 3000)

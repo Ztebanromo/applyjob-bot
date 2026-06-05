@@ -1011,9 +1011,9 @@ def build_config_for_keyword(portal_key: str, keyword: str) -> dict:
 
     url_map = {
         "indeed":        f"https://cl.indeed.com/jobs?q={kw_encoded}{exp_indeed}&l=Santiago%2C+Regi%C3%B3n+Metropolitana&radius=25&explvl=entry_level&sort=date",
-        # ordenar=2 (recientes) | provincia=Santiago | jornada completa (wt=1)
-        # Usar ruta -en-santiago-de-chile para filtro estricto de región
-        "computrabajo":  f"https://cl.computrabajo.com/trabajo-de-{kw_dash}{exp_suffix_ct}-en-santiago-de-chile?ordenar=2&wt=1",
+        # ordenar=2 (recientes) | provincia=Santiago
+        # wt=1 eliminado — puede disparar Cloudflare WAF en Playwright
+        "computrabajo":  f"https://cl.computrabajo.com/trabajo-de-{kw_dash}{exp_suffix_ct}-en-santiago-de-chile?ordenar=2",
         # Laborum: home con sesión válida — la API recibe Region=13 en filtros
         "laborum":       "https://www.laborum.cl",
         # ChileTrabajos: región 13 (RM) + jornada completa (jc=1) + horario AM (h=1)

@@ -155,10 +155,11 @@ LOGIN_URL_KEYWORDS: list[str] = [
 ]
 
 # User-Agent para browsers Playwright (headless y visible)
+# Usar Chrome 131 (versión actual 2025) para evitar detección por UA desactualizado
 STEALTH_USER_AGENT: str = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/124.0.0.0 Safari/537.36"
+    "Chrome/131.0.0.0 Safari/537.36"
 )
 
 # Args de stealth para Playwright
@@ -168,12 +169,17 @@ STEALTH_ARGS: list[str] = [
     "--disable-infobars",
     "--disable-notifications",
     "--disable-dev-shm-usage",
+    "--disable-features=IsolateOrigins,site-per-process",
+    "--flag-switches-begin",
+    "--flag-switches-end",
 ]
 
 STEALTH_IGNORE_DEFAULT_ARGS: list[str] = ["--enable-automation"]
 
 STEALTH_INIT_SCRIPT: str = (
-    "Object.defineProperty(navigator,'webdriver',{get:()=>undefined})"
+    "Object.defineProperty(navigator,'webdriver',{get:()=>undefined});"
+    "Object.defineProperty(navigator,'plugins',{get:()=>[1,2,3,4,5]});"
+    "Object.defineProperty(navigator,'languages',{get:()=>['es-CL','es','en']});"
 )
 
 # Portales que requieren sesión para postular
