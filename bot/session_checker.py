@@ -10,11 +10,9 @@ Uso:
 """
 from __future__ import annotations
 
+import json
 import logging
 import os
-import shutil
-import sqlite3
-import tempfile
 import time
 from enum import Enum
 from pathlib import Path
@@ -23,6 +21,7 @@ try:
     from playwright.sync_api import sync_playwright
 except ImportError:
     sync_playwright = None  # type: ignore[assignment]
+
 
 log = logging.getLogger(__name__)
 
@@ -36,41 +35,24 @@ class SessionResult(str, Enum):
 
 def has_real_cookies(session_dir: str | Path) -> bool:
     """
-    True si el directorio de sesión tiene cookies reales (COUNT > 0 en SQLite).
+    True si el directorio de sesión tiene cookies reales en playwright_state.json.
     No abre ningún browser — solo lee el archivo.
     """
-    cookies_path = Path(session_dir) / "Default" / "Network" / "Cookies"
-    if not cookies_path.exists():
+    session_dir = Path(session_dir)
+    state_file = session_dir / "playwright_state.json"
+    
+    if not state_file.exists():
         return False
-    tmp_path = None
+    
     try:
-        with tempfile.NamedTemporaryFile(delete=False) as tmp:
-            tmp_path = tmp.name
-        shutil.copy2(cookies_path, tmp_path)
-        conn = sqlite3.connect(tmp_path)
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='cookies'"
-        )
-        if not cursor.fetchone():
-            conn.close()
-            return False
-        cursor.execute("SELECT COUNT(*) FROM cookies")
-        count = cursor.fetchone()[0]
-        conn.close()
-        return count > 0
+        state_data = json.loads(state_file.read_text(encoding="utf-8"))
+        cookies = state_data.get("cookies", [])
+        if isinstance(cookies, list) and len(cookies) > 0:
+            return True
     except Exception as exc:
-        log.debug("[COOKIE_CHECK] Error leyendo cookies de %s: %s", session_dir, exc)
-        try:
-            return cookies_path.stat().st_size > 20480
-        except OSError:
-            return False
-    finally:
-        if tmp_path and os.path.exists(tmp_path):
-            try:
-                os.remove(tmp_path)
-            except Exception:
-                pass
+        log.debug("[COOKIE_CHECK] Error leyendo %s: %s", state_file, exc)
+    
+    return False
 
 
 def check_session(
@@ -117,19 +99,8 @@ def check_session(
     if not has_real_cookies(session_dir):
         return SessionResult.NO_COOKIES
 
-    # Paso 2: playwright_state.json reciente → confiar
-    state_file = session_dir / "playwright_state.json"
-    try:
-        if state_file.exists():
-            age_h = (time.time() - state_file.stat().st_mtime) / 3600
-            if age_h < 4:
-                log.debug(
-                    "[SESSION_CHECK] %s: playwright_state.json %.1fh → OK", portal, age_h
-                )
-                return SessionResult.OK
-    except Exception:
-        pass
-
+    # Paso 2: no confiar solo en el state_file reciente.
+    # Siempre verificar headless si existe VERIFY_URLS para el portal.
     verify_url = VERIFY_URLS.get(portal)
     if not verify_url:
         return SessionResult.OK  # sin URL → asumir ok si cookies existen
@@ -207,7 +178,10 @@ def check_session(
                     )
                     return SessionResult.EXPIRED
                 else:
-                    return SessionResult.OK
+                    if is_logged_in_on_page(pg, portal):
+                        log.debug("[SESSION_CHECK] %s: no pos_sels configured, fallback is_logged_in_on_page → OK", portal)
+                        return SessionResult.OK
+                    return SessionResult.EXPIRED
 
             finally:
                 try:

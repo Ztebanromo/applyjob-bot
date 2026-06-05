@@ -90,7 +90,7 @@ def _try_fill_external_ats(page, profile: dict, title: str) -> str:
         - LinkedIn/Indeed (sesión separada)
         - Páginas de empresa sin formulario
     """
-    from ..form_filler import fill_form, scan_form as _scan_form
+    from ..form_filler import fill_form
     from ..stealth_utils import human_delay as _hd
 
     # ── ATSs que requieren cuenta propia — no intentar ──────────────────────

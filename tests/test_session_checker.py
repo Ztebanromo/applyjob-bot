@@ -1,6 +1,6 @@
 """Tests unitarios para session_checker — sin browser real."""
+import json
 import os
-import sqlite3
 import tempfile
 import time
 from pathlib import Path
@@ -14,30 +14,26 @@ from bot.session_checker import SessionResult, has_real_cookies, check_session
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
 def _make_session_dir(cookie_count: int = 0) -> Path:
-    """Crea directorio de sesión temporal con estructura Chromium correcta."""
+    """Crea directorio de sesión temporal con playwright_state.json."""
     tmp = Path(tempfile.mkdtemp())
-    net = tmp / "Default" / "Network"
-    net.mkdir(parents=True)
-    db_path = net / "Cookies"
-    conn = sqlite3.connect(str(db_path))
-    conn.execute("""
-        CREATE TABLE cookies (
-            name TEXT, host_key TEXT, path TEXT,
-            expires_utc INTEGER, is_secure INTEGER,
-            is_httponly INTEGER, value TEXT
-        )
-    """)
-    for i in range(cookie_count):
-        conn.execute(
-            "INSERT INTO cookies VALUES (?,?,?,?,?,?,?)",
-            (f"cookie_{i}", ".example.com", "/", 9999999999, 1, 0, f"val_{i}"),
-        )
-    conn.commit()
-    conn.close()
+    
+    if cookie_count > 0:
+        cookies = [
+            {
+                "name": f"cookie_{i}",
+                "domain": ".example.com",
+                "path": "/",
+                "value": f"val_{i}"
+            }
+            for i in range(cookie_count)
+        ]
+        state = {"cookies": cookies}
+        (tmp / "playwright_state.json").write_text(json.dumps(state), encoding="utf-8")
+    
     return tmp
 
 
-def _make_playwright_ctx(url="https://example.com", pos_el=None, neg_el=None):
+def _make_playwright_ctx(url="https://example.com", pos_el=None):
     """Crea mock de contexto Playwright."""
     mock_pw = MagicMock()
     mock_ctx = MagicMock()
@@ -75,7 +71,6 @@ def test_has_real_cookies_with_cookies():
 
 def test_has_real_cookies_missing_file():
     tmp = Path(tempfile.mkdtemp())
-    (tmp / "Default" / "Network").mkdir(parents=True)
     assert has_real_cookies(tmp) is False
 
 
@@ -89,13 +84,19 @@ def test_check_session_no_cookies():
 def test_check_session_recent_state_file_returns_ok():
     session = _make_session_dir(cookie_count=5)
     state_file = session / "playwright_state.json"
-    state_file.write_text('{"cookies":[]}')
     recent = time.time() - 1800  # hace 30 min
     os.utime(state_file, (recent, recent))
-    assert check_session("laborum", session) == SessionResult.OK
+
+    from bot.session_config import NOT_LOGGED_IN_SIGNALS
+    mock_pw, _, mock_pg = _make_playwright_ctx(url="https://www.laborum.cl/dashboard")
+    visible_el = MagicMock()
+    visible_el.is_visible.return_value = True
+    mock_pg.query_selector.side_effect = [None] * len(NOT_LOGGED_IN_SIGNALS.get("laborum", [])) + [visible_el]
+    with patch("bot.session_checker.sync_playwright", return_value=mock_pw):
+        assert check_session("laborum", session) == SessionResult.OK
 
 
-def test_check_session_login_redirect_expired(mocker):
+def test_check_session_login_redirect_expired():
     session = _make_session_dir(cookie_count=10)
     mock_pw, _, mock_pg = _make_playwright_ctx(
         url="https://www.linkedin.com/login?session_redirect=..."
@@ -105,7 +106,7 @@ def test_check_session_login_redirect_expired(mocker):
     assert result == SessionResult.EXPIRED
 
 
-def test_check_session_positive_selector_ok(mocker):
+def test_check_session_positive_selector_ok():
     from bot.session_config import NOT_LOGGED_IN_SIGNALS
     session = _make_session_dir(cookie_count=10)
     mock_pw, _, mock_pg = _make_playwright_ctx(url="https://www.laborum.cl/dashboard")
@@ -120,7 +121,7 @@ def test_check_session_positive_selector_ok(mocker):
     assert result == SessionResult.OK
 
 
-def test_check_session_no_positive_selectors_expired(mocker):
+def test_check_session_no_positive_selectors_expired():
     session = _make_session_dir(cookie_count=10)
     mock_pw, _, mock_pg = _make_playwright_ctx(url="https://www.laborum.cl/dashboard")
     mock_pg.query_selector.return_value = None

@@ -15,7 +15,6 @@ SESSIONS_DIR = BASE_DIR / "sessions"
 def main():
     from bot.engine import (
         _open_browser_for_manual_login,
-        _session_has_cookies,
         _session_is_active,
         _LOGIN_URLS,
         SESSIONS_DIR as ENG_SESSIONS,

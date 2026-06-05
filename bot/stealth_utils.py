@@ -17,8 +17,6 @@ Módulos exportados:
   - scroll_to_and_pause(page, el)  — hace scroll al elemento y espera
   - portal_action_delay(portal)  — delay entre acciones según portal
   - take_error_screenshot(page, portal, context)
-  - random_user_agent()
-  - random_viewport()
 """
 import datetime
 import random
@@ -59,14 +57,14 @@ PORTAL_TIMING: dict[str, dict] = {
         "scroll_steps": 2,
         "read_wpm": 350,
     },
-    "chiletrabajo": {
+    "chiletrabajos": {
         "min_action": 0.7, "max_action": 1.8,
         "min_key": 0.03,   "max_key": 0.11,
         "typo_rate": 0.01,
         "scroll_steps": 1,
         "read_wpm": 400,
     },
-    "getonboard": {
+    "getonyboard": {
         "min_action": 0.9, "max_action": 2.0,
         "min_key": 0.04,   "max_key": 0.14,
         "typo_rate": 0.02,
@@ -92,36 +90,9 @@ _ADJACENT: dict[str, str] = {
     "z": "asx",
 }
 
-USER_AGENTS = [
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36 Edg/123.0.0.0",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
-]
-
-VIEWPORTS = [
-    {"width": 1920, "height": 1080},
-    {"width": 1440, "height": 900},
-    {"width": 1366, "height": 768},
-    {"width": 1536, "height": 864},
-]
-
-
 # ---------------------------------------------------------------------------
 # Helpers base
 # ---------------------------------------------------------------------------
-
-def random_user_agent() -> str:
-    return random.choice(USER_AGENTS)
-
-
-def random_viewport() -> dict:
-    return random.choice(VIEWPORTS)
-
 
 # ── Per-session UA lock ───────────────────────────────────────────────────────
 # Garantiza que un mismo browser context use SIEMPRE el mismo UA,

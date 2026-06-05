@@ -17,9 +17,9 @@ echo.
 echo  Iniciando Chrome del bot (perfil dedicado)...
 echo  CDP: 127.0.0.1:9222
 echo.
-echo  Se abriran las pestanas de login automaticamente.
-echo  Inicia sesion en cada una y deja esta ventana abierta.
-echo.
+echo  Se abrirá solo el dashboard en Chrome.
+ echo  Usa el botón de login del dashboard para abrir los portales activos.
+ echo.
 
 start "ApplyJobBot-Chrome" %CHROME% ^
   --remote-debugging-port=9222 ^
@@ -27,13 +27,9 @@ start "ApplyJobBot-Chrome" %CHROME% ^
   --user-data-dir="%BOT_PROFILE%" ^
   --no-first-run ^
   --no-default-browser-check ^
-  "https://www.linkedin.com/login" ^
-  "https://cl.computrabajo.com" ^
-  "https://www.laborum.cl" ^
-  "https://www.trabajando.cl" ^
-  "https://www.getonbrd.com/auth/sign_in"
+  "http://127.0.0.1:5000/"
 
 echo  Chrome iniciado. Cuando termines los logins, vuelve al dashboard
-echo  y hace click en "Guardar sesiones del bot".
+ echo  y haz click en "Guardar sesiones del bot".
 echo.
 timeout /t 5 /nobreak >nul

@@ -393,7 +393,7 @@
                             <span id="ql-auto-label">AUTO 5min</span>
                         </label>
                         <button onclick="scanQuickLinks()" style="font-size:0.65rem;background:linear-gradient(160deg,#0369a1,#0ea5e9);border:none;color:#fff;padding:0.22rem 0.65rem;cursor:pointer;font-family:'Inter',sans-serif;font-weight:700;white-space:nowrap;border-radius:7px;box-shadow:0 2px 5px rgba(0,0,0,0.3);">⬡ Escanear</button>
-                        <button id="apply-all-btn" onclick="applyQuickLinksNow()" style="font-size:0.65rem;background:linear-gradient(160deg,#15803d,#22c55e);border:none;color:#fff;padding:0.22rem 0.7rem;cursor:pointer;font-family:'Inter',sans-serif;font-weight:700;white-space:nowrap;border-radius:7px;box-shadow:0 2px 5px rgba(0,0,0,0.3);">⚡ Postulando...</button>
+                        <button id="apply-all-btn" onclick="applyQuickLinksNow()" style="font-size:0.65rem;background:linear-gradient(160deg,#15803d,#22c55e);border:none;color:#fff;padding:0.22rem 0.7rem;cursor:pointer;font-family:'Inter',sans-serif;font-weight:700;white-space:nowrap;border-radius:7px;box-shadow:0 2px 5px rgba(0,0,0,0.3);">⚡ Postular rápido</button>
                         <button onclick="clearQuickLinks()" style="background:rgba(255,255,255,0.06);border:none;color:rgba(255,255,255,0.45);cursor:pointer;font-size:0.72rem;padding:0.15rem 0.35rem;border-radius:6px;" title="Limpiar">🗑</button>
                     </div>
                     <span id="ql-chevron" style="color:rgba(255,255,255,0.3);font-size:0.6rem;transition:transform 0.2s;pointer-events:none;transform:rotate(-90deg);margin-left:0.3rem;">▼</span>
@@ -1330,7 +1330,7 @@
         async function applyQuickLinksNow() {
             if (_qlAutoRunning) return;
             const btn = document.getElementById('apply-all-btn');
-            const origText = btn ? btn.textContent : '';
+            const origText = btn ? btn.textContent : '⚡ Postular rápido';
             if (btn) { btn.textContent = '⏳ Postulando...'; btn.disabled = true; }
             _qlAutoRunning = true;
             try {
@@ -1340,6 +1340,7 @@
                     body: JSON.stringify({max: 5})
                 });
                 const d = await r.json();
+                if (!d.ok) throw new Error(d.error || 'Error en postulación rápida');
                 const msg = `✅ ${d.applied || 0} postuladas · ⏳ ${d.pending || 0} pendientes · ❌ ${d.failed || 0} fallidas`;
                 if (btn) btn.textContent = msg;
                 appendLogLine(`[AUTO-QL] ${msg}`);
@@ -1347,8 +1348,8 @@
                 await loadQuickLinks();
             } catch(e) {
                 if (btn) { btn.textContent = origText; btn.disabled = false; }
-                const errMsg = e.message.includes('fetch') ? 'servidor no disponible' : e.message;
-                appendLogLine(`[AUTO-QL] Error: ${errMsg} — reintentara en 5min.`);
+                const errMsg = (e.message || '').toLowerCase().includes('fetch') ? 'servidor no disponible' : e.message;
+                appendLogLine(`[AUTO-QL] Error: ${errMsg} — reintentará en 5min.`);
             } finally {
                 _qlAutoRunning = false;
             }
@@ -2520,6 +2521,7 @@
                 // Actualizar chip SESIONES con resultado headless real (no solo tamaño de cookie)
                 Object.entries(data).forEach(([portal, result]) => {
                     sessionCache[portal] = (result === 'ok');
+                    _applySessionStatus(portal, result);
                 });
                 if (badPortals.length > 0) {
                     setOps(opsSessions, `${badPortals.length} sin sesión`, 'warn');

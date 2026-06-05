@@ -18,11 +18,7 @@ _log = _logging.getLogger("applyjob.server")
 
 # ── Session config — fuente única de verdad ────────────────────────────────────
 from bot.session_config import (
-    VERIFY_URLS         as _HOME_URLS_SERVER,
-    LOGGED_IN_SIGNALS   as _LOGIN_SIGNALS_SERVER,
-    NOT_LOGGED_IN_SIGNALS as _LOGIN_PAGE_SIGNALS_BY_PORTAL,
     PORTALS_REQUIRE_LOGIN,
-    LOGIN_URL_KEYWORDS  as _LOGIN_URL_KEYWORDS_CFG,
 )
 from bot.session_checker import check_session as _check_session_unified, SessionResult as _SessionResult
 
@@ -202,6 +198,7 @@ class BotState:
         self.stop_requested = False
         self.scan_active  = False
         self.apply_active = False
+        self.quick_links_active = False
         self.stats = {"applied": 0, "external": 0, "filtered": 0, "errors": 0, "no_nav": 0, "total": 0}
         self.current_portal = None
         self.intervention = None
@@ -210,7 +207,7 @@ class BotState:
 
     @property
     def is_active(self):
-        return self.scan_active or self.apply_active
+        return self.scan_active or self.apply_active or self.quick_links_active
 
     @property
     def process(self):
@@ -1030,7 +1027,8 @@ def api_check_sessions():
                         results[portal] = "error"
                         socketio.emit('session_check_progress', {portal: "error"}, namespace='/bot')
 
-        socketio.emit('session_status', get_session_status(), namespace='/bot')
+        # Emitir estado final basado en resultados verificados, no solo en la existencia de cookies.
+        socketio.emit('session_status', {p: results[p] == 'ok' for p in results}, namespace='/bot')
         return jsonify(results)
     finally:
         with _session_verify_lock:
@@ -1039,8 +1037,20 @@ def api_check_sessions():
 
 @app.route('/api/import-chrome-cookies', methods=['POST'])
 def api_import_chrome_cookies():
-    """CDP eliminado — importación de cookies no disponible."""
-    return jsonify({"ok": False, "msg": "CDP no disponible"}), 503
+    """Intenta importar sesiones desde Chrome (CDP) a `sessions/<portal>/playwright_state.json`.
+
+    Body JSON: { "portals": ["laborum","chiletrabajos"] }  — si vacío, importa todos.
+    Retorna: { portal: 'imported'|'no_cookies'|'error' }
+    """
+    data = request.json or {}
+    portals = data.get('portals')
+    try:
+        from bot.session_importer import import_all_from_cdp
+        # Intentar la URL por defecto (9222)
+        res = import_all_from_cdp(cdp_url=os.getenv('CDP_URL', 'http://127.0.0.1:9222'), portals=portals)
+        return jsonify(res)
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
 
 
 @app.route('/api/portal-restrictions')
@@ -1280,11 +1290,17 @@ def api_apply_quick_links():
     import subprocess
     import threading as _th
 
+    if state.scan_active or state.apply_active or state.quick_links_active:
+        return jsonify({'ok': False, 'error': 'Ya hay un proceso activo. Espera a que termine antes de iniciar otra postulación rápida.'}), 409
+
     data     = request.json or {}
     max_apply = max(1, min(20, int(data.get('max', 5))))
 
     result_holder = {}
     done_event    = _th.Event()
+
+    with state.lock:
+        state.quick_links_active = True
 
     def _run():
         try:
@@ -1320,6 +1336,8 @@ def api_apply_quick_links():
             result_holder.update({'error': str(exc), 'applied': 0})
         finally:
             done_event.set()
+            with state.lock:
+                state.quick_links_active = False
 
     t = _th.Thread(target=_run, daemon=True)
     t.start()
@@ -2458,9 +2476,27 @@ def _clear_session_auth() -> None:
         print("[SESSION] No había datos de login previos.")
 
 
+def _start_chrome_debug() -> None:
+    """Arranca chrome_debug.bat en Windows cuando se inicia el dashboard."""
+    if os.name != 'nt':
+        return
+
+    bat_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "chrome_debug.bat")
+    if not os.path.exists(bat_path):
+        print(f"[WARNING] chrome_debug.bat no encontrado en {bat_path}")
+        return
+
+    try:
+        subprocess.Popen(["cmd", "/c", "start", "", bat_path], cwd=os.path.dirname(bat_path))
+        print("[INFO] Chrome debug iniciado desde chrome_debug.bat")
+    except Exception as exc:
+        print(f"[ERROR] No se pudo iniciar chrome_debug.bat: {exc}")
+
+
 if __name__ == '__main__':
     port = 5000
     print(f"\n--- ApplyJob Bot Dashboard ---")
     print(f"URL: http://127.0.0.1:{port}")
     print(f"------------------------------\n")
+    _start_chrome_debug()
     socketio.run(app, host='127.0.0.1', port=port, debug=False, use_reloader=False, allow_unsafe_werkzeug=True)

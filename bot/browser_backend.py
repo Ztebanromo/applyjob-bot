@@ -67,30 +67,8 @@ class BrowserBackend:
     def connect(self) -> bool:
         raise NotImplementedError
 
-    def is_connected(self) -> bool:
-        return self.context is not None
-
     def new_page(self) -> "Page | None":
         raise NotImplementedError
-
-    def save_storage_state(self, path: str | Path) -> int:
-        if not self.context:
-            return 0
-        try:
-            state = self.context.storage_state(path=str(path))  # type: ignore[attr-defined]
-            return len(state.get("cookies", []))
-        except Exception as exc:
-            log.warning("[BACKEND] save_storage_state: %s", exc)
-            return 0
-
-    def get_cookies(self) -> list[dict[str, Any]]:
-        if not self.context:
-            return []
-        try:
-            return self.context.cookies()  # type: ignore[attr-defined]
-        except Exception as exc:
-            log.warning("[BACKEND] get_cookies: %s", exc)
-            return []
 
     def close(self) -> None:
         if self.context:
@@ -233,6 +211,12 @@ class ChromiumLaunchBackend(BrowserBackend):
                 kwargs["user_agent"] = self.user_agent
             if self.executable_path:
                 kwargs["executable_path"] = self.executable_path
+
+            state_file = self.session_dir / "playwright_state.json"
+            if state_file.exists():
+                kwargs["storage_state"] = str(state_file)
+                log.info("[CHROMIUM] Restaurando storage_state desde %s", state_file)
+
             self.context = self.pw.chromium.launch_persistent_context(
                 str(self.session_dir), **kwargs
             )

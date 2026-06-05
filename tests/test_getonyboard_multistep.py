@@ -86,3 +86,10 @@ def test_is_multistep_url():
     assert _is_gob_multistep_url("https://www.getonbrd.com/empleos/dev/applications/5/edit?step=preview")
     assert not _is_gob_multistep_url("https://www.getonbrd.com/jobs/desarrollador-junior-5")
     assert not _is_gob_multistep_url("https://www.getonbrd.com/empleos/dev/apply")
+
+
+def test_is_applications_list_url():
+    from bot.portals.getonyboard import _is_gob_applications_list_url
+    assert _is_gob_applications_list_url("https://www.getonbrd.com/applications?ref=sidebar_nav")
+    assert not _is_gob_applications_list_url("https://www.getonbrd.com/jobs/test/applications/1/edit?step=basic")
+    assert not _is_gob_applications_list_url("https://www.getonbrd.com/empleos/dev/apply")

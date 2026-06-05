@@ -3,9 +3,15 @@ Portal: InfoJobs (www.infojobs.net)
 Tipo: redirect — abre formulario del empleador o modal InfoJobs.
 requires_login: True (requiere cuenta InfoJobs para inscribirse).
 """
+import logging
+
 from playwright.sync_api import Page
 from bot.portals.base import BasePortal
 from bot.stealth_utils import human_delay
+from ..config import practica_ok
+from ..form_filler import scan_form
+
+log = logging.getLogger("applyjob.infojobs")
 
 _APPLY_SELS = [
     "a.btn-apply",
@@ -83,7 +89,7 @@ class InfoJobsCLPortal(BasePortal):
 
         return urls[:30]
 
-    def apply_to_offer(self, page: Page, offer_url: str) -> str:
+    def apply_to_offer(self, page: Page, offer_url: str) -> tuple[str, str]:
         try:
             page.goto(offer_url, timeout=25_000, wait_until="domcontentloaded")
             human_delay(1.0, 2.0)
@@ -116,18 +122,39 @@ class InfoJobsCLPortal(BasePortal):
                 except Exception:
                     pass
 
+            title = ""
+            try:
+                el = page.query_selector("h1, .offer-title, .header-title")
+                if el:
+                    title = (el.text_content() or "").strip()[:100]
+            except Exception:
+                pass
+
+            page_body = page.text_content("body") or ""
+            if not practica_ok(title + " " + page_body):
+                log.info("  [infojobs] Descartada (práctica/pasantía): '%s'", title[:80])
+                return "skipped_practica", title
+
             if not btn:
-                return "skipped_no_apply_button"
+                return "skipped_no_apply_button", title
 
             if self.dry_run:
-                return "dry_run"
+                return "dry_run", title
 
             btn.click()
             human_delay(1.5, 3.0)
 
             # Si redirigió fuera de InfoJobs
             if "infojobs" not in page.url:
-                return "external:infojobs"
+                # Escanear el ATS externo para guardar preguntas en cache/pending
+                try:
+                    ext_result = scan_form(page, self.profile, job_title=title,
+                                           portal="infojobs", url=offer_url)
+                    if ext_result.get("unanswered"):
+                        log.info("  [infojobs] Preguntas externas guardadas: %d", len(ext_result["unanswered"]))
+                except Exception:
+                    pass
+                return "external_apply", title
 
             # Mensaje de inscripción exitosa
             for success_sel in [
@@ -140,11 +167,11 @@ class InfoJobsCLPortal(BasePortal):
                 try:
                     el = page.query_selector(success_sel)
                     if el and el.is_visible():
-                        return "applied"
+                        return "applied", title
                 except Exception:
                     pass
 
-            return "external:infojobs"
+            return "external_apply", title
 
         except Exception as e:
-            return f"error: {str(e)[:80]}"
+            return f"error: {str(e)[:80]}", title

@@ -392,8 +392,8 @@ def _auto_answer(label: str, profile: dict) -> Optional[str]:
         if any(k in n for k in _OFFTOPIC_CTX):
             return "No tengo experiencia en esta área específica."
 
-        # General / IT → usar el cover_letter del perfil (es específico y profesional)
-        return profile.get("cover_letter", "")
+        # General / IT → no auto-responder preguntas de experiencia genéricas.
+        return None
 
     return None
 
@@ -447,14 +447,12 @@ def _is_noise_label(label: str, norm: str) -> bool:
 def _save_pending_question(label: str, norm: str, portal: str = "", url: str = "") -> None:
     """Guarda una pregunta desconocida en pending_questions.json (sin duplicados).
     Filtra automáticamente ruido de UI: filtros de búsqueda, nombres de archivos, etc.
-    Si puede inferir una respuesta automáticamente la guarda directo en qa_cache.json
-    y no añade la pregunta a pending.
+    Si puede inferir una respuesta automáticamente la guarda directo en qa_cache.json.
 
     Orden de resolución:
       1. qa cache / question_answers.json  (respuesta ya conocida)
       2. _auto_answer() con patrones del CV (incluye fallback inteligente)
-      3. cover_letter del perfil como fallback final (nunca queda sin responder)
-      4. Solo si aún None → guarda como pendiente para revisión manual
+      3. Si no se puede inferir nada, queda pendiente para revisión manual
     """
 
     # Ignorar entradas que son ruido de la interfaz, no preguntas reales
@@ -471,18 +469,8 @@ def _save_pending_question(label: str, norm: str, portal: str = "", url: str = "
         except Exception:
             auto_ans = None
 
-    # 3. Fallback final: cover_letter del perfil
-    # Cubre cualquier pregunta libre de "cuéntanos sobre ti / experiencia / presentación"
-    # que no matcheó los patrones anteriores. Mejor que dejar el campo vacío.
-    if not auto_ans:
-        try:
-            from .config import USER_PROFILE as _UP
-            fallback = _UP.get("cover_letter", "").strip()
-            if fallback:
-                auto_ans = fallback
-                log.info("[AUTO_CV_FALLBACK] '%s' -> cover_letter", label[:60])
-        except Exception:
-            pass
+    # 3. No auto-responder con cover_letter por defecto en preguntas libres.
+    # Si no hay respuesta clara, dejamos la pregunta pendiente para revisión.
 
     # Guardar en qa_cache.json si tiene respuesta automática (para uso en fill_form)
     if auto_ans:
@@ -514,14 +502,17 @@ def _save_pending_question(label: str, norm: str, portal: str = "", url: str = "
     # Evitar duplicados por norm (actualizar si ya existe y estaba sin respuesta)
     for i, entry in enumerate(pending):
         if entry.get("norm") == norm:
-            # Si ahora tenemos respuesta y antes no había, actualizar
             if auto_ans and not entry.get("answer"):
                 pending[i]["answer"]   = str(auto_ans)
                 pending[i]["answered"] = True
                 pending[i]["source"]   = "auto"
-                _PENDING_PATH.parent.mkdir(parents=True, exist_ok=True)
-                with open(_PENDING_PATH, "w", encoding="utf-8") as f:
-                    json.dump(pending, f, ensure_ascii=False, indent=2)
+            if portal and not entry.get("portal"):
+                pending[i]["portal"] = portal
+            if url and not entry.get("url"):
+                pending[i]["url"] = url
+            _PENDING_PATH.parent.mkdir(parents=True, exist_ok=True)
+            with open(_PENDING_PATH, "w", encoding="utf-8") as f:
+                json.dump(pending, f, ensure_ascii=False, indent=2)
             return
 
     pending.append({
@@ -996,7 +987,7 @@ def _radio_answer_to_si_no(answer: str) -> str:
     return ""
 
 
-def handle_yes_no_questions(page: Page, profile: dict | None = None) -> int:
+def handle_yes_no_questions(page: Page, profile: dict | None = None, portal: str = "", url: str = "") -> int:
     """
     Maneja radios Si/No leyendo la pregunta y consultando cache + auto_answer.
     Solo clickea cuando tiene certeza de la respuesta correcta.
@@ -1024,7 +1015,7 @@ def handle_yes_no_questions(page: Page, profile: dict | None = None) -> int:
 
             if not si_no:
                 norm = _normalize(question_label)
-                _save_pending_question(question_label, norm)
+                _save_pending_question(question_label, norm, portal=portal, url=url)
                 log.warning("[RADIO_PENDIENTE] %s", question_label[:80])
                 continue
 
@@ -1192,12 +1183,7 @@ def _collect_unfilled_elements(page: Page) -> List[Tuple[Any, str, str]]:
     return results
 
 
-def collect_unanswered_fields(page: Page) -> List[str]:
-    """Devuelve lista de textos de label de campos sin respuesta conocida (para diagnóstico)."""
-    return [label for _, label, _ in _collect_unfilled_elements(page)]
-
-
-def fill_form(page: Page, profile: dict, job_title: str = "") -> dict:
+def fill_form(page: Page, profile: dict, job_title: str = "", portal: str = "", url: str = "") -> dict:
     """
     Orquestador principal de llenado de formularios.
     Aplica el perfil contextual (IT o Bodega) para personalizar cover_letter.
@@ -1218,7 +1204,7 @@ def fill_form(page: Page, profile: dict, job_title: str = "") -> dict:
     results = {
         "text_fields":   fill_text_fields(page, active_profile),
         "dropdowns":     fill_dropdowns(page, active_profile),
-        "radio_answers": handle_yes_no_questions(page, active_profile),
+        "radio_answers": handle_yes_no_questions(page, active_profile, portal=portal, url=url),
         "file_uploaded": fill_file_upload(page, active_profile),
     }
 
@@ -1247,7 +1233,7 @@ def fill_form(page: Page, profile: dict, job_title: str = "") -> dict:
             ok = _fill_element_with_value(page, el, kind, qa_answer)
             if ok:
                 log.info("  [QA-cache] %s -> %s", label[:60], qa_answer[:40])
-                _save_pending_question(label, norm)  # guardar para que usuario vea
+                _save_pending_question(label, norm, portal=portal, url=url)  # guardar para que usuario vea
                 continue
 
         # -- 2. Auto-respuesta por palabras clave del label -------------------
@@ -1256,13 +1242,13 @@ def fill_form(page: Page, profile: dict, job_title: str = "") -> dict:
             ok = _fill_element_with_value(page, el, kind, auto)
             if ok:
                 _save_qa_answer(norm, auto)          # aprender para siempre
-                _save_pending_question(label, norm)  # guardar para que usuario vea
+                _save_pending_question(label, norm, portal=portal, url=url)  # guardar para que usuario vea
                 log.info("  [AUTO] %s -> %s", label[:60], auto[:60])
                 print(f"  [AUTO] {label[:70]} -> {auto[:60]}")
                 continue
 
         # -- 3. Desconocida: guardar como pendiente, esperar al usuario --------
-        _save_pending_question(label, norm)
+        _save_pending_question(label, norm, portal=portal, url=url)
         log.warning("[PREGUNTA_PENDIENTE] %s", label)
         print(f"[PREGUNTA_PENDIENTE] {label}")
         pending_norms.append(norm)
@@ -1304,7 +1290,7 @@ def fill_form(page: Page, profile: dict, job_title: str = "") -> dict:
     return results
 
 
-def scan_form(page: Page, profile: dict, job_title: str = "") -> dict:
+def scan_form(page: Page, profile: dict, job_title: str = "", portal: str = "", url: str = "") -> dict:
     """
     Escanea campos del formulario SIN rellenar nada en la pagina.
     Verifica cuales preguntas tienen respuesta en cache o auto_answer.
@@ -1335,9 +1321,9 @@ def scan_form(page: Page, profile: dict, job_title: str = "") -> dict:
         if _match_qa(label) or _auto_answer(label, active_profile):
             answered += 1
             # Guardar igualmente — usuario puede ver y corregir respuestas automáticas
-            _save_pending_question(label, norm)
+            _save_pending_question(label, norm, portal=portal, url=url)
         else:
-            _save_pending_question(label, norm)
+            _save_pending_question(label, norm, portal=portal, url=url)
             unanswered.append(label)
 
     # -- Radios Si/No --
@@ -1355,9 +1341,9 @@ def scan_form(page: Page, profile: dict, job_title: str = "") -> dict:
             norm = _normalize(question_label)
             if _radio_answer_to_si_no(raw or ""):
                 answered += 1
-                _save_pending_question(question_label, norm)
+                _save_pending_question(question_label, norm, portal=portal, url=url)
             else:
-                _save_pending_question(question_label, norm)
+                _save_pending_question(question_label, norm, portal=portal, url=url)
                 unanswered.append(f"[radio] {question_label}")
         except Exception:
             continue

@@ -83,7 +83,7 @@ from .config import SITE_CONFIG, USER_PROFILE, location_score, schedule_ok, expe
 from .state import already_applied, save_application
 from .stealth_utils import (
     apply_stealth, human_delay, human_scroll, human_click,
-    take_error_screenshot, random_user_agent, random_viewport,
+    take_error_screenshot,
 )
 from .form_filler import fill_form
 from .retry import with_retry, get_rate_limiter, RateLimitExceeded
@@ -719,12 +719,6 @@ def _has_cookies_sqlite(cookies_path: Path) -> bool:
     return _hrc(cookies_path.parent.parent.parent)  # Cookies → Network → Default → session_dir
 
 
-def _session_has_cookies(session_dir: str) -> bool:
-    """True si el directorio tiene cookies reales."""
-    from bot.session_checker import has_real_cookies as _hrc
-    return _hrc(session_dir)
-
-
 def _session_is_active(portal_name: str, session_dir: str) -> bool:
     """
     Wrapper sobre session_checker.check_session().
@@ -872,7 +866,7 @@ def _open_browser_for_manual_login(
                 ignore_default_args=_STEALTH_IGNORE_DEFAULT_ARGS,
                 locale=locale,
                 timezone_id=tz,
-            portal_name="unknown",
+                portal_name=portal_name,
             )
             if backend is None:
                 log.warning("[LOGIN_MANUAL] No se pudo inicializar backend de navegador")
@@ -3315,19 +3309,6 @@ def run_bot_multi_keywords(
         "end_reason": _portal_end_reason,
     }
 
-    if total_applied < MIN_APPLIES_TO_KEEP_SESSION:
-        print(f"\n[SIN POSTULACIONES] {portal_name.upper()} termino con {total_applied}/{_total_max_target} postulaciones reales "
-              f"(minimo requerido: {MIN_APPLIES_TO_KEEP_SESSION}).")
-        print(f"  - Sesion DESCARTADA - la proxima vez pedira login de nuevo.")
-        print(f"  - Causas posibles:")
-        print(f"    * Todas las ofertas ya estan en la base de datos (ya postuladas antes)")
-        print(f"    * Los filtros de experiencia/horario/zona las descartaron")
-        print(f"    * La sesion expiro durante el recorrido")
-        print(f"  - Revisa los logs en http://127.0.0.1:5000")
-    else:
-        print(f"\n[OK] {portal_name.upper()} - {total_applied}/{_total_max_target} postulaciones reales. "
-              f"Sesion guardada.")
-
 
 def _keyword_cycle_report(portals: list, scan_base: list, cycle: int) -> None:
     """
@@ -3519,7 +3500,13 @@ def run_scan_quick_links(headless: bool = False, max_links: int = 100) -> dict:
                 # Escanear formulario en el ATS externo
                 if scanned_page:
                     try:
-                        form_result = scan_form(scanned_page, USER_PROFILE, job_title=title)
+                        form_result = scan_form(
+                            scanned_page,
+                            USER_PROFILE,
+                            job_title=title,
+                            portal=portal,
+                            url=offer_url,
+                        )
                         unanswered = form_result.get("unanswered_labels", [])
                         answered   = form_result.get("all_answered", False)
 
@@ -3535,7 +3522,7 @@ def run_scan_quick_links(headless: bool = False, max_links: int = 100) -> dict:
                             # Guardar en pending_questions
                             for q in unanswered:
                                 from .form_filler import _normalize as _fnorm, _save_pending_question
-                                _save_pending_question(q, _fnorm(q))
+                                _save_pending_question(q, _fnorm(q), portal=portal, url=offer_url)
                         else:
                             print("(sin formulario)")
                             stats["failed"] += 1
@@ -3671,7 +3658,6 @@ def run_apply_quick_links(headless: bool = False, max_apply: int = 5) -> dict:
 
     with sync_playwright() as pw:
         # Agrupar links por portal para usar la sesión correcta
-        from itertools import groupby
         links_by_portal: dict[str, list] = {}
         for lnk in links:
             p = lnk.get("portal", "getonyboard")

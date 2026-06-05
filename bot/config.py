@@ -1,5 +1,6 @@
 import os
 import copy
+import unicodedata
 from urllib.parse import quote_plus
 from dotenv import load_dotenv
 
@@ -254,7 +255,7 @@ SITE_CONFIG = {
         "max_offers_per_run":        30,
         "max_pages":                 4,
         "requires_login":            True,
-        "enabled":                   False,
+        "enabled":                   True,
     },
 }
 
@@ -543,15 +544,15 @@ _PRACTICA_SUBSTRINGS = [
     # formas con "practicante/s"
     "practicante", "practicantes",
     # formas con "practica" como sustantivo
-    "practica profesional", "practicas profesionales",
-    "practica curricular", "practicas curriculares",
-    "practica laboral", "periodo de practica",
+    "practica profesional", "práctica profesional", "practicas profesionales", "prácticas profesionales",
+    "practica curricular", "práctica curricular", "practicas curriculares", "prácticas curriculares",
+    "practica laboral", "práctica laboral", "periodo de practica", "periodo de práctica",
     "alumno en practica", "alumno(a) en practica", "alumno/a en practica",
     "estudiante en practica",
     # pasantia
-    "pasantia", "pasante", "pasantes",
+    "pasantia", "pasantias", "pasantías", "pasante", "pasantes",
     # ingles
-    "internship", "intern ",
+    "internship", "interns", "intern ",
 ]
 
 
@@ -565,11 +566,9 @@ def practica_ok(text: str) -> bool:
     if not text:
         return True
     low = text.lower()
-    # Normalizar: quitar tildes basicas para comparar
-    low = (low.replace("a", "a").replace("e", "e")
-              .replace("i", "i").replace("o", "o").replace("u", "u")
-              .replace("\xe1", "a").replace("\xe9", "e").replace("\xed", "i")
-              .replace("\xf3", "o").replace("\xfa", "u"))
+    # Normalizar acentos/diacríticos para que las variantes se detecten siempre
+    low = unicodedata.normalize("NFKD", low)
+    low = "".join(ch for ch in low if not unicodedata.combining(ch))
     for phrase in _PRACTICA_SUBSTRINGS:
         if phrase in low:
             return False
