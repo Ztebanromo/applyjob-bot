@@ -1,9 +1,8 @@
 """
-browser_backend.py — backends de browser para el bot.
+browser_backend.py — backend de browser del bot.
 
-CDPTabBackend   : usa el Chrome del usuario (donde está el dashboard).
-                  UNA pestaña por portal, nunca la cierra entre ciclos.
-ChromiumLaunchBackend : Chromium aislado como fallback (una sola página).
+CDPTabBackend: usa el Chrome del usuario via CDP (:9222).
+               Una pestaña por portal, reutilizada entre ciclos.
 """
 from __future__ import annotations
 
@@ -187,52 +186,78 @@ class CDPTabBackend(BrowserBackend):
         self.context = None
         self.browser = None
 
+    def save_state_only(self, filepath: str | Path) -> bool:
+        """
+        Guarda el storage_state (cookies + localStorage) SIN cerrar contexto,
+        filtrado al dominio del portal.
 
-class ChromiumLaunchBackend(BrowserBackend):
-    """
-    Fallback: lanza un Chromium aislado con perfil persistente.
-    Reutiliza la primera página existente del contexto (1 página por sesión).
-    """
-    name = "chromium"
-
-    def connect(self) -> bool:
-        if self.context is not None:
-            return True
+        El contexto CDP es el perfil COMPARTIDO del bot (todo lo que ha
+        navegado: ad-tech, claude.ai, youtube, otros portales...). Guardar
+        ese storage_state completo produce JSONs de miles de cookies ajenas
+        al portal — ruido, riesgo de privacidad y nada que ayude a verificar
+        la sesión real. Filtramos a cookies/origins cuyo dominio pertenece al
+        portal, así playwright_state.json refleja SOLO la sesión relevante.
+        """
+        if not self.context:
+            return False
         try:
-            self.session_dir.mkdir(parents=True, exist_ok=True)
-            kwargs: dict = {
-                "headless": self.headless,
-                "args": self.args,
-                "ignore_default_args": self.ignore_default_args,
-                "locale": self.locale,
-                "timezone_id": self.timezone_id,
-            }
-            if self.user_agent:
-                kwargs["user_agent"] = self.user_agent
-            if self.executable_path:
-                kwargs["executable_path"] = self.executable_path
+            import json
+            from pathlib import Path
 
-            state_file = self.session_dir / "playwright_state.json"
-            if state_file.exists():
-                kwargs["storage_state"] = str(state_file)
-                log.info("[CHROMIUM] Restaurando storage_state desde %s", state_file)
+            filepath = Path(filepath)
+            filepath.parent.mkdir(parents=True, exist_ok=True)
 
-            self.context = self.pw.chromium.launch_persistent_context(
-                str(self.session_dir), **kwargs
+            state = self.context.storage_state()
+            domain_keys = self._portal_domain_keys()
+
+            cookies = state.get("cookies", [])
+            origins = state.get("origins", [])
+            if domain_keys:
+                cookies = [
+                    c for c in cookies
+                    if any(k in (c.get("domain") or "").lower() for k in domain_keys)
+                ]
+                origins = [
+                    o for o in origins
+                    if any(k in (o.get("origin") or "").lower() for k in domain_keys)
+                ]
+
+            filtered = {"cookies": cookies, "origins": origins}
+            with open(filepath, "w", encoding="utf-8") as f:
+                json.dump(filtered, f, ensure_ascii=False, indent=2)
+
+            log.info(
+                "[CDP] save_state_only: %d cookies (%d origins) guardadas en %s (filtrado: %s)",
+                len(cookies), len(origins), filepath.name, domain_keys or "sin filtro",
             )
-            return self.context is not None
+            return True
         except Exception as exc:
-            log.warning("[CHROMIUM] No se pudo lanzar: %s", exc)
-            self.context = None
+            log.warning("[CDP] save_state_only: error guardando estado: %s", exc)
             return False
 
-    def new_page(self) -> "Page | None":
-        """Una sola página por sesión — reutiliza la existente."""
-        if not self.connect():
-            return None
+    def _portal_domain_keys(self) -> list[str]:
+        """
+        Deriva fragmentos de dominio (ej. 'linkedin.com') a partir de
+        VERIFY_URLS/LOGIN_URLS del portal, para filtrar cookies/origins.
+        """
+        if not self.portal_name:
+            return []
         try:
-            pages = self.context.pages  # type: ignore[attr-defined]
-            return pages[0] if pages else self.context.new_page()  # type: ignore[attr-defined]
-        except Exception as exc:
-            log.warning("[CHROMIUM] No se pudo obtener página: %s", exc)
-            return None
+            from bot.session_config import VERIFY_URLS, LOGIN_URLS
+        except Exception:
+            return []
+
+        keys: set[str] = set()
+        for table in (VERIFY_URLS, LOGIN_URLS):
+            url = table.get(self.portal_name, "")
+            if not url:
+                continue
+            try:
+                host = url.split("/")[2].lower()
+            except Exception:
+                continue
+            parts = host.split(".")
+            if len(parts) >= 2:
+                keys.add(".".join(parts[-2:]))  # ej. "linkedin.com"
+            keys.add(host)
+        return sorted(keys)

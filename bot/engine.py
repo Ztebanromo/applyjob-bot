@@ -83,8 +83,9 @@ from .config import SITE_CONFIG, USER_PROFILE, location_score, schedule_ok, expe
 from .state import already_applied, save_application
 from .stealth_utils import (
     apply_stealth, human_delay, human_scroll, human_click,
-    take_error_screenshot,
+    take_error_screenshot, detect_captcha,
 )
+from .notifier import send_alert
 from .form_filler import fill_form
 from .retry import with_retry, get_rate_limiter, RateLimitExceeded
 from .validator import run_startup_validation
@@ -96,6 +97,7 @@ SESSIONS_DIR    = BASE_DIR / "sessions"
 LOGS_DIR        = BASE_DIR / "logs"
 SCAN_QUEUE_PATH = BASE_DIR / "data" / "scan_queue.json"
 QUICK_LINKS_PATH = BASE_DIR / "data" / "quick_links.json"
+ENABLE_QUICK_LINKS = os.getenv("ENABLE_QUICK_LINKS", "false").strip().lower() in ("1", "true", "yes")
 LOGS_DIR.mkdir(exist_ok=True)
 SESSIONS_DIR.mkdir(exist_ok=True)
 
@@ -149,11 +151,50 @@ def _is_bodega_job(title: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Helper: filtro de "país no coincide" — pero NO bloquear híbrido/remoto
+# ---------------------------------------------------------------------------
+# GetOnBoard y portales internacionales muestran un aviso "Tu país no coincide
+# con la ubicación del empleo" / "Este empleo solo acepta postulantes de
+# <ciudad> (<país>)" cuando el perfil del usuario (Chile) no coincide con la
+# ubicación de la oferta. Si el cargo es PRESENCIAL en otro país → imposible
+# de ejercer, hay que saltarlo. Pero si la oferta es híbrida o remota, el
+# país de residencia no es un impedimento real — no debe descartarse solo
+# por ese aviso.
+_COUNTRY_MISMATCH_SIGNALS = (
+    "tu país no coincide", "tu pais no coincide",
+    "no coincide con la ubicación del empleo", "no coincide con la ubicacion del empleo",
+    "solo acepta postulantes de", "solo acepta postulantes",
+    "this job is not available in your country", "not available in your location",
+)
+_HYBRID_REMOTE_SIGNALS = (
+    "híbrido", "hibrido", "hybrid",
+    "remoto", "remote", "teletrabajo", "trabajo remoto",
+    "trabajo desde casa", "home office", "100% remoto", "full remote",
+)
+
+def _country_mismatch_blocks_apply(page_text: str) -> bool:
+    """
+    True si el texto de la página indica que el país del usuario no coincide
+    con la ubicación de la oferta Y la modalidad NO es híbrida/remota
+    (i.e. el cargo es presencial en otro país → debe saltarse).
+    Si la oferta es híbrida/remota, retorna False (no bloquear).
+    """
+    low = (page_text or "").lower()
+    if not any(s in low for s in _COUNTRY_MISMATCH_SIGNALS):
+        return False
+    if any(s in low for s in _HYBRID_REMOTE_SIGNALS):
+        return False
+    return True
+
+
+# ---------------------------------------------------------------------------
 # Quick Links — todas las ofertas que pasan filtros, listas para postulación manual
 # ---------------------------------------------------------------------------
 
 def _save_quick_link(url: str, title: str, portal: str) -> None:
     """Guarda un link rápido en quick_links.json (sin duplicados)."""
+    if not ENABLE_QUICK_LINKS:
+        return
     try:
         QUICK_LINKS_PATH.parent.mkdir(exist_ok=True)
         links: list = []
@@ -285,6 +326,35 @@ def _prune_scan_queue(max_age_days: int = 5) -> int:
             json.dump(fresh, f, ensure_ascii=False, indent=2)
         log.info("[PRUNE] %d entradas antiguas eliminadas de scan_queue.", pruned)
     return pruned
+
+
+def _handle_possible_captcha(page: Page, portal_name: str, timeout_s: int = 300) -> bool:
+    """
+    Si detecta un CAPTCHA en la página, toma screenshot para referencia/depuración
+    y continúa de inmediato — NO espera resolución manual (nadie está mirando el
+    navegador en tiempo real). Retorna True si se detectó un captcha (para que el
+    caller pueda saltar la oferta/portal actual), False si no había.
+    """
+    try:
+        if not detect_captcha(page):
+            return False
+    except Exception:
+        return False
+
+    # Tomar screenshot para referencia/depuración (no bloquea)
+    try:
+        take_error_screenshot(page, portal_name, context="captcha")
+    except Exception:
+        pass
+
+    try:
+        current_url = page.url or "[URL desconocida]"
+    except Exception:
+        current_url = "[URL desconocida]"
+    log.warning("[CAPTCHA-SKIP] %s detectó verificacion humana (%s) — saltando sin esperar.",
+                portal_name, current_url)
+    print(f"[CAPTCHA-SKIP] {portal_name}: verificacion humana detectada — saltando sin esperar ({current_url})")
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -617,6 +687,11 @@ def _process_offer_generic(
             print(f"  [FILTRO] Oferta eliminada o expirada - saltando: {offer_url}")
             return title, "skipped: oferta_eliminada"
 
+        if _country_mismatch_blocks_apply(page_text):
+            log.info("  [SKIP] Pais no coincide y oferta es presencial: %s", offer_url)
+            print(f"  [FILTRO] Presencial en otro pais (no hibrido/remoto) - saltando: {offer_url}")
+            return title, "skipped: pais_no_coincide"
+
         human_scroll(page, steps=1)
 
         title_sel = config.get("selector_titulo_oferta")
@@ -703,322 +778,133 @@ from bot.session_config import (
     STEALTH_INIT_SCRIPT as _STEALTH_INIT_SCRIPT,
     STEALTH_USER_AGENT  as _STEALTH_UA,
 )
-from bot.session_checker import (
-    check_session as _check_session,
-    SessionResult as _SessionResult,
-    is_logged_in_on_page as _is_logged_in_on_page,
-)
-
-# Umbral mínimo de bytes — mantenido para compatibilidad con código que lo usa
-_COOKIES_MIN_BYTES = 8_000
-
-
-def _has_cookies_sqlite(cookies_path: Path) -> bool:
-    """Wrapper: delega a session_checker.has_real_cookies."""
-    from bot.session_checker import has_real_cookies as _hrc
-    return _hrc(cookies_path.parent.parent.parent)  # Cookies → Network → Default → session_dir
-
-
-def _session_is_active(portal_name: str, session_dir: str) -> bool:
-    """
-    Wrapper sobre session_checker.check_session().
-    Retorna True si la sesión está activa, False en cualquier otro caso.
-    """
-    result = _check_session(portal_name, session_dir)
-    return result == _SessionResult.OK
-
-
-def _open_browser_for_manual_login(
-    portal_name: str,
-    session_dir: str,
-    locale: str = "es-CL",
-    tz: str = "America/Santiago",
-    timeout_seconds: int | None = None,
-    session_confirmed_inactive: bool = False,
-) -> bool:
-    """
-    Abre el browser para que el usuario inicie sesión manualmente.
-
-    Estrategia:
-      1. Si hay Chrome real disponible → abrir nueva pestaña en Chrome del usuario
-         (evita la detección de nuevo dispositivo que causa verificación por email)
-      2. Si no → abrir Chromium aislado como siempre
-
-    Retorna True si el login fue detectado y la sesión guardada, False si el timeout expiró.
-    """
-    from urllib.parse import urlparse
-
-    # Timeout configurable desde .env (LOGIN_TIMEOUT_MINUTES, default 5)
-    if timeout_seconds is None:
-        _env_min = os.getenv("LOGIN_TIMEOUT_MINUTES", "5").strip()
-        try:
-            timeout_seconds = int(_env_min) * 60
-        except ValueError:
-            timeout_seconds = 300
-
-    login_url = _LOGIN_URLS.get(portal_name, SITE_CONFIG.get(portal_name, {}).get("url_busqueda", ""))
-    if not login_url:
-        log.warning("[LOGIN_MANUAL] Sin URL de login para %s — saltando.", portal_name)
-        return False
-
-    # URL de búsqueda para navegar después del login (fuerza flush de cookies al disco)
-    _home_url = SITE_CONFIG.get(portal_name, {}).get("url_busqueda", "")
-    if _home_url == login_url:
-        _home_url = ""  # evitar navegación circular
-
-    _logged_in_sels = _LOGGED_IN_SIGNALS.get(portal_name, [
-        "a[href*='logout']", "a[href*='salir']", "a[href*='cerrar-sesion']",
-        "a[href*='/mi-perfil']", "a[href*='/mi-cuenta']",
-        "button[aria-label*='perfil']", "img[class*='avatar']",
-    ])
-    _neg_sels = _LOGIN_SIGNALS.get(portal_name, [
-        "input[type='password']",
-        "a:has-text('Iniciar sesion')", "a:has-text('Ingresar')",
-        "button:has-text('Iniciar sesion')", "button:has-text('Ingresar')",
-    ])
-
-    # Umbral para detección de sesión pre-existente en el pre-check.
-    # La base de datos SQLite vacía de Chromium (sin login) pesa exactamente 20480B.
-    # Una sesión real con auth cookies pesa >= 28KB. Usamos 25KB como separador.
-    _SESSION_PRECHECK_BYTES = 25_000
-
-    def _is_logged_in(pg, precheck: bool = False) -> bool:
-        """
-        Verifica si hay sesión activa. Usa la función centralizada de session_checker
-        y agrega fallback de tamaño de cookies para pre-check.
-        """
-        # Función centralizada de 3 capas (neg → pos → fallback URL)
-        if _is_logged_in_on_page(pg, portal_name):
-            return True
-        
-        # Fallback adicional para precheck: si cookies son grandes (>25KB)
-        # y sin señales negativas → probablemente logueado
-        if precheck and not session_confirmed_inactive:
-            try:
-                ck = Path(session_dir) / "Default" / "Network" / "Cookies"
-                if ck.exists() and ck.stat().st_size >= _SESSION_PRECHECK_BYTES:
-                    log.debug("[LOGIN_MANUAL] precheck cookie fallback: %d bytes", ck.stat().st_size)
-                    return True
-            except Exception:
-                pass
-        
-        return False
-
-
-    # Ruta donde guardar el storage_state (cookies + session cookies + localStorage)
-    _state_file = Path(session_dir) / "playwright_state.json"
-
-    def _flush_and_close(ctx, pg) -> None:
-        """
-        Guarda el estado completo de la sesión y cierra el contexto.
-
-        Playwright storage_state() captura:
-          - Cookies persistentes (con expiry) desde la base SQLite
-          - Session cookies (sin expiry, is_persistent=0) desde memoria
-          - localStorage y sessionStorage
-
-        Este JSON se restaura en el bot principal via storage_state= en launch_persistent_context,
-        garantizando que session cookies (como ci_session, PHPSESSID, etc.) persistan.
-        """
-        # 1. Navegar a home del portal para activar flush de cookies del servidor
-        #    GetOnBoard: espera extra post-OAuth porque el avatar/sesión tarda en asentarse
-        _wait_extra = 5000 if portal_name == "getonyboard" else 3000
-        if _home_url:
-            try:
-                pg.goto(_home_url, wait_until="domcontentloaded", timeout=12_000)
-                pg.wait_for_timeout(_wait_extra)
-            except Exception:
-                pass
-
-        # 2. Guardar storage_state — captura cookies de TODOS los dominios visitados
-        #    (incluyendo linkedin.com para GetOnBoard OAuth, getonbrd.com, etc.)
-        try:
-            state = ctx.storage_state(path=str(_state_file))
-            n_cookies = len(state.get("cookies", []))
-            domains = list({c.get("domain","") for c in state.get("cookies", [])})[:5]
-            log.info("[SAVE_SESSION] %s: %d cookies guardadas (dominios: %s)",
-                     portal_name, n_cookies, ", ".join(domains))
-            try:
-                print(f"[SESION_NUEVA] {portal_name.upper()} - {n_cookies} cookies guardadas.")
-            except Exception:
-                pass
-        except Exception as exc:
-            log.warning("[SAVE_SESSION] No se pudo guardar storage_state: %s", exc)
-
-        # 3. Espera final para Chromium (escribe SQLite)
-        pg.wait_for_timeout(4000)
-
-        # 4. Cierre limpio
-        try:
-            ctx.close()
-        except Exception:
-            pass
-
-    try:
-        with sync_playwright() as _pw:
-            from bot.browser_discovery import select_browser_backend
-            backend = select_browser_backend(
-                _pw,
-                session_dir,
-                headless=False,
-                user_agent=_STEALTH_UA,
-                args=_STEALTH_ARGS + ["--start-maximized"],
-                ignore_default_args=_STEALTH_IGNORE_DEFAULT_ARGS,
-                locale=locale,
-                timezone_id=tz,
-                portal_name=portal_name,
-            )
-            if backend is None:
-                log.warning("[LOGIN_MANUAL] No se pudo inicializar backend de navegador")
-                return False
-
-            ctx = backend.context
-            pg = backend.new_page()
-            if pg is None:
-                backend.close()
-                return False
-
-            pg.add_init_script(_STEALTH_INIT_SCRIPT)
-            try:
-                pg.goto(login_url, wait_until="domcontentloaded", timeout=30_000)
-                pg.wait_for_timeout(5000)   # hidratación DOM (SPAs con React/Vue)
-            except Exception as _e:
-                log.debug("[LOGIN_MANUAL] goto error: %s", _e)
-
-            # Pre-check — sesión válida pre-existente
-            # precheck=True: si hay cookies grandes + sin form de login → asumir logueado
-            pg.wait_for_timeout(2000)
-            if _is_logged_in(pg, precheck=True):
-                log.info("[LOGIN_MANUAL] Sesion ya activa en %s.", portal_name)
-                try:
-                    print(f"[SESION_INICIADA] {portal_name.upper()} - sesion activa. Guardando y cerrando.")
-                except Exception:
-                    pass
-                _flush_and_close(ctx, pg)
-                return True
-
-            # Precheck falló → recién ahora avisar que se necesita login manual
-            print(f"\n[SESION_NUEVA] {portal_name.upper()} - Abriendo navegador para LOGIN MANUAL.")
-            print(f"[SESION_NUEVA] Inicia sesion en el navegador. El browser se cerrara automaticamente al detectar el login.")
-            print(f"[SESION_NUEVA] Tiempo disponible: {timeout_seconds // 60} min {timeout_seconds % 60} s.")
-
-            # Loop de detección — cada 3s hasta timeout
-            deadline   = time.time() + timeout_seconds
-            last_msg_t = 0.0
-            logged_in  = False
-
-            while time.time() < deadline:
-                time.sleep(3)
-                _det = False
-                try:
-                    # GetOnBoard OAuth: durante el redirect a linkedin.com el browser
-                    # sale del dominio de GetOnBoard — esperar que vuelva antes de detectar
-                    _cur_url = ""
-                    try:
-                        _cur_url = pg.url or ""
-                    except Exception:
-                        pass
-                    if portal_name == "getonyboard" and "linkedin.com" in _cur_url:
-                        continue  # en pleno OAuth de LinkedIn, seguir esperando
-                    _det = _is_logged_in(pg)
-                except Exception:
-                    pass
-                if _det:
-                    logged_in = True
-                    # Para GetOnBoard: esperar extra a que el avatar OAuth cargue
-                    if portal_name == "getonyboard":
-                        try:
-                            pg.wait_for_timeout(3000)
-                        except Exception:
-                            pass
-                    try:
-                        print(f"[SESION_NUEVA] {portal_name.upper()} - login detectado. Guardando sesion...")
-                    except Exception:
-                        pass
-                    _flush_and_close(ctx, pg)
-                    break
-
-                if time.time() - last_msg_t >= 30:
-                    remaining = int(deadline - time.time())
-                    print(f"[SESION_NUEVA] Esperando login en {portal_name.upper()}... ({remaining}s)")
-                    last_msg_t = time.time()
-
-            if not logged_in:
-                try:
-                    backend.close()
-                except Exception:
-                    pass
-
-    except Exception as _exc:
-        log.warning("[LOGIN_MANUAL] Error: %s", _exc)
-        return False
-
-    if logged_in:
-        print(f"[SESION_NUEVA] {portal_name.upper()} - sesion guardada.")
-        return True
-    print(f"[SESION_NUEVA] {portal_name.upper()} - timeout sin login.")
-    return False
-
+from bot.session_checker import is_logged_in_on_page as _is_logged_in_on_page
 
 def _ensure_login(portal_name: str, session_dir: str) -> bool:
     """
-    Garantiza sesión válida ANTES de abrir el browser principal.
-
-    Orden de verificación:
-      1. Verificar con headless Playwright
-      2. Sesión no activa → abrir browser visible para login manual
+    Verifica sesión guardada en playwright_state.json.
+    Si existe, continúa. Si no, abre portal en CDP para login manual.
+    
+    Returns:
+      True → sesión verificada (guardar o existente)
+      False → saltear portal (usuario canceló o timeout)
     """
     if not SITE_CONFIG.get(portal_name, {}).get("requires_login", False):
+        print(f"[SESION_VERIFICADA] {portal_name.upper()} - no requiere login.")
         return True
 
-    # Detección rápida: ¿hay cookies reales en la base SQLite?
-    _ck_path = Path(session_dir) / "Default" / "Network" / "Cookies"
-    _has_ck   = _has_cookies_sqlite(_ck_path)
+    state_file = Path(session_dir) / "playwright_state.json"
 
-    if not _has_ck:
-        print(f"\n[LOGIN_REQUERIDO] {portal_name.upper()} - sin sesion guardada.", flush=True)
-        print(f"[LOGIN] {portal_name.upper()} - Verificá la sesión desde el dashboard y corré de nuevo.", flush=True)
-        return False  # Saltar portal: sin cookies, no esperar login manual
-    else:
-        print(f"[LOGIN] {portal_name.upper()} - verificando sesion...", flush=True)
-        if _session_is_active(portal_name, session_dir):
-            print(f"[SESION_INICIADA] {portal_name.upper()} - sesion activa.")
-            return True
+    # ── Fuente de verdad: el navegador CDP EN VIVO (perfil compartido) ──────
+    #
+    # ANTES esto se decidía leyendo playwright_state.json en disco — dos
+    # variantes, ambas falsas en algún portal:
+    #   a) shallow: "¿el archivo tiene cookies?" → sí, pero vencidas
+    #      ("[SESION_VERIFICADA] 1131 cookies guardadas" + loop de login
+    #      segundos después: "me pide compu pero si esta")
+    #   b) check_session(): abre un browser headless AISLADO restaurando
+    #      ESE archivo — pero el archivo puede estar desactualizado/sucio
+    #      (ver infojobs: 1155 cookies de TODO el perfil compartido, solo
+    #      47 propias, vencidas) mientras el navegador CDP que el bot
+    #      realmente usa SÍ está logueado ahora mismo → falso "expirado".
+    #
+    # El navegador que importa es el que el bot usará para escanear/postular
+    # — el CDP compartido. Lo abrimos, miramos su DOM real con
+    # is_logged_in_on_page (misma función que usa _wait_for_login_if_needed
+    # durante el run, cero divergencia), y si está logueado: verificado +
+    # autosanamos el snapshot en disco (save_state_only) para que quede
+    # sincronizado y check_session/badge del dashboard dejen de mentir.
+    try:
+        with sync_playwright() as _pw_chk:
+            from bot.browser_discovery import select_browser_backend as _sbb
+            _backend = _sbb(_pw_chk, session_dir, portal_name=portal_name, headless=False)
+            if _backend:
+                _pg = _backend.new_page()
+                if _pg:
+                    _verify_url = _LOGIN_URLS.get(portal_name) or SITE_CONFIG.get(portal_name, {}).get("url_busqueda", "")
+                    try:
+                        if _verify_url and "linkedin.com/login" not in (_pg.url or ""):
+                            # Solo navegar si la pestaña no está ya en el portal —
+                            # evita perder el estado de scans en curso.
+                            from urllib.parse import urlparse as _up
+                            _cur_host = _up(_pg.url or "").netloc.lower()
+                            _tgt_host = _up(_verify_url).netloc.lower()
+                            if _tgt_host and _tgt_host not in _cur_host:
+                                _pg.goto(_verify_url, wait_until="domcontentloaded", timeout=15_000)
+                                _pg.wait_for_timeout(2_000)
+                    except Exception:
+                        pass
 
-        # Sesión expirada con cookies guardadas → saltar portal, no bloquear
-        print(f"\n[LOGIN_EXPIRADO] {portal_name.upper()} - sesion expirada.", flush=True)
-        print(f"[LOGIN] Abrí el bot Chrome (chrome_debug.bat), logueate y clickeá Guardar en el dashboard.", flush=True)
-        return False  # No esperar login manual, saltar portal
+                    if _is_logged_in_on_page(_pg, portal_name):
+                        print(f"[SESION_VERIFICADA] {portal_name.upper()} - sesión activa en el navegador del bot.")
+                        try:
+                            _backend.save_state_only(state_file)
+                        except Exception:
+                            pass
+                        _backend.close()
+                        return True
+                    else:
+                        print(f"[SESION_NO_ACTIVA] {portal_name.upper()} - el navegador del bot no está logueado "
+                              f"ahora mismo (se pedirá login manual).")
+                _backend.close()
+    except Exception as _exc:
+        log.debug("[SESION_CHECK] %s: error chequeando navegador en vivo: %s", portal_name, _exc)
 
-    attempt = 0
-    _last_req_print = 0.0
-    _MAX_LOGIN_ATTEMPTS = 3  # máximo 3 intentos (3 × LOGIN_TIMEOUT_MINUTES) antes de saltar portal
-    while not _should_stop() and attempt < _MAX_LOGIN_ATTEMPTS:
-        attempt += 1
-        _now = time.time()
-        if attempt > 1 and _now - _last_req_print >= 60:
-            print(f"\n[LOGIN_REQUERIDO] {portal_name.upper()} - intento {attempt}/{_MAX_LOGIN_ATTEMPTS}. Abre el browser.")
-            _last_req_print = _now
+    # No se pudo confirmar sesión activa en vivo → pedir login manual
+    print(f"\n[LOGIN_REQUERIDO] {portal_name.upper()} - sin sesion guardada. Abriendo navegador...")
+    print(f"  → Inicia sesion en el navegador. El bot detectara el login automaticamente.")
 
-        ok = _open_browser_for_manual_login(
-            portal_name                = portal_name,
-            session_dir                = session_dir,
-            timeout_seconds            = None,  # usa LOGIN_TIMEOUT_MINUTES del .env
-            session_confirmed_inactive = True,
-        )
-        if ok:
-            return True
+    # Intentar abrir en CDP sin cerrar contexto
+    try:
+        with sync_playwright() as pw:
+            from bot.browser_discovery import select_browser_backend
+            backend = select_browser_backend(
+                pw, session_dir, portal_name=portal_name, headless=False
+            )
+            if not backend:
+                print(f"[ERROR] {portal_name.upper()} - no se pudo conectar a Chrome CDP.")
+                return False
 
-        if _should_stop():
-            break
+            page = backend.new_page()
+            if not page:
+                print(f"[ERROR] {portal_name.upper()} - no se pudo abrir pestana.")
+                return False
 
-        print(f"[LOGIN] {portal_name.upper()} - no se detecto login. Reintentando en 3s...")
-        time.sleep(3)
+            # Navegar a login
+            login_url = _LOGIN_URLS.get(portal_name)
+            if login_url:
+                try:
+                    page.goto(login_url, wait_until="domcontentloaded", timeout=15_000)
+                except Exception:
+                    pass
 
-    if attempt >= _MAX_LOGIN_ATTEMPTS:
-        print(f"\n[LOGIN] {portal_name.upper()}: {_MAX_LOGIN_ATTEMPTS} intentos agotados — saltando portal.")
-        log.warning("[LOGIN] %s: max intentos (%d) agotados.", portal_name, _MAX_LOGIN_ATTEMPTS)
-    return False
+            # Esperar a que el usuario inicie sesión (máx 5 min)
+            print(f"[ESPERANDO_LOGIN] {portal_name.upper()} - esperando login (5 min max)...")
+            deadline   = time.time() + 300
+            last_print = 0.0
+
+            while time.time() < deadline:
+                time.sleep(3)
+                try:
+                    if _is_logged_in_on_page(page, portal_name):
+                        print(f"[SESION_INICIADA] {portal_name.upper()} - login detectado, guardando sesion...")
+                        backend.save_state_only(state_file)
+                        return True
+                except Exception:
+                    pass
+
+                remaining = int(deadline - time.time())
+                if time.time() - last_print >= 30:
+                    print(f"[ESPERANDO_LOGIN] {portal_name.upper()} - {remaining}s restantes...")
+                    last_print = time.time()
+
+            print(f"[TIMEOUT_LOGIN] {portal_name.upper()} - 5 min sin login. Saltando portal.")
+            return False
+
+    except Exception as exc:
+        log.warning("[ENSURE_LOGIN] Error en %s: %s", portal_name, exc)
+        print(f"[ERROR] {portal_name.upper()} - error verificando sesion: {exc}")
+        return False
 
 
 def _wait_for_login_if_needed(page, portal_name: str, config: dict) -> None:
@@ -1073,25 +959,12 @@ def _wait_for_login_if_needed(page, portal_name: str, config: dict) -> None:
             return True
         return False
 
-    # -- Paso 1: resolver Cloudflare si está presente --------------------------
+    # -- Paso 1: si hay Cloudflare/verificación humana, NO esperar — nadie       --
+    # -- está mirando el navegador en tiempo real. Loguear y seguir de inmediato.--
     if _is_cloudflare():
-        print(f"\n[CAPTCHA] Cloudflare detectado en {portal_name.upper()}. Resuelve el desafio en el navegador.")
-        log.warning("Cloudflare detectado — esperando resolución manual (max 3 min)...")
-        deadline_cf = time.time() + 180
-        last_cf_log = 0
-        while time.time() < deadline_cf:
-            time.sleep(2)
-            if not _is_cloudflare():
-                log.info("Cloudflare resuelto. Continuando.")
-                print(f"\n[SESION_INICIADA] Cloudflare resuelto en {portal_name.upper()}.")
-                human_delay(2.0, 3.0)
-                break
-            if time.time() - last_cf_log > 20:
-                print(f"[CAPTCHA] Esperando resolucion del desafio en {portal_name.upper()}...")
-                last_cf_log = time.time()
-        else:
-            log.error("Tiempo agotado esperando Cloudflare.")
-            return
+        log.warning("[CAPTCHA-SKIP] Cloudflare/verificacion detectada en %s — saltando sin esperar.", portal_name.upper())
+        print(f"[CAPTCHA-SKIP] {portal_name.upper()}: Cloudflare/verificacion detectada — saltando sin esperar.")
+        return
 
     # -- Paso 2: esperar a que la página termine de cargar antes de verificar ---
     # Portales con requires_login necesitan que el DOM esté completo para
@@ -1306,11 +1179,16 @@ def _wait_for_login_if_needed(page, portal_name: str, config: dict) -> None:
     _ck_size_start  = _ck_path.stat().st_size if _ck_path.exists() else 0
     _home_url_wf    = SITE_CONFIG.get(portal_name, {}).get("url_busqueda", "") or config.get("url_busqueda", "")
 
+    # Máximo 5 intentos de 60s = 5 min por portal antes de saltarlo y pasar
+    # al siguiente — mismo límite que _ensure_login (consistencia: "verificar
+    # el login durante 5 min, sino cerrar ciclo y pasar con otro portal").
+    # Configurable via MAX_LOGIN_WAIT_ATTEMPTS en .env.
+    _MAX_ATTEMPTS = int(os.getenv("MAX_LOGIN_WAIT_ATTEMPTS", "5"))
     attempt = 0
-    while not _should_stop():
+    while not _should_stop() and attempt < _MAX_ATTEMPTS:
         attempt += 1
         print(f"\n[LOGIN_REQUERIDO] {_portal_display} - inicia sesion en el navegador. "
-              f"(intento {attempt})")
+              f"(intento {attempt}/{_MAX_ATTEMPTS})")
 
         deadline_attempt = time.time() + 60
         while time.time() < deadline_attempt:
@@ -1360,8 +1238,14 @@ def _wait_for_login_if_needed(page, portal_name: str, config: dict) -> None:
             except Exception:
                 pass
 
-        if not _should_stop():
+        if not _should_stop() and attempt < _MAX_ATTEMPTS:
             print(f"[LOGIN_REQUERIDO] {_portal_display} - 60s sin login. Reintentando...")
+
+    if attempt >= _MAX_ATTEMPTS and not _should_stop():
+        log.warning("[%s] Max intentos de login (%d) agotados — saltando portal.", portal_name, _MAX_ATTEMPTS)
+        print(f"\n[SESION_EXPIRADA] {_portal_display} - {_MAX_ATTEMPTS} intentos sin login. "
+              f"Saltando portal. Usa 'Guardar sesion' en el dashboard para renovar.")
+        raise TimeoutError(f"{portal_name}: sesion expirada, portal saltado.")
 
     raise TimeoutError(f"{portal_name}: detenido.")
 
@@ -1424,6 +1308,11 @@ def _run_keyword_loop(
         return 0, []   # BUGFIX: siempre retornar tuple (int, list)
 
     human_delay(1.5, 2.5)
+    # Detectar CAPTCHA inmediatamente después de cargar la página de búsqueda
+    try:
+        _handle_possible_captcha(page, portal_name)
+    except Exception:
+        log.debug("_handle_possible_captcha falló (ignorado)")
     # Segunda verificación sobre la URL de búsqueda (puede redirigir a login)
     _wait_for_login_if_needed(page, portal_name, config)
 
@@ -1921,7 +1810,177 @@ def _run_keyword_loop(
               f" Causas: DB duplicada, filtros estrictos, o sesion expirada.")
         log.warning("  [AVISO] %d offers visitadas, 0 real_applied en %s", visited, portal_name)
 
+    # -- Verificación final en "Mis postulaciones" --------------------------------
+    if applied > 0:
+        confirmed = _verify_portal_applications(page, portal_name, applied, _seen_titles)
+        if confirmed < applied:
+            print(f"  [VERIFICACION] ⚠ {portal_name.upper()}: bot contó {applied} postulaciones "
+                  f"pero solo se confirman {confirmed} en el historial del portal.")
+            log.warning("[VERIFY] %s: tracked=%d confirmed=%d — discrepancia detectada",
+                        portal_name, applied, confirmed)
+            applied = confirmed  # ajustar contador al valor verificado
+        else:
+            print(f"  [VERIFICACION] ✓ {portal_name.upper()}: {confirmed} postulaciones confirmadas "
+                  f"en historial del portal.")
+
     return applied, _seen_titles
+
+
+def _verify_portal_applications(page, portal_name: str, tracked: int,
+                                applied_titles: list) -> int:
+    """
+    Navega a la página "Mis postulaciones" del portal y cuenta cuántas aplicaciones
+    REALMENTE ENVIADAS hay visibles (excluye borradores y "por enviar").
+
+    Retorna el número CONFIRMADO de postulaciones en el historial del portal.
+    Si la navegación falla o no se puede parsear, retorna `tracked` (sin penalizar).
+    """
+    from .session_config import MY_APPLICATIONS_URLS, MY_APPLICATIONS_CARD_SELECTORS
+
+    url = MY_APPLICATIONS_URLS.get(portal_name)
+    sel = MY_APPLICATIONS_CARD_SELECTORS.get(portal_name)
+    if not url or not sel:
+        log.debug("[VERIFY] %s: sin URL de 'mis postulaciones' configurada", portal_name)
+        return tracked
+
+    try:
+        print(f"  [VERIFICACION] Chequeando historial de postulaciones en {portal_name.upper()}...")
+        page.goto(url, wait_until="domcontentloaded", timeout=20_000)
+        page.wait_for_timeout(2_500)
+
+        # -- GetOnBoard: manejo especial por sección "Por enviar" vs "Enviadas" --
+        if portal_name == "getonyboard":
+            return _verify_gob_sent_applications(page, tracked)
+
+        # -- Laborum: styled-components → no hay selector CSS estable, usar JS --
+        if portal_name == "laborum":
+            return _verify_laborum_sent_applications(page, tracked)
+
+        # Contar tarjetas de postulación visibles en la primera página
+        cards = page.query_selector_all(sel)
+        count_on_page = len([c for c in cards if c.is_visible()])
+
+        if count_on_page == 0:
+            generic_cards = page.query_selector_all(
+                "li[class*='appl'], div[class*='appl'], article[class*='appl'], "
+                "div[class*='postul'], li[class*='postul']"
+            )
+            count_on_page = len([c for c in generic_cards if c.is_visible()])
+
+        log.info("[VERIFY] %s: %d tarjetas visibles en mis-postulaciones (bot contó %d)",
+                 portal_name, count_on_page, tracked)
+
+        if count_on_page == 0:
+            log.debug("[VERIFY] %s: 0 tarjetas — asumiendo tracked=%d correcto", portal_name, tracked)
+            return tracked
+
+        if count_on_page >= tracked:
+            return tracked
+        else:
+            return count_on_page
+
+    except Exception as exc:
+        log.debug("[VERIFY] %s: error al verificar mis-postulaciones: %s", portal_name, exc)
+        return tracked
+
+
+def _verify_gob_sent_applications(page, tracked: int) -> int:
+    """
+    Verifica en https://www.getonbrd.com/applications cuántas postulaciones
+    tienen estado ENVIADA (excluye INCOMPLETA y POR ENVIAR = borradores).
+
+    Estructura DOM confirmada en vivo (2026-06-09):
+      - Filas: tr.border-bottom.border-semi-transparent
+      - Celda de estado: td.ja-status  → texto "ENVIADA" | "INCOMPLETA" | "POR ENVIAR"
+
+    Retorna el número de filas con td.ja-status == "ENVIADA".
+    """
+    try:
+        result = page.evaluate("""
+            () => {
+                const rows = document.querySelectorAll(
+                    'tr.border-bottom.border-semi-transparent'
+                );
+                let enviadas = 0, incompletas = 0, porEnviar = 0;
+                for (const row of rows) {
+                    const statusCell = row.querySelector('td.ja-status');
+                    if (!statusCell) continue;
+                    const status = (statusCell.innerText || '').trim().toUpperCase();
+                    if (status === 'ENVIADA')     enviadas++;
+                    else if (status === 'INCOMPLETA') incompletas++;
+                    else if (status.includes('ENVIAR')) porEnviar++;
+                }
+                return { enviadas, incompletas, porEnviar, total: rows.length };
+            }
+        """)
+
+        enviadas   = result.get("enviadas", 0)
+        incompletas = result.get("incompletas", 0)
+        por_enviar = result.get("porEnviar", 0)
+        total      = result.get("total", 0)
+
+        print(f"  [VERIFICACION GOB] {enviadas} ENVIADAS · {incompletas} INCOMPLETAS · "
+              f"{por_enviar} POR ENVIAR (de {total} filas totales)")
+        log.info("[VERIFY] GOB: enviadas=%d incompletas=%d por_enviar=%d total=%d tracked=%d",
+                 enviadas, incompletas, por_enviar, total, tracked)
+
+        if total == 0:
+            # Página no cargó correctamente — no penalizar
+            log.debug("[VERIFY] GOB: 0 filas detectadas — asumiendo tracked=%d correcto", tracked)
+            return tracked
+
+        # Solo contar las ENVIADAS que coinciden con lo que el bot registró en esta sesión.
+        # Si hay más ENVIADAS que lo tracked, es historial anterior → retornar tracked.
+        return tracked if enviadas >= tracked else enviadas
+
+    except Exception as exc:
+        log.debug("[VERIFY] GOB: error en verificación: %s", exc)
+        return tracked
+
+
+def _verify_laborum_sent_applications(page, tracked: int) -> int:
+    """
+    Verifica en https://www.laborum.cl/postulantes/postulaciones cuántas
+    postulaciones hay registradas.
+
+    Laborum usa styled-components (clases sc-* dinámicas) — selector CSS no estable.
+    Estructura DOM confirmada en vivo (2026-06-09):
+      - Tarjetas individuales: div con 3 hijos y texto que incluye "Postulado el"
+      - Estados visibles: "CV enviado", "CV leído"
+
+    Retorna el total de tarjetas detectadas (todas son enviadas, no hay borradores).
+    """
+    try:
+        # Scroll para activar lazy-load
+        page.evaluate("window.scrollTo(0, 500)")
+        page.wait_for_timeout(1_500)
+
+        result = page.evaluate("""
+            () => {
+                const allDivs = Array.from(document.querySelectorAll('div'));
+                const cards = allDivs.filter(el => {
+                    const txt = (el.innerText || '').trim();
+                    const lines = txt.split('\\n').filter(l => l.trim().length > 0);
+                    return txt.includes('Postulado el') && lines.length >= 2 && lines.length <= 8
+                           && el.childElementCount === 3;
+                });
+                return { total: cards.length };
+            }
+        """)
+
+        total = result.get("total", 0)
+        print(f"  [VERIFICACION LABORUM] {total} postulaciones confirmadas en historial")
+        log.info("[VERIFY] LABORUM: total=%d tracked=%d", total, tracked)
+
+        if total == 0:
+            log.debug("[VERIFY] LABORUM: 0 tarjetas — asumiendo tracked=%d correcto", tracked)
+            return tracked
+
+        return tracked if total >= tracked else total
+
+    except Exception as exc:
+        log.debug("[VERIFY] LABORUM: error en verificación: %s", exc)
+        return tracked
 
 
 def _scan_offer(page, offer_url: str, config: dict, profile: dict,
@@ -1942,11 +2001,20 @@ def _scan_offer(page, offer_url: str, config: dict, profile: dict,
     try:
         page.goto(offer_url, wait_until="domcontentloaded", timeout=25_000)
         human_delay(0.6, 1.2)
+        # Detectar CAPTCHA al abrir una oferta
+        try:
+            _handle_possible_captcha(page, portal)
+        except Exception:
+            log.debug("_handle_possible_captcha falló al abrir oferta (ignorado)")
 
         page_text = (page.text_content("body") or "").lower()
         _err = ["404", "no encontramos", "not found", "oferta no disponible", "oferta eliminada"]
         if any(s in page_text for s in _err):
             return title, "skipped: eliminada", []
+
+        if _country_mismatch_blocks_apply(page_text):
+            log.info("  [SCAN-SKIP] Pais no coincide y oferta es presencial: %s", offer_url)
+            return title, "skipped: pais_no_coincide", []
 
         title_sel = config.get("selector_titulo_oferta")
         if title_sel:
@@ -2010,7 +2078,7 @@ def _scan_offer(page, offer_url: str, config: dict, profile: dict,
                                 if not any(s in ext_url.lower() for s in _SKIP):
                                     from .form_filler import scan_form as _scan_form_ext
                                     ext_result = _scan_form_ext(ext_page, USER_PROFILE, job_title=title)
-                                    ext_unanswered = ext_result.get("unanswered_labels", [])
+                                    ext_unanswered = ext_result.get("unanswered", [])
                                     scanned_ok = True
                                     log.info("  [SCAN-EXT] %d preguntas en ATS %s",
                                              len(ext_unanswered), ext_url[:50])
@@ -2030,7 +2098,7 @@ def _scan_offer(page, offer_url: str, config: dict, profile: dict,
                                 pass
                             from .form_filler import scan_form as _scan_form_ext
                             ext_result = _scan_form_ext(page, USER_PROFILE, job_title=title)
-                            ext_unanswered = ext_result.get("unanswered_labels", [])
+                            ext_unanswered = ext_result.get("unanswered", [])
                             scanned_ok = True
                 except Exception as ext_exc:
                     log.debug("  [SCAN-EXTERNA] Error siguiendo botón: %s", ext_exc)
@@ -2064,7 +2132,7 @@ def _scan_offer(page, offer_url: str, config: dict, profile: dict,
             except Exception as btn_exc:
                 log.debug("  [SCAN] Click en boton de aplicar fallo (%s) — escaneando pagina tal cual", btn_exc)
 
-        result = scan_form(page, profile, job_title=title)
+        result = scan_form(page, profile, job_title=title, portal=portal, url=offer_url)
 
         # Para modales (LinkedIn Easy Apply): cerrar sin enviar para que go_back() funcione
         if tipo == "modal":
@@ -2485,6 +2553,13 @@ def run_apply_queue(portal_name: str, headless: bool = False) -> None:
                     total_skipped += 1
                     continue
 
+                if _country_mismatch_blocks_apply(cur_text):
+                    print(f"-> [PAIS_NO_COINCIDE] Presencial en otro pais (no hibrido/remoto) - eliminada de cola")
+                    _remove_from_scan_queue(url)
+                    _csv_log(portal_name, url, title, "skipped: pais_no_coincide")
+                    total_skipped += 1
+                    continue
+
                 tipo = config.get("tipo_postulacion", "directa")
 
                 # Portales externos (GetOnBoard): ir directo a _apply_externa
@@ -2669,7 +2744,7 @@ def run_bot_multi_keywords(
             f"  la solución con patchright/camoufox o CDP verificado)."
         )
         log.warning(msg)
-        print(f"\n[!] CAPTCHA DETECTADO EN {portal_name.upper()}... Por favor resuelvelo manualmente. (ver plan de implementacion).")
+        print(f"\n[STANDBY] {portal_name.upper()}: portal en standby por proteccion anti-bot — saltando sin esperar.")
         return
 
     # -- Verificar restricción temporal de LinkedIn ---------------------------
@@ -2849,14 +2924,16 @@ def run_bot_multi_keywords(
         _bodega_groups = [g for g in active_groups if g.get("mode") == "bodega"]
         _other_groups  = [g for g in active_groups if g.get("mode") not in ("it", "bodega")]
         if _it_groups and _bodega_groups:
-            # Si no se definieron límites por modo, asignar 50/50 automático
+            # Si no se definieron límites por modo: el máximo configurado
+            # aplica COMPLETO a cada categoría (no se reparte 50/50).
+            # "si son 5 entonces 5 IT y 5 bodega" → total real = 10.
             if not _mode_max:
-                _half_it = _effective_max // 2
-                _mode_max["it"] = _half_it
-                _mode_max["bodega"] = _effective_max - _half_it
+                _mode_max["it"] = _effective_max
+                _mode_max["bodega"] = _effective_max
+                _effective_max = sum(_mode_max.values())
                 print(
                     f"[MODO_BALANCE] Asignando {_mode_max['it']} IT y {_mode_max['bodega']} BODEGA "
-                    f"del total {_effective_max} porque ambas categorías están activas."
+                    f"(máximo independiente por categoría — total combinado {_effective_max})."
                 )
             # Shuffle IT para rotar keywords cada ciclo (evita usar siempre los mismos 5)
             import random as _rnd
@@ -3085,7 +3162,10 @@ def run_bot_multi_keywords(
                                 pass
 
                             # 3. Esperar login — detección multicapa cada 3s
-                            _login_deadline = time.time() + 600  # 10 min
+                            # 5 min máx — mismo límite que _ensure_login y
+                            # _wait_for_login_if_needed (cerrar ciclo y pasar
+                            # al siguiente portal si no hay login a tiempo).
+                            _login_deadline = time.time() + 300  # 5 min
                             _last_remind    = 0.0
                             while time.time() < _login_deadline:
                                 time.sleep(3)
@@ -3249,33 +3329,63 @@ def run_bot_multi_keywords(
             # Progreso de este intento
             print(f"[PROGRESO_FINAL] Aplicadas {total_applied}/{_effective_max} en {portal_name.upper()}")
 
-            # ── Verificar si se debe reintentar (reintento obligatorio si 0 apps) ──
-            if total_applied > 0:
-                # Éxito: al menos una postulación → salir normalmente
-                log.info("[CICLO] %s: %d postulaciones. Sesión completada.", portal_name, total_applied)
+            # ── Verificar si se debe reintentar ──────────────────────────────
+            # Si el portal tiene AMBAS categorías activas (IT y bodega), el
+            # mínimo para pasar al siguiente portal es 1 postulación de cada
+            # una — no basta con total_applied > 0 (podría ser 2 IT y 0 bodega).
+            # _mode_applied se acumula entre reintentos dentro del mismo portal.
+            _both_modes_active = bool(_it_groups and _bodega_groups)
+            if _both_modes_active:
+                _it_done  = _mode_applied.get("it", 0)
+                _bod_done = _mode_applied.get("bodega", 0)
+                _min_ok   = _it_done >= 1 and _bod_done >= 1
+            else:
+                _it_done = _bod_done = 0
+                _min_ok  = total_applied > 0
+
+            if _min_ok:
+                # Éxito: mínimo cumplido → salir normalmente
+                if _both_modes_active:
+                    log.info("[CICLO] %s: minimo cumplido (IT=%d, BODEGA=%d). Sesion completada.",
+                             portal_name, _it_done, _bod_done)
+                else:
+                    log.info("[CICLO] %s: %d postulaciones. Sesión completada.", portal_name, total_applied)
                 break
 
-            # 0 postulaciones en este intento
+            # Mínimo NO alcanzado en este intento
+            _falta_msg = (
+                f"(faltan: {'IT ' if _it_done < 1 else ''}{'BODEGA' if _bod_done < 1 else ''} — "
+                f"actual IT={_it_done}, BODEGA={_bod_done})"
+                if _both_modes_active else "(0 postulaciones)"
+            )
             if no_retry or _retry_count >= _RETRY_MAX_COUNT:
                 # Modo persistente o ya agotamos reintentos → pasar al siguiente portal
                 if _retry_count >= _RETRY_MAX_COUNT:
-                    print(f"\n[CICLO] {portal_name.upper()}: 0 postulaciones tras {_retry_count + 1} "
-                          f"intentos — pasando al siguiente portal.")
-                    log.warning("[CICLO] %s: 0 aplicadas tras %d intentos — saltando.",
-                                portal_name, _retry_count + 1)
+                    print(f"\n[CICLO] {portal_name.upper()}: minimo no alcanzado tras {_retry_count + 1} "
+                          f"intentos {_falta_msg} — pasando al siguiente portal.")
+                    log.warning("[CICLO] %s: minimo no alcanzado tras %d intentos %s — saltando.",
+                                portal_name, _retry_count + 1, _falta_msg)
                 else:
-                    print(f"\n[CICLO] {portal_name.upper()}: 0 postulaciones → siguiente portal.")
+                    print(f"\n[CICLO] {portal_name.upper()}: minimo no alcanzado {_falta_msg} → siguiente portal.")
                 break
 
-            # Primer intento con 0 postulaciones → reintento obligatorio
+            # Primer/siguiente intento sin alcanzar el mínimo → reintento obligatorio
             _retry_count += 1
-            print(
-                f"\n[REINTENTO] {portal_name.upper()}: 0 postulaciones en intento #{_retry_count}.\n"
-                f"  → Reintento obligatorio en {_RETRY_WAIT_INITIAL // 60} min "
-                f"(se debe postular al menos una vez antes de pasar al siguiente portal).\n"
-            )
-            log.warning("[REINTENTO] %s: 0 apps — reintentando en %ds (intento %d/%d)",
-                        portal_name, _RETRY_WAIT_INITIAL, _retry_count, _RETRY_MAX_COUNT)
+            if _both_modes_active:
+                print(
+                    f"\n[REINTENTO] {portal_name.upper()}: minimo no alcanzado en intento #{_retry_count} "
+                    f"{_falta_msg}.\n"
+                    f"  → Reintento obligatorio en {_RETRY_WAIT_INITIAL // 60} min "
+                    f"(se requiere minimo 1 postulacion IT y 1 BODEGA antes de pasar al siguiente portal).\n"
+                )
+            else:
+                print(
+                    f"\n[REINTENTO] {portal_name.upper()}: 0 postulaciones en intento #{_retry_count}.\n"
+                    f"  → Reintento obligatorio en {_RETRY_WAIT_INITIAL // 60} min "
+                    f"(se debe postular al menos una vez antes de pasar al siguiente portal).\n"
+                )
+            log.warning("[REINTENTO] %s: minimo no alcanzado %s — reintentando en %ds (intento %d/%d)",
+                        portal_name, _falta_msg, _RETRY_WAIT_INITIAL, _retry_count, _RETRY_MAX_COUNT)
             _retry_countdown(_RETRY_WAIT_INITIAL, portal_name)
             # Continúa el while True → re-ejecuta el loop de keywords completo
 
@@ -3376,6 +3486,10 @@ def run_scan_quick_links(headless: bool = False, max_links: int = 100) -> dict:
     """
     from .form_filler import scan_form
     from .portals.getonyboard import _try_fill_external_ats as _placeholder  # noqa  force import
+
+    if not ENABLE_QUICK_LINKS:
+        print("[SCAN-QL] Quick links deshabilitados (ENABLE_QUICK_LINKS=false). No se procesará esta operación.")
+        return {"scanned": 0, "queued": 0, "already_answered": 0, "failed": 0}
 
     if not QUICK_LINKS_PATH.exists():
         print("[SCAN-QL] No hay quick_links.json. Corre primero el bot para generar links.")
@@ -3514,7 +3628,7 @@ def run_scan_quick_links(headless: bool = False, max_links: int = 100) -> dict:
                             portal=portal,
                             url=offer_url,
                         )
-                        unanswered = form_result.get("unanswered_labels", [])
+                        unanswered = form_result.get("unanswered", [])
                         answered   = form_result.get("all_answered", False)
 
                         if answered and not unanswered:
@@ -3587,6 +3701,10 @@ def run_apply_quick_links(headless: bool = False, max_apply: int = 5) -> dict:
     Solo procesa hasta max_apply links. Los restantes quedan para el siguiente run.
     """
     from .form_filler import scan_form, fill_form
+
+    if not ENABLE_QUICK_LINKS:
+        print("[APPLY-QL] Quick links deshabilitados (ENABLE_QUICK_LINKS=false). No se procesará esta operación.")
+        return {"applied": 0, "pending": 0, "failed": 0}
 
     if not QUICK_LINKS_PATH.exists():
         print("[APPLY-QL] No hay quick_links.json.")

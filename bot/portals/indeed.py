@@ -130,8 +130,12 @@ class IndeedPortal(BasePortal):
 
         log.warning("=" * 60)
         log.warning("CLOUDFLARE CHALLENGE detectado en Indeed")
+        try:
+            current_url = page.url or "[URL desconocida]"
+        except Exception:
+            current_url = "[URL desconocida]"
         # SEÑAL PARA EL DASHBOARD
-        print("\n[CAPTCHA] Verificación humana requerida. Resuelve el CAPTCHA en el navegador abierto.")
+        print(f"\n[CAPTCHA] Verificación humana requerida en Indeed ({current_url}). Resuelve el CAPTCHA en el navegador abierto.")
         
         log.warning("Por favor, marca la casilla 'Verifique que es un ser humano'")
         log.warning("en el navegador abierto. El bot esperará hasta %d segundos...", timeout_s)

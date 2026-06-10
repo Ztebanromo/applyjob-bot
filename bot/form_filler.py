@@ -250,13 +250,26 @@ def _auto_answer(label: str, profile: dict) -> Optional[str]:
             "trabajo desde casa"):
         return "Sí, tengo disponibilidad para trabajar de forma presencial o híbrida en Santiago."
 
+    # -- 3b. Años de experiencia (número) --------------------------------------
+    if _has("anos de experiencia", "cuantos anos", "years of experience",
+            "how many years", "tiempo de experiencia", "cuanto tiempo llevas",
+            "cuanto tiempo tienes de experiencia"):
+        return profile.get("years_exp", "0")
+
     # -- 4. Formación académica / título ---------------------------------------
     if _has("formacion", "titulo", "carrera", "estudios", "egresado", "titulacion",
-            "casa de estudios", "institucion", "universidad", "instituto", "nivel educacional"):
-        return profile.get("education", "Técnico o profesional del área, egresado reciente.")
+            "casa de estudios", "institucion", "universidad", "instituto", "nivel educacional",
+            "nivel de estudios", "maximo nivel", "highest level of education", "bachelor"):
+        edu = profile.get("education", "")
+        return edu if edu else "Técnico de Nivel Superior — INACAP (Analista Programador, egresado 2024)."
 
-    # -- 5. Contacto / ubicación -----------------------------------------------
-    if _has("contacto", "telefono", "correo", "email", "comuna", "residencia", "donde vives"):
+    # -- 5a. Ciudad / ubicación (antes de contacto genérico) -------------------
+    if _has("ciudad", "city", "ciudad de residencia", "donde vives", "comuna de residencia",
+            "en que ciudad", "en que comuna", "localidad"):
+        return profile.get("city", "Santiago")
+
+    # -- 5b. Contacto / teléfono / correo --------------------------------------
+    if _has("contacto", "telefono", "correo", "email", "residencia"):
         return profile.get("contact_info",
                            f"{profile.get('phone','')} | {profile.get('email','')}")
 

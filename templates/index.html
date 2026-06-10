@@ -271,6 +271,13 @@
                 </div>
             </div>
 
+            <div style="display:flex; justify-content:space-between; align-items:center;
+                        background:rgba(255,255,255,0.04); border-radius:8px;
+                        padding:0.5rem 0.8rem; margin-bottom:0.6rem;">
+                <span style="font-size:0.8rem; color:var(--text-dim);">📊 Total postulado (histórico)</span>
+                <strong id="total-applied-alltime" style="font-size:1.05rem; color:#34d399;">0</strong>
+            </div>
+
             <div class="portal-grid" id="portal-grid">
                 <!-- Portales generados por JS -->
             </div>
@@ -320,6 +327,15 @@
                     <button class="iv-btn-sound" onclick="playAlertSound()">🔔 Sonido</button>
                 </div>
                 <ol class="iv-steps" id="iv-steps"></ol>
+                <div id="iv-actions" style="display:none; margin-top:0.6rem;">
+                    <button id="iv-login-btn" onclick="loginFromIntervention()"
+                            style="background:linear-gradient(160deg,#4f46e5,#818cf8);border:none;color:#fff;
+                                   padding:0.45rem 1rem;font-size:0.74rem;font-weight:700;
+                                   font-family:'Inter',sans-serif;border-radius:9px;cursor:pointer;
+                                   box-shadow:0 2px 6px rgba(0,0,0,0.3);">
+                        🔑 Abrir navegador y loguear
+                    </button>
+                </div>
             </div>
 
             <!-- Banner post-scan -->
@@ -419,24 +435,6 @@
         </div>
     </div>
 
-    <!-- Modal CAPTCHA (overlay completo) -->
-    <div id="captcha-modal"
-        style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.85); -webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px); z-index:9999; align-items:center; justify-content:center; opacity:0; pointer-events:none; transition:opacity 0.3s ease;">
-        <div class="card"
-            style="max-width:500px; text-align:center; border:2px solid var(--warning); box-shadow:0 0 30px var(--warning);">
-            <h2 style="color:var(--warning); justify-content:center;">⚠️ CAPTCHA REQUERIDO</h2>
-            <p style="font-size:1.1rem; margin-bottom:1.5rem;">El portal solicitó verificación humana.</p>
-            <div style="background:rgba(245,158,11,0.1); padding:1.5rem; border-radius:12px; margin-bottom:2rem;">
-                <ol style="text-align:left; padding-left:20px; color:var(--text-dim); line-height:2;">
-                    <li>Ve al navegador abierto por el bot.</li>
-                    <li>Resuelve el desafío / CAPTCHA.</li>
-                    <li>El bot continuará automáticamente.</li>
-                </ol>
-            </div>
-            <p style="font-size:0.9rem; color:var(--text-dim); font-style:italic;">Esta ventana se cerrará sola al
-                detectar la resolución.</p>
-        </div>
-    </div>
 
     <script>
         // ── Portales ───────────────────────────────────────────────────────────
@@ -866,7 +864,6 @@
         const stopBtn    = document.getElementById('stopBtn');
         const logContainer = document.getElementById('log-container');
         const terminal = document.getElementById('terminal');
-        const captchaModal = document.getElementById('captcha-modal');
         const selectAllPortalsBtn = document.getElementById('selectAllPortalsBtn');
         const clearPortalsBtn = document.getElementById('clearPortalsBtn');
         const opsState = document.getElementById('ops-state');
@@ -1012,7 +1009,6 @@
         socket.on('login_resolved', () => {
             window.closeActiveNotifications();
             hideIntervention();
-            hideCaptchaModal();
             setOps(opsIntervention, 'Login resuelto', 'ok');
             setAction('Login detectado — continuando...');
             _setStatus('Activo', 'var(--success)');
@@ -1055,27 +1051,11 @@
             }
         }
 
-        socket.on('captcha_required', (data) => {
-            showIntervention('captcha', data.portal || '');
-            showCaptchaModal();
+        // El bot ya NO espera resolución manual de captchas — solo informa que
+        // saltó la oferta/portal. Sin modal, sin notificación bloqueante.
+        socket.on('captcha_skipped', (data) => {
             const portalName = (data.portal || 'el portal').toUpperCase();
-            if (Notification.permission === 'granted') {
-                const notif = new Notification('⚠ ApplyJob — CAPTCHA requerido', {
-                    body: `Resuelve el captcha en ${portalName} para continuar.`,
-                    requireInteraction: true,
-                });
-                window._activeNotifications.push(notif);
-            } else if (Notification.permission === 'default') {
-                Notification.requestPermission().then(perm => {
-                    if (perm === 'granted') {
-                        const notif = new Notification('⚠ ApplyJob — CAPTCHA requerido', {
-                            body: `Resuelve el captcha en ${portalName} para continuar.`,
-                            requireInteraction: true,
-                        });
-                        window._activeNotifications.push(notif);
-                    }
-                });
-            }
+            appendLogLine(`[CAPTCHA] ${portalName}: verificación humana detectada — saltando sin esperar.`);
         });
 
         function _applySessionStatus(portal, result) {
@@ -1127,6 +1107,61 @@
             document.getElementById('summary-filtered').innerText = data.total_filtered || 0;
             document.getElementById('summary-errors').innerText   = data.total_errors   || 0;
             panel.style.display = 'block';
+            loadHistoricalStats();  // refresca total histórico tras la corrida
+        });
+
+        // ── Resultado de verificación post-postulación ("Mis postulaciones") ──
+        socket.on('postulations_verified', (data) => {
+            const summary  = data?.summary  || {};
+            const retrying = data?.retrying || [];
+
+            // Marcar visualmente los portales que están siendo reintentados
+            for (const portal of retrying) {
+                const ps = document.getElementById(`ps-${portal}`);
+                if (ps) {
+                    ps.innerText = '🔄 Reverificando…';
+                    ps.style.color = '#ffee00';
+                }
+            }
+
+            for (const [portal, r] of Object.entries(summary)) {
+                const ps = document.getElementById(`ps-${portal}`);
+                if (r.status) {
+                    appendLogLine(`[VERIFICACION] ${portal.toUpperCase()}: ${r.status}`);
+                    if (ps) {
+                        if (r.status === 'not_logged_in') {
+                            ps.innerText = '⚠️ Sin sesión';
+                            ps.style.color = '#f59e0b';
+                        } else {
+                            ps.innerText = '⚠️ No verificable';
+                            ps.style.color = '#9ca3af';
+                        }
+                    }
+                    continue;
+                }
+                const found = r.found_on_site || 0;
+                const total = r.applied_today || 0;
+                const missing = r.missing || [];
+                if (total === 0) {
+                    if (ps) { ps.innerText = 'Sin postulaciones hoy'; ps.style.color = ''; }
+                    continue;
+                }
+                if (missing.length) {
+                    appendLogLine(`[VERIFICACION] ${portal.toUpperCase()}: ${found}/${total} confirmadas — ⚠️ ${missing.length} no aparecen en 'Mis postulaciones'`);
+                    if (ps) {
+                        ps.innerText = `⚠️ ${found}/${total} confirmadas`;
+                        ps.style.color = '#ef4444';
+                        ps.title = missing.join('\n');
+                    }
+                } else {
+                    appendLogLine(`[VERIFICACION] ${portal.toUpperCase()}: ${found}/${total} confirmadas ✅`);
+                    if (ps) {
+                        ps.innerText = `✅ ${found}/${total} confirmadas`;
+                        ps.style.color = '#22c55e';
+                        ps.title = '';
+                    }
+                }
+            }
         });
 
         // ── Verificación de sesiones en tiempo real ───────────────────────────
@@ -2005,7 +2040,6 @@
                 }
                 if (m.includes('[SESION_INICIADA]') || m.includes('[BUSCANDO]') || m.includes('[ABRIENDO]')) {
                     hideIntervention();
-                    hideCaptchaModal();
                 }
             }
 
@@ -2049,16 +2083,23 @@
                     : `CAPTCHA requerido en ${(portal || 'portal').toUpperCase()}`;
 
             const steps = document.getElementById('iv-steps');
+            const actions = document.getElementById('iv-actions');
+            const loginBtn = document.getElementById('iv-login-btn');
             if (type === 'login') {
                 steps.innerHTML = `
-                    <li>Busca el navegador que abrió el bot (se abre solo al correr)</li>
+                    <li>Click en <strong>"🔑 Abrir navegador y loguear"</strong> abajo (o busca el navegador que abrió el bot)</li>
                     <li>Inicia sesión en <strong>${(portal || 'el portal').toUpperCase()}</strong> con tu cuenta</li>
                     <li>El bot detecta el login automáticamente y <strong>continúa solo</strong></li>`;
+                actions.style.display = 'block';
+                loginBtn.dataset.portal = portal || '';
+                loginBtn.disabled = false;
+                loginBtn.innerText = '🔑 Abrir navegador y loguear';
             } else {
                 steps.innerHTML = `
                     <li>Busca el navegador que abrió el bot</li>
                     <li>Resuelve el desafío / CAPTCHA que aparece en pantalla</li>
                     <li>El bot <strong>continúa automáticamente</strong> al pasar la verificación</li>`;
+                actions.style.display = 'none';
             }
 
             // Iniciar timer de espera solo la primera vez
@@ -2089,6 +2130,13 @@
         function hideIntervention() {
             window.closeActiveNotifications();
             document.getElementById('iv-panel').style.display = 'none';
+            // Resetear botón de login para la próxima intervención
+            const loginBtn = document.getElementById('iv-login-btn');
+            if (loginBtn) {
+                loginBtn.disabled = false;
+                loginBtn.innerText = '🔑 Abrir navegador y loguear';
+                delete loginBtn.dataset.portal;
+            }
             setOps(opsIntervention, 'Ninguna', 'info');
             clearInterval(_ivTimer);
             _ivTimer = null;
@@ -2211,23 +2259,10 @@
             document.getElementById('manual-actions-panel').style.display = 'none';
         }
 
-        function showCaptchaModal() {
-            captchaModal.style.opacity = '1';
-            captchaModal.style.pointerEvents = 'auto';
-            captchaModal.style.display = 'flex';
-        }
-        function hideCaptchaModal() {
-            window.closeActiveNotifications();
-            captchaModal.style.opacity = '0';
-            captchaModal.style.pointerEvents = 'none';
-            captchaModal.style.display = 'none';
-        }
-
         // ── Controles ─────────────────────────────────────────────────────────
         stopBtn.onclick = async () => {
             setBotControls('stopping');
             hideIntervention();
-            hideCaptchaModal();
             setAction('Deteniendo...');
             // Doble garantía: SocketIO + HTTP fallback
             socket.emit('stop_master');
@@ -2566,6 +2601,37 @@
             }
         }
 
+        // Botón "🔑 Abrir navegador y loguear" del panel de intervención —
+        // dispara login directo para EL portal que está pidiendo sesión ahora,
+        // sin tener que ir a marcar checkboxes en el grid de portales.
+        async function loginFromIntervention() {
+            const btn = document.getElementById('iv-login-btn');
+            const portal = btn.dataset.portal;
+            if (!portal) {
+                appendLogLine('[LOGIN] No se identificó el portal — usa el grid de portales abajo.');
+                return;
+            }
+            btn.disabled = true; btn.innerText = '⏳ Abriendo navegador...';
+            appendLogLine(`[LOGIN] Abriendo navegador para ${portal.toUpperCase()} — inicia sesión en la ventana que aparece.`);
+            try {
+                const res  = await fetch('/api/login-portals', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ portals: [portal] })
+                });
+                const data = await res.json();
+                if (data.ok) {
+                    btn.innerText = '🔑 Navegador abierto — inicia sesión';
+                } else {
+                    appendLogLine('[LOGIN] ❌ ' + (data.error || 'Error'));
+                    btn.disabled = false; btn.innerText = '🔑 Abrir navegador y loguear';
+                }
+            } catch(e) {
+                appendLogLine('[LOGIN] ❌ ' + e.message);
+                btn.disabled = false; btn.innerText = '🔑 Abrir navegador y loguear';
+            }
+        }
+
         // Importa cookies del Chrome real al bot — útil para LinkedIn y portales con anti-bot
         async function importFromChrome() {
             // Si ya verificamos, importar solo los expirados; si no, importar los seleccionados
@@ -2882,7 +2948,7 @@
                     if (Notification.permission === 'granted')
                         new Notification('ApplyJob — Scan listo', { body: 'Pulsa 🚀 Postular a todo.' });
                 }
-                hideIntervention(); hideCaptchaModal();
+                hideIntervention();
                 setOps(opsIntervention, 'Ninguna', 'info');
                 setAction(data.status === 'stopped' ? 'Detenido por el usuario' : '✓ Scan completado');
                 if (!data.apply_active) setBotControls('idle');
@@ -2902,7 +2968,7 @@
                     if (Notification.permission === 'granted')
                         new Notification('ApplyJob — Completado', { body: 'Todas las ofertas fueron procesadas.' });
                 }
-                hideIntervention(); hideCaptchaModal();
+                hideIntervention();
                 setOps(opsIntervention, 'Ninguna', 'info');
                 setAction(data.status === 'stopped' ? 'Detenido por el usuario' : '✓ Proceso completado');
                 if (!data.scan_active) setBotControls(data.status === 'finished' ? 'finished' : 'idle');
@@ -2914,7 +2980,7 @@
                 _botMode = null;
                 unlockBtns();
                 setBotControls('idle');
-                hideIntervention(); hideCaptchaModal();
+                hideIntervention();
                 setOps(opsIntervention, 'Ninguna', 'info');
                 setAction('Detenido por el usuario');
                 return;
@@ -3018,6 +3084,17 @@
                 set('stat-applied',  data.applied);
                 set('stat-errors',   data.errors);
                 set('stat-filtered', data.skipped);
+                // Total histórico (todas las sesiones)
+                const totalEl = document.getElementById('total-applied-alltime');
+                if (totalEl) {
+                    totalEl.innerText = data.all_time_applied || 0;
+                    if (data.all_time_by_portal && Object.keys(data.all_time_by_portal).length) {
+                        totalEl.title = Object.entries(data.all_time_by_portal)
+                            .sort((a,b) => b[1]-a[1])
+                            .map(([p, n]) => `${p}: ${n}`)
+                            .join('\n');
+                    }
+                }
                 // Desglose por portal en tooltip del primer counter
                 if (data.by_portal && Object.keys(data.by_portal).length) {
                     const breakdown = Object.entries(data.by_portal)

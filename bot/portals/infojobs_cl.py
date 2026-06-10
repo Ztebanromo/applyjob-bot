@@ -105,20 +105,24 @@ class InfoJobsCLPortal(BasePortal):
                 except Exception:
                     pass
 
-            # Fallback JS por texto
+            # Fallback por texto dentro de botones o enlaces visibles
             if not btn:
                 try:
-                    btn_handle = page.evaluate("""() => {
-                        const texts = ['Inscribirme','Inscríbete','Postularme','Postúlate','Aplicar'];
-                        for (const t of texts) {
-                            const el = [...document.querySelectorAll('button,a')]
-                                .find(e => e.innerText.trim().startsWith(t) && e.offsetParent !== null);
-                            if (el) return el;
-                        }
-                        return null;
-                    }""")
-                    if btn_handle:
-                        btn = btn_handle
+                    for el in page.query_selector_all("button,a"):
+                        try:
+                            if not el.is_visible():
+                                continue
+                            text = (el.text_content() or "").strip()
+                            if not text:
+                                continue
+                            if any(text.startswith(t) for t in [
+                                'Inscribirme', 'Inscríbete', 'Postularme',
+                                'Postúlate', 'Aplicar', 'Postularme', 'Publicar'
+                            ]):
+                                btn = el
+                                break
+                        except Exception:
+                            continue
                 except Exception:
                     pass
 
@@ -143,6 +147,10 @@ class InfoJobsCLPortal(BasePortal):
 
             btn.click()
             human_delay(1.5, 3.0)
+            try:
+                page.wait_for_timeout(2_500)
+            except Exception:
+                pass
 
             # Si redirigió fuera de InfoJobs
             if "infojobs" not in page.url:
@@ -163,6 +171,10 @@ class InfoJobsCLPortal(BasePortal):
                 "h2:has-text('inscrito')",
                 "[class*='success']:has-text('inscrip')",
                 "[data-testid='apply-success']",
+                "div:has-text('Inscrito')",
+                "div:has-text('Te has inscrito')",
+                "p:has-text('Inscripción realizada')",
+                "p:has-text('Tu postulación se ha enviado')",
             ]:
                 try:
                     el = page.query_selector(success_sel)
@@ -170,6 +182,29 @@ class InfoJobsCLPortal(BasePortal):
                         return "applied", title
                 except Exception:
                     pass
+
+            # Fallback de texto visible en la página
+            try:
+                page_text = (page.text_content('body') or '').lower()
+                if any(sub in page_text for sub in [
+                    'inscripción enviada', 'postulación enviada',
+                    'te has inscrito', 'ya estás inscrito', 'ya te postulaste',
+                    'inscripción realizada', 'postulado correctamente',
+                    'oferta guardada']):
+                    return "applied", title
+                if btn and hasattr(btn, 'is_enabled'):
+                    try:
+                        if not btn.is_enabled():
+                            # El botón quedó deshabilitado tras enviar la aplicación.
+                            return "applied", title
+                    except Exception:
+                        pass
+                if btn and hasattr(btn, 'text_content'):
+                    text = (btn.text_content() or '').strip().lower()
+                    if any(t in text for t in ['inscrito', 'postulado', 'solicitado']):
+                        return "applied", title
+            except Exception:
+                pass
 
             return "external_apply", title
 

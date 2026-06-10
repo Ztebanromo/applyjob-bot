@@ -33,19 +33,29 @@ USER_PROFILE = {
     "linkedin":         os.getenv("USER_LINKEDIN", ""),
     "portfolio":        os.getenv("USER_PORTFOLIO", ""),
     "cv_path":          os.getenv("USER_CV_PATH", ""),
-    "salary":           os.getenv("USER_SALARY", ""),
+    "salary":           os.getenv("USER_SALARY", "850000"),
     "years_exp":        os.getenv("USER_YEARS_EXP", "0"),
     "cover_letter":     os.getenv("USER_COVER_LETTER", ""),
     "availability":     os.getenv("USER_AVAILABILITY", "Inmediata"),
-    "english_level":    os.getenv("USER_ENGLISH_LEVEL", ""),
+    "english_level":    os.getenv("USER_ENGLISH_LEVEL",
+                            "Básico técnico. Leo documentación en inglés sin problemas; "
+                            "comunicación oral limitada."),
     "work_mode":        os.getenv("USER_WORK_MODE", "Sí"),
     "laborum_email":    os.getenv("LABORUM_EMAIL", os.getenv("USER_EMAIL", "")),
     "laborum_password": os.getenv("LABORUM_PASSWORD", ""),
-    # Campos de screening — también desde .env
-    "education":        os.getenv("USER_EDUCATION", ""),
-    "contact_info":     os.getenv("USER_CONTACT_INFO", ""),
-    "excel_level":      os.getenv("USER_EXCEL_LEVEL", ""),
-    "bodega_exp":       os.getenv("USER_BODEGA_EXP", ""),
+    # Campos de screening — también desde .env; defaults con datos reales del perfil
+    "education":        os.getenv("USER_EDUCATION",
+                            "Técnico de Nivel Superior en Analista Programador — "
+                            "INACAP (egresado 2024). Formación en programación, bases de datos, "
+                            "redes y desarrollo web."),
+    "contact_info":     os.getenv("USER_CONTACT_INFO",
+                            f"{os.getenv('USER_PHONE','')} | {os.getenv('USER_EMAIL','')}"),
+    "excel_level":      os.getenv("USER_EXCEL_LEVEL",
+                            "Excel nivel básico-intermedio: tablas, BUSCARV, fórmulas "
+                            "condicionales (SI, SUMAR.SI). Score 6/10."),
+    "bodega_exp":       os.getenv("USER_BODEGA_EXP",
+                            "Exposición a operaciones de bodega: SAP WM, WMS, terminales RF, "
+                            "picking, despacho y recepción de mercadería. Entorno STL Internacional."),
 }
 
 # ---------------------------------------------------------------------------
@@ -212,8 +222,8 @@ SITE_CONFIG = {
     },
     "trabajando": {
         # Trabajando.cl — portal laboral chileno.
-        # URL nueva (2025): /trabajo-empleo/{keyword-slug}
-        # Selectores actualizados: las ofertas usan href con /trabajo-empleo/.../trabajo/{id}
+        # URL de búsqueda: /trabajo-empleo/{keyword-slug}
+        # Links reales de ofertas: /trabajo/{id-slug} (confirmado en vivo 2026-06-09)
         "url_busqueda": (
             f"https://www.trabajando.cl/trabajo-empleo/{SHORT_DASH_KEYWORDS}"
         ),
@@ -378,7 +388,8 @@ _LOC_DISTANT_RM = frozenset({
     "la granja", "el bosque",
 })
 
-# Tier FAR · score 2 · Fuera del Gran Santiago o sin transporte directo → RECHAZADAS
+# Tier FAR · score 2 · Fuera del Gran Santiago, regiones u otro país → RECHAZADAS
+# (salvo que el texto indique remoto/híbrido — _LOC_REMOTE se evalúa ANTES y gana)
 _LOC_FAR = frozenset({
     # Fuera del Gran Santiago (dentro de RM pero sin transporte directo)
     "til til", "colina", "lampa", "melipilla",
@@ -401,8 +412,17 @@ _LOC_FAR = frozenset({
     "puerto montt", "puerto varas", "castro", "ancud",
     "coyhaique", "chile chico",
     "punta arenas", "puerto natales",
-    # Perú/Argentina/exterior
+    # Perú/Argentina/exterior — ciudades
     "lima", "bogotá", "bogota", "buenos aires", "monterrey",
+    "córdoba", "cordoba", "rosario", "mendoza", "medellín", "medellin",
+    "cali", "guayaquil", "quito", "montevideo", "asunción", "asuncion",
+    "ciudad de méxico", "ciudad de mexico", "cdmx", "guadalajara",
+    "são paulo", "sao paulo", "rio de janeiro", "madrid", "barcelona",
+    "miami", "panamá", "panama city",
+    # Países — cualquier mención de país distinto a Chile sin "remoto" → fuera
+    "perú", "peru", "argentina", "colombia", "ecuador", "uruguay",
+    "paraguay", "venezuela", "bolivia", "brasil", "brazil",
+    "méxico", "mexico", "españa", "espana", "estados unidos", "usa",
 })
 
 

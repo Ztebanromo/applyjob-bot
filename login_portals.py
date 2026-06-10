@@ -13,12 +13,7 @@ BASE_DIR = Path(__file__).parent
 SESSIONS_DIR = BASE_DIR / "sessions"
 
 def main():
-    from bot.engine import (
-        _open_browser_for_manual_login,
-        _session_is_active,
-        _LOGIN_URLS,
-        SESSIONS_DIR as ENG_SESSIONS,
-    )
+    from bot.engine import _ensure_login, SESSIONS_DIR as ENG_SESSIONS
     from bot.config import SITE_CONFIG
 
     args = sys.argv[1:]
@@ -49,27 +44,20 @@ def main():
         session_dir = str(ENG_SESSIONS / portal)
         Path(session_dir).mkdir(exist_ok=True)
 
-        # Chequeo headless silencioso: si la sesion sigue activa → saltar sin abrir ventana
-        print(f"[LOGIN] {portal.upper()}: verificando sesion...", end=" ", flush=True)
-        if _session_is_active(portal, session_dir):
-            print("[YA LOGUEADO] — saltando.")
-            results[portal] = True
-            skipped.append(portal)
-            continue
-
-        print("sesion expirada o sin cookies — abriendo browser.")
+        # _ensure_login ya verifica cookies guardadas y solo abre el navegador
+        # si hace falta — evitamos duplicar ese chequeo aquí.
+        had_session = (Path(session_dir) / "playwright_state.json").exists()
         print(f"\n{'='*50}")
         print(f"[LOGIN] Portal: {portal.upper()}")
 
-        ok = _open_browser_for_manual_login(
-            portal_name     = portal,
-            session_dir     = session_dir,
-            chrome_exe      = None,
-            timeout_seconds = 300,
-        )
+        ok = _ensure_login(portal, session_dir)
         results[portal] = ok
-        status = "[OK] guardado" if ok else "[TIMEOUT] no se detecto login"
-        print(f"[LOGIN] {portal.upper()}: {status}")
+        if ok and had_session:
+            skipped.append(portal)
+            print(f"[LOGIN] {portal.upper()}: [YA LOGUEADO] — sesion ya guardada.")
+        else:
+            status = "[OK] guardado" if ok else "[TIMEOUT] no se detecto login"
+            print(f"[LOGIN] {portal.upper()}: {status}")
 
     print(f"\n{'='*50}")
     print("[LOGIN] Resumen:")

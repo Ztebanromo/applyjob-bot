@@ -63,7 +63,22 @@ def configure_logging(level: int = logging.INFO) -> None:
 
     # -- Handler de archivo con rotación diaria -------------------------------
     log_file = LOGS_DIR / "applyjob.log"
-    file_handler = logging.handlers.TimedRotatingFileHandler(
+    class SafeTimedRotatingFileHandler(logging.handlers.TimedRotatingFileHandler):
+        """Subclass that ignores PermissionError during rollover (Windows/OneDrive locks)."""
+        def doRollover(self):
+            try:
+                super().doRollover()
+            except PermissionError as pe:
+                # No podemos renombrar el archivo si otro proceso lo tiene abierto.
+                # Loguear a consola y saltar la rotación — se intentará de nuevo mañana.
+                try:
+                    logging.getLogger('applyjob').warning(
+                        "[LOG] Rotación de logs omitida por PermissionError: %s", pe
+                    )
+                except Exception:
+                    pass
+
+    file_handler = SafeTimedRotatingFileHandler(
         filename   = str(log_file),
         when       = "midnight",        # rotar a medianoche
         interval   = 1,                 # cada 1 día

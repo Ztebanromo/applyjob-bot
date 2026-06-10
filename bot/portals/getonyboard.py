@@ -324,6 +324,86 @@ def _find_gob_application_links(page: Page) -> list[str]:
     return urls
 
 
+def _count_gob_applications(page: Page, applications_url: str | None = None) -> int:
+    """Cuenta las aplicaciones pendientes en el dashboard de GetOnBoard."""
+    try:
+        if applications_url and page.url.lower() != applications_url.lower():
+            page.goto(applications_url, wait_until="domcontentloaded", timeout=15_000)
+            human_delay(0.7, 1.2)
+    except Exception:
+        pass
+    return len(_find_gob_application_links(page))
+
+
+def _verify_gob_submission(page) -> bool:
+    """
+    Verifica que la aplicación en GetOnBoard haya sido EFECTIVAMENTE enviada.
+
+    Solo retorna True con señales POSITIVAS explícitas:
+      - Texto de confirmación ("gracias", "postulacion enviada", etc.)
+      - URL redirigida a la oferta (no al editor /edit ni a la lista)
+      - Ausencia del botón de envío después de esperar
+
+    No retorna True solo por estar en la página de lista de aplicaciones
+    porque esa lista incluye tanto "Por enviar" (borradores) como enviadas.
+    """
+    try:
+        page.wait_for_load_state("networkidle", timeout=8_000)
+    except Exception:
+        pass
+
+    try:
+        body = (page.evaluate("document.body?.innerText || ''") or "").lower()
+    except Exception:
+        body = ""
+
+    url = page.url.lower()
+
+    # -- Señales positivas explícitas (máxima confianza) ----------------------
+    _SUCCESS_TEXTS = (
+        "gracias por postular", "gracias por tu postulacion",
+        "postulacion enviada", "postulación enviada",
+        "tu postulacion ha sido enviada", "tu postulación ha sido enviada",
+        "your application has been submitted", "has been submitted",
+        "application submitted", "postulation sent",
+    )
+    if any(sig in body for sig in _SUCCESS_TEXTS):
+        return True
+
+    # -- URL redirigida a la oferta (no al editor multi-paso) -----------------
+    # GOB redirige a /jobs/{slug} o /companies/{co}/jobs/{slug} tras enviar
+    if ("/jobs/" in url and "/applications/" not in url and "/edit" not in url):
+        return True
+
+    # -- NUNCA asumir éxito si estamos en la lista de aplicaciones -------------
+    # Esa lista muestra "Por enviar" (borradores) Y enviadas mezcladas.
+    # Solo podemos confiar en los textos explícitos de arriba.
+    if _is_gob_applications_list_url(url):
+        # Buscar texto específico de sección "enviadas" en la página
+        if "enviada" in body and "por enviar" not in body:
+            return True
+        return False
+
+    # -- Aún en paso edit/preview: definitivamente NO enviado -----------------
+    if "/edit" in url or "step=" in url:
+        return False
+
+    # -- Fallback conservador: si no hay botón de envío visible, probablemente ok
+    try:
+        btn = page.query_selector(
+            "button:has-text('Enviar postulación ahora'):visible,"
+            "button:has-text('Enviar postulación'):visible,"
+            "button:has-text('Enviar mi postulación'):visible,"
+            "a:has-text('Enviar postulación ahora'):visible"
+        )
+        if not btn:
+            return True   # sin botón de envío → asumimos que se procesó
+    except Exception:
+        pass
+
+    return False
+
+
 def _get_gob_step(page) -> str:
     """
     Detecta en qué paso del flujo está.
@@ -402,128 +482,173 @@ def _navigate_gob_multistep(page, profile: dict, title: str) -> bool:
                     if btn and btn.is_visible() and btn.is_enabled():
                         btn.click()
                         _hd(2.0, 3.5)
-                        log.info("  [gob-multi] Postulación enviada en preview: '%s'", title)
-                        print(f"  [GOB] ✓ Postulado: {title[:60]}")
-                        return True
+                        if _verify_gob_submission(page):
+                            log.info("  [gob-multi] Postulación verificada en preview: '%s'", title)
+                            print(f"  [GOB] ✓ Postulado: {title[:60]}")
+                            return True
+                        log.warning("  [gob-multi] Submit click ejecutado pero no se verificó envío")
+                        return False
                 except Exception:
                     pass
             log.warning("  [gob-multi] En preview pero sin botón de envío visible")
             return False
 
         # ── Pasos 1-3: llenar campos ──────────────────────────────────────────
+        # Reintentamos llenar+avanzar varias veces ANTES de rendirnos: la causa
+        # más común de pasos atascados es validación que aparece después del
+        # primer fill_form (campos que se renderizan tarde, checkboxes que
+        # quedaron sin marcar, cover letter que no entró a tiempo). Sin esto,
+        # un solo fallo transitorio dejaba el flujo a medias → borrador
+        # "INCOMPLETA" en GetOnBoard (justo lo que el usuario reportó).
         _hd(0.8, 1.5)
+        _MAX_STEP_ATTEMPTS = 3
+        advanced = False
 
-        # Detectar si el formulario requiere inglés
-        _requires_en = False
-        try:
-            body_txt = (page.evaluate("document.body?.innerText?.slice(0,500) || ''") or "").lower()
-            _requires_en = "ingles" in body_txt or "in english" in body_txt or "inglés" in body_txt
-        except Exception:
-            pass
-
-        # fill_form usa el QA cache para preguntas y los datos del perfil para fields estándar
-        try:
-            fill_form(page, profile, job_title=title)
-        except Exception as fe:
-            log.debug("  [gob-multi] fill_form error: %s", fe)
-
-        # Salary USD — campo numérico vacío
-        try:
-            sal_inp = page.query_selector("input[type='number']:visible, input[placeholder*='USD' i]:visible, input[placeholder*='salary' i]:visible")
-            if sal_inp:
-                val = (sal_inp.evaluate("el => el.value") or "").strip()
-                if not val or val == "0":
-                    sal_inp.fill("800")
-                    log.debug("  [gob-multi] salary USD rellenado: 800")
-        except Exception:
-            pass
-
-        # Checkbox "Certifico que tengo residencia legal en Chile"
-        try:
-            chk = page.query_selector("input[type='checkbox']:not(:checked):visible")
-            if chk:
-                chk.click()
-                log.debug("  [gob-multi] checkbox residencia marcado")
-        except Exception:
-            pass
-
-        # Textareas vacíos → cover_letter en el idioma requerido
-        _cover_text = (
-            "I am a recently graduated Programmer Analyst from INACAP (2024) with practical experience "
-            "in enterprise systems SAP WM, WMS, and RF Terminal. I handle Python for scripting and automation, "
-            "SQL for database queries, JavaScript/HTML/CSS for web development, and Git for version control. "
-            "I combine a solid technical foundation with real understanding of logistics and retail business flows. "
-            "Available immediately for a formal IT position."
-        ) if _requires_en else cover
-
-        if _cover_text:
+        for _attempt in range(1, _MAX_STEP_ATTEMPTS + 1):
+            # Detectar si el formulario requiere inglés
+            _requires_en = False
             try:
-                for ta in page.query_selector_all("textarea:visible"):
-                    val = (ta.evaluate("el => el.value") or "").strip()
-                    if not val:
-                        ta.fill(_cover_text[:1000])
-                        log.debug("  [gob-multi] cover (%s) aplicado a textarea", "EN" if _requires_en else "ES")
+                body_txt = (page.evaluate("document.body?.innerText?.slice(0,500) || ''") or "").lower()
+                _requires_en = "ingles" in body_txt or "in english" in body_txt or "inglés" in body_txt
             except Exception:
                 pass
 
-        # ── Detectar errores de validación antes de avanzar ──────────────────
-        try:
-            err = page.query_selector(
-                "[class*='error']:visible, [class*='invalid']:visible, "
-                ".field_with_errors:visible, [aria-invalid='true']:visible"
-            )
-            if err:
-                log.warning("  [gob-multi] Validación fallida en step %s: %s", step, err.text_content()[:60])
-        except Exception:
-            pass
-
-        # ── Click en "Siguiente" y verificar avance ───────────────────────────
-        SIGUIENTE_SELS = [
-            "button:has-text('Siguiente'):visible",
-            "a:has-text('Siguiente'):visible",
-            "button:has-text('Next'):visible",
-            "button:has-text('Continuar'):visible",
-            "input[type='submit']:visible",
-        ]
-        advanced = False
-        for sel in SIGUIENTE_SELS:
+            # fill_form usa el QA cache para preguntas y los datos del perfil para fields estándar
             try:
-                btn = page.query_selector(sel)
-                if not (btn and btn.is_visible()):
-                    continue
-                # Esperar a que esté habilitado (puede estar disabled durante validación)
-                for _ in range(5):
-                    if btn.is_enabled():
-                        break
-                    _hd(0.4, 0.6)
-                if not btn.is_enabled():
-                    log.warning("  [gob-multi] Botón Siguiente deshabilitado — ¿validación pendiente?")
-                    continue
-                btn.click()
-                _hd(1.5, 2.5)
-                # Esperar cambio de URL o de contenido (SPA puede no recargar)
+                fill_form(page, profile, job_title=title)
+            except Exception as fe:
+                log.debug("  [gob-multi] fill_form error: %s", fe)
+
+            # Salary USD — campo numérico vacío
+            try:
+                sal_inp = page.query_selector("input[type='number']:visible, input[placeholder*='USD' i]:visible, input[placeholder*='salary' i]:visible")
+                if sal_inp:
+                    val = (sal_inp.evaluate("el => el.value") or "").strip()
+                    if not val or val == "0":
+                        sal_inp.fill("800")
+                        log.debug("  [gob-multi] salary USD rellenado: 800")
+            except Exception:
+                pass
+
+            # Checkboxes obligatorios sin marcar (residencia legal, términos, etc.)
+            try:
+                for chk in page.query_selector_all("input[type='checkbox']:not(:checked):visible"):
+                    chk.click()
+                    log.debug("  [gob-multi] checkbox marcado")
+            except Exception:
+                pass
+
+            # Selects vacíos/"Seleccionar..." → primera opción real disponible
+            try:
+                for sel_el in page.query_selector_all("select:visible"):
+                    cur = (sel_el.evaluate("el => el.value") or "").strip()
+                    if cur:
+                        continue
+                    opts = sel_el.query_selector_all("option")
+                    for opt in opts:
+                        ov = (opt.get_attribute("value") or "").strip()
+                        ot = (opt.text_content() or "").strip().lower()
+                        if ov and not any(w in ot for w in ("selecciona", "select", "elige", "choose")):
+                            sel_el.select_option(value=ov)
+                            log.debug("  [gob-multi] select rellenado con primera opción válida: %s", ot[:30])
+                            break
+            except Exception:
+                pass
+
+            # Textareas vacíos → cover_letter en el idioma requerido
+            _cover_text = (
+                "I am a recently graduated Programmer Analyst from INACAP (2024) with practical experience "
+                "in enterprise systems SAP WM, WMS, and RF Terminal. I handle Python for scripting and automation, "
+                "SQL for database queries, JavaScript/HTML/CSS for web development, and Git for version control. "
+                "I combine a solid technical foundation with real understanding of logistics and retail business flows. "
+                "Available immediately for a formal IT position."
+            ) if _requires_en else cover
+
+            if _cover_text:
                 try:
-                    page.wait_for_function(
-                        f"() => window.location.href !== {repr(current_url)}",
-                        timeout=8_000
-                    )
+                    for ta in page.query_selector_all("textarea:visible"):
+                        val = (ta.evaluate("el => el.value") or "").strip()
+                        if not val:
+                            ta.fill(_cover_text[:1000])
+                            log.debug("  [gob-multi] cover (%s) aplicado a textarea", "EN" if _requires_en else "ES")
                 except Exception:
+                    pass
+
+            # ── Detectar errores de validación antes de avanzar ──────────────
+            _val_err_text = ""
+            try:
+                err = page.query_selector(
+                    "[class*='error']:visible, [class*='invalid']:visible, "
+                    ".field_with_errors:visible, [aria-invalid='true']:visible"
+                )
+                if err:
+                    _val_err_text = (err.text_content() or "").strip()[:80]
+                    log.warning("  [gob-multi] Validación visible en step %s (intento %d/%d): %s",
+                                step, _attempt, _MAX_STEP_ATTEMPTS, _val_err_text)
+            except Exception:
+                pass
+
+            # ── Click en "Siguiente" y verificar avance ──────────────────────
+            SIGUIENTE_SELS = [
+                "button:has-text('Siguiente'):visible",
+                "a:has-text('Siguiente'):visible",
+                "button:has-text('Next'):visible",
+                "button:has-text('Continuar'):visible",
+                "input[type='submit']:visible",
+            ]
+            for sel in SIGUIENTE_SELS:
+                try:
+                    btn = page.query_selector(sel)
+                    if not (btn and btn.is_visible()):
+                        continue
+                    # Esperar a que esté habilitado (puede estar disabled durante validación)
+                    for _ in range(5):
+                        if btn.is_enabled():
+                            break
+                        _hd(0.4, 0.6)
+                    if not btn.is_enabled():
+                        log.warning("  [gob-multi] Botón Siguiente deshabilitado (intento %d/%d) — ¿campo faltante?",
+                                    _attempt, _MAX_STEP_ATTEMPTS)
+                        break
+                    btn.click()
+                    _hd(1.5, 2.5)
+                    # Esperar cambio de URL o de contenido (SPA puede no recargar)
                     try:
-                        page.wait_for_load_state("domcontentloaded", timeout=5_000)
+                        page.wait_for_function(
+                            f"() => window.location.href !== {repr(current_url)}",
+                            timeout=8_000
+                        )
                     except Exception:
-                        pass
-                new_url = page.url
-                if new_url != current_url:
-                    log.info("  [gob-multi] Avanzó: %s → %s", current_url[-30:], new_url[-30:])
-                    advanced = True
-                else:
-                    log.warning("  [gob-multi] URL no cambió tras Siguiente — ¿validación?")
+                        try:
+                            page.wait_for_load_state("domcontentloaded", timeout=5_000)
+                        except Exception:
+                            pass
+                    new_url = page.url
+                    if new_url != current_url:
+                        log.info("  [gob-multi] Avanzó: %s → %s", current_url[-30:], new_url[-30:])
+                        advanced = True
+                    else:
+                        log.warning("  [gob-multi] URL no cambió tras Siguiente (intento %d/%d) — ¿validación pendiente?",
+                                    _attempt, _MAX_STEP_ATTEMPTS)
+                    break
+                except Exception as ce:
+                    log.debug("  [gob-multi] Click error (%s): %s", sel, ce)
+
+            if advanced:
                 break
-            except Exception as ce:
-                log.debug("  [gob-multi] Click error (%s): %s", sel, ce)
+            if _attempt < _MAX_STEP_ATTEMPTS:
+                log.info("  [gob-multi] Reintentando llenado del paso %s (%d/%d)...",
+                         step, _attempt + 1, _MAX_STEP_ATTEMPTS)
+                _hd(1.0, 1.8)
 
         if not advanced:
-            log.warning("  [gob-multi] No se pudo avanzar desde paso %s", step)
+            log.warning("  [gob-multi] No se pudo avanzar desde paso %s tras %d intentos — abortando "
+                        "(NO se marcará como aplicado).", step, _MAX_STEP_ATTEMPTS)
+            try:
+                shot = take_error_screenshot(page, "getonyboard", f"gob_multistep_step_{step}")
+                log.info("  [gob-multi] Screenshot de diagnóstico: %s", shot)
+            except Exception:
+                pass
             break
 
     log.warning("  [gob-multi] Flujo no completado para '%s'", title)
@@ -634,6 +759,8 @@ class GetOnBoardPortal(BasePortal):
                     return "skipped_no_applications", title
 
                 applied_any = False
+                pending_before = len(app_links)
+                applications_url = offer_url
                 for link in app_links:
                     try:
                         page.goto(link, wait_until="domcontentloaded", timeout=20_000)
@@ -642,13 +769,13 @@ class GetOnBoardPortal(BasePortal):
                         if _is_gob_multistep_url(page.url):
                             log.info("  [gob] Procesando aplicación GetOnBoard: %s", page.url[:70])
                             if _navigate_gob_multistep(page, self.profile, title):
+                                pending_after = _count_gob_applications(page, applications_url)
+                                log.info("  [gob-verify] Pendientes: %d -> %d", pending_before, pending_after)
                                 applied_any = True
                                 break
                             continue
 
-                        if _try_fill_gob_quick_apply(page, self.profile, title):
-                            applied_any = True
-                            break
+                        log.info("  [gob] Postulación rápida deshabilitada en lista de aplicaciones: solo multistep/manual.")
                     except Exception as exc:
                         log.warning("  [gob] Error procesando enlace de aplicación: %s", exc)
                         continue
@@ -759,7 +886,19 @@ class GetOnBoardPortal(BasePortal):
                             if multistep_ok:
                                 print(f"  [GOB] ✓ Postulación multi-paso enviada: {title[:60]}")
                                 return "applied", title
-                            return "external_apply", title
+                            # NO marcar como "external_apply" — eso cuenta como
+                            # postulación REAL (stats, cuota IT/bodega, CSV) y
+                            # GetOnBoard NO recibió nada completo: queda un
+                            # borrador a medio llenar que aparece en "Mis
+                            # postulaciones" como "INCOMPLETA"/"POR ENVIAR" — el
+                            # bug exacto que el usuario reportó ("no quiero que
+                            # pase esto"). Reportar como fallo real para que NO
+                            # cuente como aplicación y quede visible en logs.
+                            log.warning("  [gob] Flujo multi-paso INCOMPLETO — quedará borrador "
+                                        "en GetOnBoard (revisar manualmente): '%s'", title)
+                            print(f"  [GOB] ⚠ Postulación INCOMPLETA — revisa/descarta el borrador "
+                                  f"en 'Mis postulaciones' de GetOnBoard: {title[:60]}")
+                            return "error: gob_multistep_incompleto", title
 
                         # ── ATS externo genérico ────────────────────────────────
                         ats_result = _try_fill_external_ats(new_page, self.profile, title)
@@ -794,13 +933,19 @@ class GetOnBoardPortal(BasePortal):
                             if multistep_ok:
                                 print(f"  [GOB] ✓ Postulación multi-paso enviada: {title[:60]}")
                                 return "applied", title
+                            # Mismo motivo que en la rama de pestaña nueva: un
+                            # flujo incompleto NO es "external_apply" — deja un
+                            # borrador "INCOMPLETA" en GetOnBoard y, si se
+                            # cuenta como aplicación real, infla stats/cuota
+                            # falsamente. Reportar como fallo explícito.
+                            log.warning("  [gob] Flujo multi-paso INCOMPLETO (mismo tab) — quedará "
+                                        "borrador en GetOnBoard (revisar manualmente): '%s'", title)
+                            print(f"  [GOB] ⚠ Postulación INCOMPLETA — revisa/descarta el borrador "
+                                  f"en 'Mis postulaciones' de GetOnBoard: {title[:60]}")
+                            return "error: gob_multistep_incompleto", title
 
-                        # ── Postulación Rápida ──────────────────────────────────
-                        quick_applied = _try_fill_gob_quick_apply(page, self.profile, title)
-                        if quick_applied:
-                            log.info("  [gob] Postulación Rápida completada: '%s'", title)
-                            print(f"  [GOB] ✓ Postulación Rápida enviada: {title[:60]}")
-                            return "applied", title
+                        # ── Postulación Rápida deshabilitada ──────────────────────
+                        log.info("  [gob] Postulación rápida de GetOnBoard deshabilitada; solo multistep/manual.")
 
                     log.info("  [gob] Navegó a: %s | '%s'", apply_url[:70], title)
                     print(f"  [GOB] Postulación abierta: {apply_url[:70]}")

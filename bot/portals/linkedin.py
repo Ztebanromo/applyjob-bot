@@ -768,7 +768,29 @@ class LinkedInPortal(BasePortal):
                     return d ? d.innerText : '';
                 }
             """) or ""
-            full_text = title + " " + desc_text
+            company = page.evaluate("""
+                () => {
+                    const selectors = [
+                        'a.jobs-unified-top-card__company-name-link',
+                        'span.jobs-unified-top-card__company-name',
+                        'a.jobs-unified-top-card__subtitle-primary-grouping',
+                        'span.jobs-unified-top-card__subtitle-primary-grouping',
+                        'div.jobs-unified-top-card__company-name'
+                    ];
+                    for (const sel of selectors) {
+                        const el = document.querySelector(sel);
+                        if (el && el.innerText.trim()) {
+                            return el.innerText.trim();
+                        }
+                    }
+                    return '';
+                }
+            """) or ""
+            full_text = title + " " + desc_text + " " + company
+            if re.search(r"\b(universidad|facultad|instituto|escuela|college|university)\b", full_text, re.IGNORECASE):
+                log.info("  [linkedin] Descartada (universidad/facultad): '%s' empresa=%s", title, company)
+                print(f"  [FILTRO] Descartada por empresa académica: {title} ({company})")
+                return "skipped_company", title
             if not practica_ok(full_text):
                 log.info("  [linkedin] Descartada (práctica): '%s'", title)
                 return "skipped_practica", title
@@ -812,7 +834,11 @@ class LinkedInPortal(BasePortal):
 
         # Detectar CAPTCHA antes de empezar
         if page.query_selector(SEL["captcha_check"]):
-            print(f"\n[!] CAPTCHA DETECTADO EN LINKEDIN... Por favor resuélvelo manualmente.")
+            try:
+                current_url = page.url or "[URL desconocida]"
+            except Exception:
+                current_url = "[URL desconocida]"
+            print(f"\n[!] CAPTCHA DETECTADO EN LINKEDIN: {current_url}. Por favor resuélvelo manualmente.")
             self._close_modal_safely(page)
             return "skipped_captcha", title
 

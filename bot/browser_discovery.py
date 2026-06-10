@@ -14,7 +14,7 @@ import subprocess
 import time
 from pathlib import Path
 
-from bot.browser_backend import BrowserBackend, CDPTabBackend, ChromiumLaunchBackend, _cdp_port_open
+from bot.browser_backend import BrowserBackend, CDPTabBackend, _cdp_port_open
 
 log = logging.getLogger(__name__)
 
@@ -39,6 +39,7 @@ def _launch_chrome_debug() -> bool:
         f"--user-data-dir={bot_profile}",
         "--no-first-run",
         "--no-default-browser-check",
+        "http://127.0.0.1:5000/",
     ]
     try:
         subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -82,17 +83,8 @@ def select_browser_backend(
     locale: str = "es-CL",
     timezone_id: str = "America/Santiago",
     portal_name: str = "",
-    prefer_cdp: bool = True,
 ) -> BrowserBackend | None:
-    """
-    Selecciona el mejor backend disponible.
-
-    Con Chrome abierto (chrome_debug.bat):
-        → CDPTabBackend: una pestaña en el Chrome del usuario por portal
-
-    Sin Chrome con debug port:
-        → ChromiumLaunchBackend: Chromium aislado (fallback)
-    """
+    """Conecta al Chrome del usuario via CDP. Auto-lanza Chrome si no está corriendo."""
     if pw is None:
         return None
 
@@ -106,30 +98,17 @@ def select_browser_backend(
         portal_name=portal_name,
     )
 
-    # 1. CDP — Chrome del usuario (donde está el dashboard)
-    if prefer_cdp:
-        if not _cdp_port_open():
-            # Chrome no está corriendo con debug port → lanzarlo automáticamente
-            log.info("[BACKEND] Chrome no detectado — lanzando automáticamente...")
-            print("[CHROME] Lanzando Chrome con CDP... (primera vez puede tardar 8s)", flush=True)
-            _launch_chrome_debug()
+    if not _cdp_port_open():
+        log.info("[BACKEND] Chrome no detectado — lanzando automaticamente...")
+        print("[CHROME] Lanzando Chrome con CDP + dashboard... (primera vez puede tardar 8s)", flush=True)
+        _launch_chrome_debug()
 
-        if _cdp_port_open():
-            backend = CDPTabBackend(pw, session_dir, **common)
-            if backend.connect():
-                log.info("[BACKEND] Chrome del usuario via CDP (portal=%s)", portal_name or "?")
-                return backend
-            log.debug("[BACKEND] CDP disponible pero conexión falló")
+    if _cdp_port_open():
+        backend = CDPTabBackend(pw, session_dir, **common)
+        if backend.connect():
+            log.info("[BACKEND] Chrome del usuario via CDP (portal=%s)", portal_name or "?")
+            return backend
+        log.debug("[BACKEND] CDP disponible pero conexion fallo")
 
-    # 2. Chromium aislado — solo si CDP no está disponible en absoluto
-    # (portales como Computrabajo bloquean Playwright con 403 — preferir Chrome real)
-    chrome_exe = find_chrome_executable()
-    backend = ChromiumLaunchBackend(
-        pw, session_dir, executable_path=chrome_exe, **common
-    )
-    if backend.connect():
-        log.info("[BACKEND] Chromium fallback (portal=%s)", portal_name or "?")
-        return backend
-
-    log.warning("[BACKEND] No se pudo inicializar ningún backend")
+    log.warning("[BACKEND] CDP no disponible; Chrome no responde en :9222")
     return None

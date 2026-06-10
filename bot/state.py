@@ -11,12 +11,20 @@ Datos permanentes (JSON, no tocar aquí):
   data/keyword_stats.json  — keywords más efectivas por portal
   data/qa_cache.json       — respuestas a preguntas de formularios
 """
+import csv
 import datetime
 import logging
 import threading
 from collections import defaultdict
+from pathlib import Path
 
 log = logging.getLogger("applyjob.state")
+
+_LOGS_DIR = Path(__file__).parent.parent / "logs"
+
+# Estados que representan una postulación REAL ya enviada — no debe
+# reintentarse aunque el bot se reinicie (ver también bot/verification.py).
+_REAL_APPLY_STATUSES = {"applied", "external_apply"}
 
 # ---------------------------------------------------------------------------
 # Estado en memoria — se limpia al reiniciar el proceso
@@ -94,6 +102,45 @@ def get_errors(portal: str = "") -> list[dict]:
     if portal:
         rows = [r for r in rows if r["portal"] == portal]
     return rows
+
+
+def seed_seen_from_logs(days: int = 7) -> int:
+    """
+    Precarga `_seen` con las URLs ya postuladas (status applied/external_apply)
+    en los últimos `days` días desde logs/applied_*.csv.
+
+    Evita que cada nuevo proceso del bot (cada corrida de main.py) vuelva a
+    postular a la misma oferta porque su dedup en memoria arranca vacío —
+    causaba postulaciones duplicadas al mismo URL en corridas separadas
+    el mismo día (ej: chiletrabajos 3849229 postulado 3 veces el 2026-06-09).
+
+    Retorna la cantidad de URLs nuevas agregadas a `_seen`.
+    """
+    if not _LOGS_DIR.exists():
+        return 0
+    cutoff = (datetime.date.today() - datetime.timedelta(days=days)).isoformat()
+    added = 0
+    for file in sorted(_LOGS_DIR.glob("applied_*.csv")):
+        # nombre: applied_YYYY-MM-DD.csv
+        file_date = file.stem.replace("applied_", "")
+        if file_date < cutoff:
+            continue
+        try:
+            with open(file, encoding="utf-8") as f:
+                reader = csv.DictReader(f)
+                for r in reader:
+                    url = r.get("url") or ""
+                    status = (r.get("status") or "").lower()
+                    if url and status in _REAL_APPLY_STATUSES:
+                        with _lock:
+                            if url not in _seen:
+                                _seen.add(url)
+                                added += 1
+        except Exception as exc:
+            log.warning("seed_seen_from_logs error reading %s: %s", file, exc)
+    if added:
+        log.info("[STATE] Precargadas %d URLs ya postuladas (últimos %d días) — dedup cross-sesión", added, days)
+    return added
 
 
 def reset_session() -> None:

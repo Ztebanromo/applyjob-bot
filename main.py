@@ -73,6 +73,11 @@ def main() -> None:
     # Configurar logging antes de cualquier import que use loggers
     configure_logging()
 
+    # Precargar URLs ya postuladas (últimos 7 días) — evita duplicar
+    # postulaciones al mismo URL en corridas separadas del mismo día.
+    from bot.state import seed_seen_from_logs
+    seed_seen_from_logs(days=7)
+
     parser = argparse.ArgumentParser(
         description="ApplyJob — Motor universal de postulaciones automáticas",
         formatter_class=argparse.RawDescriptionHelpFormatter,

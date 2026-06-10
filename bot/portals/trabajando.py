@@ -22,16 +22,8 @@ log = logging.getLogger(__name__)
 # ── Selectores clave ──────────────────────────────────────────────────────────
 _SEL = {
     # Página de búsqueda
-    "card":     (
-        "a.aviso-titulo, "
-        "a[href*='/empleos/'], "
-        "div.aviso-item a, "
-        "article.aviso-item a, "
-        "a[href*='/trabajo/'], "
-        "li.aviso-item a, "
-        "div[class*='aviso'] a[href*='/'], "
-        "section[class*='result'] a[href*='/']"
-    ),
+    # Confirmado en vivo (2026-06-09): links = /trabajo-empleo/{kw}/trabajo/{id}
+    "card":     "a[href*='/trabajo-empleo/'][href*='/trabajo/']",
     # Página de oferta
     "title":    "h1.aviso-titulo, h1",
     "apply_btn": (

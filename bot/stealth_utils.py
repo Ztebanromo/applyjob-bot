@@ -407,3 +407,39 @@ def take_error_screenshot(page: Page, portal: str, context: str = "") -> Path:
     except Exception:
         pass
     return path
+
+
+def detect_captcha(page: Page) -> bool:
+    """
+    Detecta patrones comunes de CAPTCHA en la página: iframes de reCAPTCHA/hCaptcha,
+    elementos con clase/id que contienen 'captcha' o texto indicativo en el body.
+    Retorna True si cree que hay un captcha activo.
+    """
+    try:
+        # iframes conocidos (reCAPTCHA / hCaptcha)
+        try:
+            frames = page.query_selector_all("iframe[src*='recaptcha'], iframe[src*='hcaptcha']")
+            if frames and len(frames) > 0:
+                return True
+        except Exception:
+            pass
+
+        # selectores directos comunes
+        try:
+            el = page.query_selector("div[class*='captcha'], div[id*='captcha'], .g-recaptcha, .h-captcha")
+            if el:
+                return True
+        except Exception:
+            pass
+
+        # Texto en body (idiomas español/inglés)
+        try:
+            body = (page.text_content('body') or '').lower()
+            if any(k in body for k in ('captcha', 'verificación humana', 'verificacion humana', 'comprobar que no eres', 'prove you are human', 'please verify you are human')):
+                return True
+        except Exception:
+            pass
+
+    except Exception:
+        return False
+    return False

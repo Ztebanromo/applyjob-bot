@@ -6,6 +6,36 @@ NUNCA definir selectores de sesión en otro lugar.
 """
 from __future__ import annotations
 
+# URLs de "Mis postulaciones" por portal — usadas para verificar que el envío
+# realmente quedó registrado en el historial del portal.
+MY_APPLICATIONS_URLS: dict[str, str] = {
+    # "applied-jobs/" da 404 ("Esta página no existe") — confirmado en vivo
+    # 2026-06-09. La URL correcta es "saved-jobs" filtrado por cardType=APPLIED
+    # (pestaña "Solicitados" en Mis anuncios de empleo).
+    "linkedin":      "https://www.linkedin.com/my-items/saved-jobs/?cardType=APPLIED",
+    "computrabajo":  "https://candidato.cl.computrabajo.com/candidate/match/",  # confirmado en vivo (10 tarjetas, slash final)
+    "laborum":       "https://www.laborum.cl/postulantes/postulaciones",      # confirmado
+    "trabajando":    "https://www.trabajando.cl/mis-postulaciones",              # confirmado
+    # confirmado — dgv es un token de sesion que puede expirar/cambiar
+    "infojobs":      "https://www.infojobs.net/candidate/applications/list.xhtml?dgv=1500261436412201670",
+    "chiletrabajos": "https://www.chiletrabajos.cl/dashboard/postulaciones",  # confirmado
+    "getonyboard":   "https://www.getonbrd.com/applications",
+    "indeed":        "https://cl.indeed.com/my-jobs",
+}
+
+# Selectores de las tarjetas de postulación en la página "mis postulaciones".
+# El bot los usa para contar cuántas aplicaciones recientes hay y confirmar envío.
+MY_APPLICATIONS_CARD_SELECTORS: dict[str, str] = {
+    "linkedin":      "li.job-card-container, li[class*='applied-jobs'], div[class*='job-card']",
+    "computrabajo":  "div.box.dFlex.hover",  # confirmado en vivo (10 tarjetas detectadas)
+    "laborum":       "div.application-item, article[class*='application'], li[class*='postulacion'], div[class*='postulation']",
+    "trabajando":    "div[class*='postulation'], article[class*='application'], li.apply-item",
+    "infojobs":      "div.application-card, li[class*='application'], div[class*='offerItem']",
+    "chiletrabajos": "div.accordion-item",
+    "getonyboard":   "div.application, a[href*='/applications/'], div[class*='Application'], li[class*='application']",
+    "indeed":        "div[class*='applied-job'], li.job-card, div[class*='jobcard']",
+}
+
 # URL a la que navegar para verificar si la sesión sigue activa.
 VERIFY_URLS: dict[str, str] = {
     "linkedin":      "https://www.linkedin.com/feed",
@@ -21,7 +51,7 @@ VERIFY_URLS: dict[str, str] = {
 # URL para abrir el browser de login manual.
 # LinkedIn: homepage en vez de /login para evitar bloqueo anti-bot.
 LOGIN_URLS: dict[str, str] = {
-    "linkedin":      "https://www.linkedin.com/",
+    "linkedin":      "https://www.linkedin.com/login",
     "computrabajo":  "https://cl.computrabajo.com",
     "laborum":       "https://www.laborum.cl",
     "trabajando":    "https://www.trabajando.cl",
@@ -44,11 +74,16 @@ LOGGED_IN_SIGNALS: dict[str, list[str]] = {
         "a[data-tracking-control-name*='nav_settings']",
     ],
     "computrabajo": [
-        "[class*='img_user']",
-        "[class*='HeaderUser']",
-        "[class*='header-user']",
-        "a[href*='/candidato']",
-        "a[title*='Mi cuenta' i]",
+        # Confirmado en vivo (DOM dump 2026-06-07): el header muestra
+        # <div class="info_user" data-info-user=""><span>{Nombre}</span>...
+        # SOLO cuando hay sesión activa — visible y único. Los selectores
+        # viejos ([class*='img_user'], a[href*='/candidato']) SÍ existen en
+        # el DOM pero ocultos (menú móvil colapsado / cajas promo de la home),
+        # is_visible() siempre daba False → falsos "no logueado" en loop
+        # ("me pide compu pero si esta" — el usuario SÍ tenía sesión activa).
+        "[data-info-user]",
+        ".info_user",
+        "div.info_user span",
     ],
     "laborum": [
         "[class*='userAvatar']",

@@ -114,16 +114,32 @@ def check_session(
             return SessionResult.ERROR
 
         with sync_playwright() as pw:
-            ctx = pw.chromium.launch_persistent_context(
-                str(session_dir),
+            # IMPORTANTE: NO usar launch_persistent_context(session_dir).
+            # Esa API trata session_dir como perfil NATIVO de Chrome (carpeta
+            # Default/ + Cookies SQLite) — pero _ensure_login guarda la sesión
+            # como storage_state de Playwright en playwright_state.json (vía
+            # CDP, desde el perfil compartido del bot). Son dos formatos que
+            # nunca se comunican: el perfil nativo en session_dir queda vacío
+            # (o solo acumula cookies de tracking de visitas headless previas),
+            # y el storage_state real jamás se carga → falsos "expired".
+            # Fix: lanzar browser limpio y restaurar la sesión real con
+            # new_context(storage_state=...) — la forma correcta de Playwright
+            # de inyectar cookies guardadas.
+            browser = pw.chromium.launch(
                 headless            = True,
-                user_agent          = STEALTH_USER_AGENT,
                 args                = STEALTH_ARGS,
                 ignore_default_args = STEALTH_IGNORE_DEFAULT_ARGS,
-                viewport            = {"width": 1280, "height": 800},
-                locale              = "es-CL",
-                timezone_id         = "America/Santiago",
             )
+            state_file = session_dir / "playwright_state.json"
+            ctx_kwargs = dict(
+                user_agent  = STEALTH_USER_AGENT,
+                viewport    = {"width": 1280, "height": 800},
+                locale      = "es-CL",
+                timezone_id = "America/Santiago",
+            )
+            if state_file.exists():
+                ctx_kwargs["storage_state"] = str(state_file)
+            ctx = browser.new_context(**ctx_kwargs)
             pg = ctx.new_page()
             pg.add_init_script(STEALTH_INIT_SCRIPT)
             try:
@@ -188,6 +204,10 @@ def check_session(
                     ctx.close()
                 except Exception:
                     pass
+                try:
+                    browser.close()
+                except Exception:
+                    pass
 
     except Exception as exc:
         log.warning("[SESSION_CHECK] Error verificando %s: %s", portal, exc)
@@ -210,11 +230,8 @@ def is_logged_in_on_page(page, portal: str) -> bool:
     Returns:
         bool: True si está logueado, False en caso contrario
     """
-    from bot.session_config import (
-        LOGGED_IN_SIGNALS, NOT_LOGGED_IN_SIGNALS, LOGIN_URL_KEYWORDS
-    )
-    from urllib.parse import urlparse
-    
+    from bot.session_config import LOGGED_IN_SIGNALS, NOT_LOGGED_IN_SIGNALS
+
     try:
         current_url = page.url or ""
     except Exception:
@@ -252,32 +269,18 @@ def is_logged_in_on_page(page, portal: str) -> bool:
         except Exception:
             pass
     
-    # 3. Fallback: URL check
-    _portal_domains = {
-        "linkedin":      "linkedin.com",
-        "computrabajo":  "computrabajo.com",
-        "laborum":       "laborum.cl",
-        "trabajando":    "trabajando.cl",
-        "infojobs":      "infojobs.net",
-        "chiletrabajos": "chiletrabajos.cl",
-        "getonyboard":   "getonbrd.com",
-        "indeed":        "indeed.com",
-    }
-    expected_domain = _portal_domains.get(portal, "")
-    try:
-        cur_domain = urlparse(current_url).netloc.lower()
-    except Exception:
-        cur_domain = ""
-    
-# ChileTrabajos usa la homepage como URL de login, así que no podemos
-    # asumir sesión activa solo por dominio si no hay señales explícitas.
-    if portal == "chiletrabajos":
-        return False
-
-    if (current_url and expected_domain
-            and expected_domain in cur_domain
-            and not any(k in current_url.lower() for k in LOGIN_URL_KEYWORDS)):
-        return True
-    
+    # 3. Sin señal positiva ni negativa → asumir NO logueado.
+    #
+    # Antes había un fallback que asumía "logueado" si el dominio coincidía
+    # y la URL no contenía palabras clave de login. Eso producía falsos
+    # positivos graves: LOGIN_URLS para linkedin/trabajando/infojobs apunta
+    # a la homepage (no a /login), así que el dominio siempre coincide y la
+    # URL nunca contiene "login" — el bot daba la sesión por iniciada en
+    # segundos sin que nadie escribiera credenciales, guardando cookies
+    # "fantasma" que la verificación real (check_session) marca 'expired'.
+    #
+    # Todos los portales ya tienen LOGGED_IN_SIGNALS bien definidos (capa 2),
+    # así que el default seguro es "no logueado" — preferible pedir login de
+    # más a que el bot crea (falsamente) que ya tiene sesión activa.
     return False
 

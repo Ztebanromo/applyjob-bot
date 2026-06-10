@@ -142,3 +142,25 @@ def _send_webhook(subject: str, body: str, applied: int, external: int) -> None:
 
     except Exception as exc:
         log.warning("[NOTIFIER] Error enviando webhook: %s", exc)
+
+
+def send_alert(subject: str, message: str, screenshot_path: str | None = None) -> None:
+    """
+    Envío rápido de alerta (webhook + email opcional) para eventos urgentes
+    como detección de CAPTCHA. Adjunta la ruta del screenshot al cuerpo.
+    """
+    full = message
+    if screenshot_path:
+        full = full + f"\nScreenshot: {screenshot_path}"
+
+    # Enviar email si configurado
+    try:
+        _send_email(subject, full)
+    except Exception:
+        log.debug("[NOTIFIER] _send_email falló en send_alert (ignorado)")
+
+    # Enviar webhook
+    try:
+        _send_webhook(subject, full, 0, 0)
+    except Exception:
+        log.debug("[NOTIFIER] _send_webhook falló en send_alert (ignorado)")
