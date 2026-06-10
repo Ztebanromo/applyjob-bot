@@ -1036,8 +1036,11 @@ def build_config_for_keyword(portal_key: str, keyword: str) -> dict:
         "computrabajo":  f"https://cl.computrabajo.com/trabajo-de-{kw_dash}{exp_suffix_ct}-en-santiago-de-chile?ordenar=2",
         # Laborum: home con sesión válida — la API recibe Region=13 en filtros
         "laborum":       "https://www.laborum.cl",
-        # ChileTrabajos: región 13 (RM) + jornada completa (jc=1) + horario AM (h=1)
-        "chiletrabajos": f"https://www.chiletrabajos.cl/empleos?q={kw_encoded}&region=13&ordenar=recientes&jornada=1",
+        # ChileTrabajos: el endpoint /empleos?q=... IGNORA el parámetro de búsqueda
+        # (siempre devuelve el listado genérico más reciente). El buscador real
+        # vive en /encuentra-un-empleo con params numéricos: 2=keyword, 13=ciudad
+        # (1022=Santiago), 14=jornada (22=Full-time), f=2 (activa búsqueda).
+        "chiletrabajos": f"https://www.chiletrabajos.cl/encuentra-un-empleo?2={kw_encoded}&13=1022&14=22&f=2",
         # GetOnBoard: usa URLs tipo slug (/jobs-{slug}), no soporta ?q= ni seniority en URL.
         "getonyboard":   _gob_slug_url(keyword),
         "linkedin":      f"https://www.linkedin.com/jobs/search/?keywords={kw_encoded}&location=Santiago%2C+Regi%C3%B3n+Metropolitana%2C+Chile&f_AL=true&sortBy=DD&f_TPR=r604800",
