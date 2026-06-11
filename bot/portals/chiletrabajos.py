@@ -26,7 +26,7 @@ from playwright.sync_api import Page, TimeoutError as PlaywrightTimeout
 from .base import BasePortal
 from ..stealth_utils import human_delay, micro_delay, take_error_screenshot
 from ..form_filler import fill_form
-from ..config import schedule_ok, experience_ok, practica_ok, topic_ok, contract_ok, location_ok
+from ..config import schedule_ok, experience_ok, practica_ok, topic_ok, contract_ok, location_ok, mode_ok
 
 log = logging.getLogger("applyjob.chiletrabajos")
 
@@ -255,6 +255,10 @@ class ChileTrabajosPortal(BasePortal):
                     if not location_ok(card_text + " " + title):
                         log.info("  [ct2] Descartado (ubicación fuera de rango): %s", title[:60])
                         continue
+                    # Filtro 0b: modalidad — según preferencia (USER_ACCEPTED_MODES)
+                    if not mode_ok(card_text + " " + title):
+                        log.info("  [ct2] Descartado (modalidad no aceptada): %s", title[:60])
+                        continue
 
                     # Filtro 1: horario (lunes a viernes AM)
                     if not schedule_ok(card_text):
@@ -334,6 +338,10 @@ class ChileTrabajosPortal(BasePortal):
                 # Filtro de ubicación: según rango configurado (USER_LOCATION_RANGE)
                 if not location_ok(full_text):
                     log.info("  [ct2] Descartada (ubicación fuera de rango): '%s'", title)
+                    return "skipped_location", title
+                # Filtro de modalidad: según preferencia (USER_ACCEPTED_MODES)
+                if not mode_ok(full_text):
+                    log.info("  [ct2] Descartada (modalidad no aceptada): '%s'", title)
                     return "skipped_location", title
             except Exception:
                 pass

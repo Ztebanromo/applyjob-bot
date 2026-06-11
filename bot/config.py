@@ -364,10 +364,12 @@ _LOC_T2 = frozenset({
 })
 
 # Tier R · score 9 · Remoto / Híbrido — sin traslado, siempre bienvenido
-_LOC_REMOTE = frozenset({
+_LOC_FULL_REMOTE = frozenset({
     "remoto", "teletrabajo", "remote", "home office", "homeoffice",
-    "trabajo desde casa", "trabajo a distancia", "híbrido", "hibrido",
+    "trabajo desde casa", "trabajo a distancia",
 })
+_LOC_HIBRIDO = frozenset({"híbrido", "hibrido", "hybrid"})
+_LOC_REMOTE = _LOC_FULL_REMOTE | _LOC_HIBRIDO
 
 # Tier 3 · score 4 · Dentro de Santiago RM pero lejos de Maipú (15-40 km)
 # Accesibles por metro pero con traslado largo — se incluyen al final de la cola
@@ -480,6 +482,25 @@ def location_min_score() -> int:
 def location_ok(text: str) -> bool:
     """True si la oferta pasa el filtro de distancia configurado por el usuario."""
     return location_score(text) >= location_min_score()
+
+
+# Modalidades aceptadas por el usuario (USER_ACCEPTED_MODES en .env)
+# CSV con cualquier combinación de: "remoto", "hibrido", "presencial"
+def accepted_modes() -> set:
+    raw = os.getenv("USER_ACCEPTED_MODES", "remoto,hibrido,presencial")
+    modes = {m.strip().lower() for m in raw.split(",") if m.strip()}
+    return modes or {"remoto", "hibrido", "presencial"}
+
+
+def mode_ok(text: str) -> bool:
+    """True si la modalidad de la oferta (remoto/híbrido/presencial) está aceptada por el usuario."""
+    modes = accepted_modes()
+    low = (text or "").lower()
+    if any(place in low for place in _LOC_FULL_REMOTE):
+        return "remoto" in modes
+    if any(place in low for place in _LOC_HIBRIDO):
+        return "hibrido" in modes
+    return "presencial" in modes
 
 
 # ---------------------------------------------------------------------------

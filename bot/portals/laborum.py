@@ -34,7 +34,7 @@ from playwright.sync_api import Page, TimeoutError as PlaywrightTimeout, Element
 from .base import BasePortal
 from ..stealth_utils import human_delay, take_error_screenshot
 from ..form_filler import fill_form
-from ..config import schedule_ok, experience_ok, practica_ok, topic_ok, location_ok
+from ..config import schedule_ok, experience_ok, practica_ok, topic_ok, location_ok, mode_ok
 
 # Ruta del archivo de caché persistente de preguntas y respuestas
 _QA_CACHE_PATH = Path(__file__).parent.parent.parent / "data" / "qa_cache.json"
@@ -567,6 +567,9 @@ class LaborumPortal(BasePortal):
                     loc_text = title + " " + titulo_slug.replace("-", " ")
                     if not location_ok(loc_text):
                         log.info("  [laborum-api] Descartado (fuera de rango): %s", title[:60])
+                        continue
+                    if not mode_ok(loc_text):
+                        log.info("  [laborum-api] Descartado (modalidad no aceptada): %s", title[:60])
                         continue
 
                     seen_ids.add(jid)

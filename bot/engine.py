@@ -79,7 +79,7 @@ def _relevance_score(title: str, keywords: list) -> float:
     hits = sum(1 for kw in keywords if kw.lower() in t)
     return hits / len(keywords)
 
-from .config import SITE_CONFIG, USER_PROFILE, location_score, location_min_score, schedule_ok, experience_ok, practica_ok, topic_ok, topic_ok_it, contract_ok
+from .config import SITE_CONFIG, USER_PROFILE, location_score, location_min_score, mode_ok, schedule_ok, experience_ok, practica_ok, topic_ok, topic_ok_it, contract_ok
 from .state import already_applied, save_application
 from .stealth_utils import (
     apply_stealth, human_delay, human_scroll, human_click,
@@ -1641,6 +1641,11 @@ def _run_keyword_loop(
                         log.info("  [GEO] Rechazada por ubicación fuera de zona: '%s'", (loc_text or href)[:60])
                         skipped_geo += 1
                         continue
+                    # Rechazar según modalidad aceptada (USER_ACCEPTED_MODES)
+                    if not mode_ok(loc_text):
+                        log.info("  [GEO] Rechazada por modalidad no aceptada: '%s'", (loc_text or href)[:60])
+                        skipped_geo += 1
+                        continue
                     if loc_text and score != 5:
                         log.debug("  [GEO] score=%d loc='%s...' url=%s",
                                   score, loc_text[:40], href[:60])
@@ -2333,6 +2338,9 @@ def run_scan_pass(portal_name: str, headless: bool = False) -> None:
                 score = location_score(loc_text)
                 # Rechazar según rango de distancia configurado (USER_LOCATION_RANGE)
                 if score < location_min_score():
+                    skipped_geo += 1; continue
+                # Rechazar según modalidad aceptada (USER_ACCEPTED_MODES)
+                if not mode_ok(loc_text):
                     skipped_geo += 1; continue
                 scored.append((score, url))
 
