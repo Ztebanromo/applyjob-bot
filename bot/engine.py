@@ -27,6 +27,7 @@ import csv
 import datetime
 import json
 import logging
+import math
 import os
 import random
 import shutil
@@ -1816,8 +1817,10 @@ def _run_keyword_loop(
         log.warning("  [AVISO] %d offers visitadas, 0 real_applied en %s", visited, portal_name)
 
     # -- Verificación final en "Mis postulaciones" --------------------------------
-    if applied > 0:
-        confirmed = _verify_portal_applications(page, portal_name, applied, _seen_titles)
+    # GetOnBoard: verificar siempre, aunque applied==0, para reintentar
+    # postulaciones "POR ENVIAR" que hayan quedado de sesiones anteriores.
+    if applied > 0 or portal_name == "getonyboard":
+        confirmed = _verify_portal_applications(page, portal_name, applied, _seen_titles, profile)
         if confirmed < applied:
             print(f"  [VERIFICACION] ⚠ {portal_name.upper()}: bot contó {applied} postulaciones "
                   f"pero solo se confirman {confirmed} en el historial del portal.")
@@ -1832,7 +1835,7 @@ def _run_keyword_loop(
 
 
 def _verify_portal_applications(page, portal_name: str, tracked: int,
-                                applied_titles: list) -> int:
+                                applied_titles: list, profile: dict | None = None) -> int:
     """
     Navega a la página "Mis postulaciones" del portal y cuenta cuántas aplicaciones
     REALMENTE ENVIADAS hay visibles (excluye borradores y "por enviar").
@@ -1855,7 +1858,10 @@ def _verify_portal_applications(page, portal_name: str, tracked: int,
 
         # -- GetOnBoard: manejo especial por sección "Por enviar" vs "Enviadas" --
         if portal_name == "getonyboard":
-            return _verify_gob_sent_applications(page, tracked)
+            confirmed, pending_urls = _verify_gob_sent_applications(page, tracked)
+            if pending_urls and profile is not None:
+                confirmed += _retry_gob_pending_applications(page, profile, pending_urls)
+            return confirmed
 
         # -- Laborum: styled-components → no hay selector CSS estable, usar JS --
         if portal_name == "laborum":
@@ -1889,7 +1895,7 @@ def _verify_portal_applications(page, portal_name: str, tracked: int,
         return tracked
 
 
-def _verify_gob_sent_applications(page, tracked: int) -> int:
+def _verify_gob_sent_applications(page, tracked: int) -> tuple[int, list[str]]:
     """
     Verifica en https://www.getonbrd.com/applications cuántas postulaciones
     tienen estado ENVIADA (excluye INCOMPLETA y POR ENVIAR = borradores).
@@ -1897,9 +1903,14 @@ def _verify_gob_sent_applications(page, tracked: int) -> int:
     Estructura DOM confirmada en vivo (2026-06-09):
       - Filas: tr.border-bottom.border-semi-transparent
       - Celda de estado: td.ja-status  → texto "ENVIADA" | "INCOMPLETA" | "POR ENVIAR"
+      - Link de edición: a[href*='/applications/'][href*='/edit']
 
-    Retorna el número de filas con td.ja-status == "ENVIADA".
+    Retorna (confirmadas, urls_por_enviar) — confirmadas = filas ENVIADA que
+    coinciden con lo registrado por el bot, y urls_por_enviar = links /edit de
+    las filas con estado "POR ENVIAR" para reintentar el envío.
     """
+    from .portals.getonyboard import _absolute_gob_url
+
     try:
         result = page.evaluate("""
             () => {
@@ -1907,15 +1918,20 @@ def _verify_gob_sent_applications(page, tracked: int) -> int:
                     'tr.border-bottom.border-semi-transparent'
                 );
                 let enviadas = 0, incompletas = 0, porEnviar = 0;
+                const pendingUrls = [];
                 for (const row of rows) {
                     const statusCell = row.querySelector('td.ja-status');
                     if (!statusCell) continue;
                     const status = (statusCell.innerText || '').trim().toUpperCase();
                     if (status === 'ENVIADA')     enviadas++;
                     else if (status === 'INCOMPLETA') incompletas++;
-                    else if (status.includes('ENVIAR')) porEnviar++;
+                    else if (status.includes('ENVIAR')) {
+                        porEnviar++;
+                        const link = row.querySelector("a[href*='/applications/'][href*='/edit']");
+                        if (link) pendingUrls.push(link.getAttribute('href'));
+                    }
                 }
-                return { enviadas, incompletas, porEnviar, total: rows.length };
+                return { enviadas, incompletas, porEnviar, total: rows.length, pendingUrls };
             }
         """)
 
@@ -1923,6 +1939,7 @@ def _verify_gob_sent_applications(page, tracked: int) -> int:
         incompletas = result.get("incompletas", 0)
         por_enviar = result.get("porEnviar", 0)
         total      = result.get("total", 0)
+        pending_urls = [_absolute_gob_url(page, h) for h in result.get("pendingUrls", []) if h]
 
         print(f"  [VERIFICACION GOB] {enviadas} ENVIADAS · {incompletas} INCOMPLETAS · "
               f"{por_enviar} POR ENVIAR (de {total} filas totales)")
@@ -1932,15 +1949,44 @@ def _verify_gob_sent_applications(page, tracked: int) -> int:
         if total == 0:
             # Página no cargó correctamente — no penalizar
             log.debug("[VERIFY] GOB: 0 filas detectadas — asumiendo tracked=%d correcto", tracked)
-            return tracked
+            return tracked, []
 
         # Solo contar las ENVIADAS que coinciden con lo que el bot registró en esta sesión.
         # Si hay más ENVIADAS que lo tracked, es historial anterior → retornar tracked.
-        return tracked if enviadas >= tracked else enviadas
+        confirmed = tracked if enviadas >= tracked else enviadas
+        return confirmed, pending_urls
 
     except Exception as exc:
         log.debug("[VERIFY] GOB: error en verificación: %s", exc)
-        return tracked
+        return tracked, []
+
+
+def _retry_gob_pending_applications(page, profile: dict, pending_urls: list[str]) -> int:
+    """
+    Intenta completar y enviar postulaciones de GetOnBoard que quedaron en
+    estado "POR ENVIAR" (borrador a medio terminar), navegando a cada link
+    /applications/{id}/edit y recorriendo el flujo multi-paso hasta el envío.
+
+    Retorna cuántas se lograron enviar.
+    """
+    from .portals.getonyboard import _navigate_gob_multistep
+
+    sent = 0
+    for url in pending_urls:
+        if _should_stop():
+            break
+        try:
+            print(f"  [VERIFICACION GOB] Reintentando postulación pendiente: {url[:70]}")
+            page.goto(url, wait_until="domcontentloaded", timeout=20_000)
+            human_delay(1.0, 2.0)
+            if _navigate_gob_multistep(page, profile, "postulación pendiente"):
+                sent += 1
+                log.info("[VERIFY] GOB: postulación pendiente enviada (%s)", url)
+            else:
+                log.warning("[VERIFY] GOB: no se pudo completar postulación pendiente (%s)", url)
+        except Exception as exc:
+            log.debug("[VERIFY] GOB: error reintentando %s: %s", url, exc)
+    return sent
 
 
 def _verify_laborum_sent_applications(page, tracked: int) -> int:
@@ -2932,16 +2978,15 @@ def run_bot_multi_keywords(
         _bodega_groups = [g for g in active_groups if g.get("mode") == "bodega"]
         _other_groups  = [g for g in active_groups if g.get("mode") not in ("it", "bodega")]
         if _it_groups and _bodega_groups:
-            # Si no se definieron límites por modo: el máximo configurado
-            # aplica COMPLETO a cada categoría (no se reparte 50/50).
-            # "si son 5 entonces 5 IT y 5 bodega" → total real = 10.
+            # Si no se definieron límites por modo: se reparte el máximo
+            # configurado entre IT y Bodega (no se duplica el total).
+            # "Ofertas por Portal"=5 → 3 IT + 2 BODEGA = 5 total.
             if not _mode_max:
-                _mode_max["it"] = _effective_max
-                _mode_max["bodega"] = _effective_max
-                _effective_max = sum(_mode_max.values())
+                _mode_max["it"] = math.ceil(_effective_max / 2)
+                _mode_max["bodega"] = _effective_max - _mode_max["it"]
                 print(
-                    f"[MODO_BALANCE] Asignando {_mode_max['it']} IT y {_mode_max['bodega']} BODEGA "
-                    f"(máximo independiente por categoría — total combinado {_effective_max})."
+                    f"[MODO_BALANCE] Repartiendo {_effective_max} ofertas: "
+                    f"{_mode_max['it']} IT + {_mode_max['bodega']} BODEGA."
                 )
             # Shuffle IT para rotar keywords cada ciclo (evita usar siempre los mismos 5)
             import random as _rnd
