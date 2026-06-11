@@ -1298,6 +1298,16 @@ def _run_keyword_loop(
         except Exception as pf_err:
             log.warning("[PRE-FLIGHT] Error verificando sesión en home: %s", pf_err)
 
+    # GetOnBoard: antes de buscar nuevas ofertas, reintentar postulaciones
+    # "POR ENVIAR" guardadas de sesiones anteriores (data/pending_gob.json).
+    if not session_verified and portal_name == "getonyboard":
+        _pending_saved = _load_pending_gob()
+        if _pending_saved:
+            print(f"\n[VERIFICACION GOB] {len(_pending_saved)} postulaciones pendientes guardadas — reintentando...")
+            _sent_now = _retry_gob_pending_applications(page, profile, _pending_saved)
+            if _sent_now:
+                log.info("[VERIFY] GOB: %d postulaciones pendientes guardadas enviadas al inicio", _sent_now)
+
     log.info("Navegando a: %s", config["url_busqueda"])
     try:
         with_retry(
@@ -1859,6 +1869,7 @@ def _verify_portal_applications(page, portal_name: str, tracked: int,
         # -- GetOnBoard: manejo especial por sección "Por enviar" vs "Enviadas" --
         if portal_name == "getonyboard":
             confirmed, pending_urls = _verify_gob_sent_applications(page, tracked)
+            _save_pending_gob(pending_urls)
             if pending_urls and profile is not None:
                 confirmed += _retry_gob_pending_applications(page, profile, pending_urls)
             return confirmed
@@ -1961,17 +1972,49 @@ def _verify_gob_sent_applications(page, tracked: int) -> tuple[int, list[str]]:
         return tracked, []
 
 
+_PENDING_GOB_PATH = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "data", "pending_gob.json"
+)
+
+
+def _load_pending_gob() -> list[str]:
+    """Carga las URLs de postulaciones GOB 'POR ENVIAR' guardadas de sesiones anteriores."""
+    try:
+        if os.path.exists(_PENDING_GOB_PATH):
+            with open(_PENDING_GOB_PATH, encoding="utf-8") as f:
+                data = json.load(f)
+                return data if isinstance(data, list) else []
+    except Exception as exc:
+        log.debug("[VERIFY] GOB: error leyendo pending_gob.json: %s", exc)
+    return []
+
+
+def _save_pending_gob(urls: list[str]) -> None:
+    """Guarda las URLs de postulaciones GOB 'POR ENVIAR' para retomarlas en el próximo ciclo."""
+    try:
+        os.makedirs(os.path.dirname(_PENDING_GOB_PATH), exist_ok=True)
+        with open(_PENDING_GOB_PATH, "w", encoding="utf-8") as f:
+            json.dump(urls, f, ensure_ascii=False, indent=2)
+    except Exception as exc:
+        log.debug("[VERIFY] GOB: error guardando pending_gob.json: %s", exc)
+
+
 def _retry_gob_pending_applications(page, profile: dict, pending_urls: list[str]) -> int:
     """
     Intenta completar y enviar postulaciones de GetOnBoard que quedaron en
     estado "POR ENVIAR" (borrador a medio terminar), navegando a cada link
     /applications/{id}/edit y recorriendo el flujo multi-paso hasta el envío.
 
+    Actualiza data/pending_gob.json: quita las que se enviaron con éxito y
+    deja las que siguen fallando para el próximo ciclo.
+
     Retorna cuántas se lograron enviar.
     """
     from .portals.getonyboard import _navigate_gob_multistep
 
     sent = 0
+    remaining = list(pending_urls)
     for url in pending_urls:
         if _should_stop():
             break
@@ -1981,11 +2024,14 @@ def _retry_gob_pending_applications(page, profile: dict, pending_urls: list[str]
             human_delay(1.0, 2.0)
             if _navigate_gob_multistep(page, profile, "postulación pendiente"):
                 sent += 1
+                remaining.remove(url)
                 log.info("[VERIFY] GOB: postulación pendiente enviada (%s)", url)
             else:
                 log.warning("[VERIFY] GOB: no se pudo completar postulación pendiente (%s)", url)
         except Exception as exc:
             log.debug("[VERIFY] GOB: error reintentando %s: %s", url, exc)
+
+    _save_pending_gob(remaining)
     return sent
 
 
