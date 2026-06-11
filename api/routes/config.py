@@ -45,6 +45,36 @@ def api_config():
     return jsonify(env_data)
 
 
+@bp.route('/api/location_ranges')
+def api_location_ranges():
+    """Devuelve, para la comuna del usuario (USER_CITY), las comunas que caen
+    dentro de cada rango de distancia del slider (<=15km, <=40km)."""
+    from bot.config import _COMUNA_COORDS, _haversine_km, user_comuna_coords, _find_comuna
+
+    city = request.args.get('city', '') or os.getenv('USER_CITY', '')
+    user_name, user_coords = _find_comuna(city)
+    if not user_coords:
+        user_name, user_coords = "maipú", _COMUNA_COORDS["maipú"]
+
+    cercano, rm = [], []
+    seen_coords = {user_coords}
+    for name, coords in _COMUNA_COORDS.items():
+        if coords in seen_coords:
+            continue
+        seen_coords.add(coords)
+        dist = _haversine_km(user_coords, coords)
+        if dist <= 15:
+            cercano.append(name)
+        elif dist <= 40:
+            rm.append(name)
+
+    return jsonify({
+        "user_comuna": user_name,
+        "cercano": sorted(set(cercano)),
+        "rm": sorted(set(rm)),
+    })
+
+
 @bp.route('/api/parse_cv', methods=['POST'])
 def api_parse_cv():
     """Recibe un CV, lo guarda en uploads/, extrae campos y actualiza USER_CV_PATH en .env."""

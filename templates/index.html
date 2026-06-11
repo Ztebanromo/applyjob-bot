@@ -199,8 +199,8 @@
                         <div style="display:grid; grid-template-columns:1fr 1fr; gap:0.5rem;">
                             <div><label>Teléfono</label><input type="text" name="USER_PHONE" id="inp-phone"
                                     placeholder="+56 9 1234 5678"></div>
-                            <div><label>Ciudad</label><input type="text" name="USER_CITY" id="inp-city"
-                                    placeholder="Santiago, RM"></div>
+                            <div><label>Ciudad / Comuna</label><input type="text" name="USER_CITY" id="inp-city"
+                                    placeholder="Maipú, RM" onchange="refreshLocationRangeComunas()"></div>
                         </div>
                         <div><label>LinkedIn</label><input type="text" name="USER_LINKEDIN" id="inp-linkedin"
                                 placeholder="https://linkedin.com/in/..."></div>
@@ -605,16 +605,28 @@
             USER_COVER_LETTER: 'inp-cover',
         };
         const LOCATION_RANGE_VALUES = ['cercano', 'rm', 'todo'];
-        const LOCATION_RANGE_KM = ['5-15 km', '15-40 km', 'Sin límite'];
-        const LOCATION_RANGE_COMUNAS = [
-            'Maipú, Pudahuel, Cerrillos, Lo Prado, Estación Central, San Miguel, Lo Espejo, La Cisterna, Cerro Navia, Quinta Normal, Santiago Centro',
-            '+ San Bernardo, Las Condes, Providencia, Ñuñoa, Puente Alto, La Florida, Quilicura, Renca, Macul, Peñalolén y resto de la Región Metropolitana',
+        const LOCATION_RANGE_KM = ['Hasta 15 km', 'Hasta 40 km', 'Sin límite'];
+        let LOCATION_RANGE_COMUNAS = [
+            'cargando comunas según tu ciudad...',
+            'cargando comunas según tu ciudad...',
             'Todo Chile y ofertas en el extranjero',
         ];
         function updateLocationRangeLabel(sliderVal) {
             const i = sliderVal | 0;
             document.getElementById('location-range-km').innerText = LOCATION_RANGE_KM[i] || LOCATION_RANGE_KM[1];
             document.getElementById('location-range-comunas').innerText = '(' + (LOCATION_RANGE_COMUNAS[i] || LOCATION_RANGE_COMUNAS[1]) + ')';
+        }
+        async function refreshLocationRangeComunas() {
+            try {
+                const city = document.getElementById('inp-city')?.value || '';
+                const res = await fetch('/api/location_ranges?city=' + encodeURIComponent(city));
+                if (!res.ok) return;
+                const data = await res.json();
+                LOCATION_RANGE_COMUNAS[0] = data.cercano.length ? data.cercano.join(', ') : 'sin comunas en este radio';
+                LOCATION_RANGE_COMUNAS[1] = data.rm.length ? '+ ' + data.rm.join(', ') : 'sin comunas adicionales';
+                const rangeEl = document.getElementById('inp-location-range');
+                updateLocationRangeLabel(rangeEl.value);
+            } catch (e) { /* sin conexión: deja los textos por defecto */ }
         }
         const RUNTIME_PROFILE_FIELDS = Object.keys(CFG_MAP).concat(['USER_CV_PATH']);
 
@@ -634,7 +646,7 @@
                 const rangeIdx = LOCATION_RANGE_VALUES.indexOf((cfg.USER_LOCATION_RANGE || 'rm').toLowerCase());
                 const rangeEl = document.getElementById('inp-location-range');
                 rangeEl.value = rangeIdx >= 0 ? rangeIdx : 1;
-                updateLocationRangeLabel(rangeEl.value);
+                refreshLocationRangeComunas();
                 // Checkboxes de modalidad (USER_ACCEPTED_MODES)
                 const modes = (cfg.USER_ACCEPTED_MODES || 'remoto,hibrido,presencial').toLowerCase().split(',').map(s => s.trim());
                 document.getElementById('inp-mode-remoto').checked = modes.includes('remoto');

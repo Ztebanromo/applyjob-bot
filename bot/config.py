@@ -1,5 +1,6 @@
 import os
 import copy
+import math
 import unicodedata
 from urllib.parse import quote_plus
 from dotenv import load_dotenv
@@ -339,29 +340,57 @@ def schedule_ok(text: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Prioridad geográfica — Santiago RM (Maipú + Pudahuel primeras)
+# Prioridad geográfica — distancia desde la comuna del usuario (USER_CITY)
 # ---------------------------------------------------------------------------
 
-# Tier 1 · score 10 · Maipú + Pudahuel + adyacentes inmediatos (< 5 km)
-_LOC_T1 = frozenset({
-    "maipú", "maipu",
-    "pudahuel",
-    "cerrillos",
-    "lo prado",
-    "bustos",
-})
-
-# Tier 2 · score 7 · Comunas anexas accesibles por metro/Alameda (5-15 km)
-_LOC_T2 = frozenset({
-    "estación central", "estacion central",
-    "pedro aguirre cerda",
-    "san miguel",
-    "lo espejo",
-    "la cisterna",
-    "cerro navia",
-    "quinta normal",
-    "santiago centro",
-})
+# Coordenadas aproximadas (lat, lon) de las comunas del Gran Santiago.
+# Se usan para calcular la distancia (haversine) entre la comuna del usuario
+# y la comuna mencionada en cada oferta.
+_COMUNA_COORDS = {
+    "maipú": (-33.5167, -70.7667), "maipu": (-33.5167, -70.7667),
+    "pudahuel": (-33.4441, -70.7710),
+    "cerrillos": (-33.4942, -70.7058),
+    "lo prado": (-33.4419, -70.7203),
+    "estación central": (-33.4597, -70.6792), "estacion central": (-33.4597, -70.6792),
+    "pedro aguirre cerda": (-33.4880, -70.6717),
+    "san miguel": (-33.4953, -70.6502),
+    "lo espejo": (-33.5181, -70.6736),
+    "la cisterna": (-33.5306, -70.6644),
+    "cerro navia": (-33.4239, -70.7344),
+    "quinta normal": (-33.4339, -70.7039),
+    "santiago centro": (-33.4489, -70.6693), "santiago": (-33.4489, -70.6693),
+    "san bernardo": (-33.5928, -70.7000),
+    "calera de tango": (-33.6167, -70.7667),
+    "padre hurtado": (-33.5667, -70.8500),
+    "peñaflor": (-33.6097, -70.8772), "penalflor": (-33.6097, -70.8772),
+    "talagante": (-33.6628, -70.9272),
+    "el monte": (-33.6792, -70.9889),
+    "buin": (-33.7333, -70.7333),
+    "paine": (-33.8083, -70.7417),
+    "las condes": (-33.4089, -70.5661),
+    "lo barnechea": (-33.3539, -70.5189),
+    "la reina": (-33.4419, -70.5394),
+    "vitacura": (-33.3825, -70.5967),
+    "providencia": (-33.4264, -70.6106),
+    "ñuñoa": (-33.4561, -70.5986), "nunoa": (-33.4561, -70.5986),
+    "huechuraba": (-33.3667, -70.6333),
+    "recoleta": (-33.4058, -70.6394),
+    "independencia": (-33.4189, -70.6611),
+    "conchalí": (-33.3811, -70.6722), "conchali": (-33.3811, -70.6722),
+    "quilicura": (-33.3667, -70.7333),
+    "renca": (-33.4083, -70.7222),
+    "la florida": (-33.5247, -70.5897),
+    "puente alto": (-33.6128, -70.5756),
+    "san joaquín": (-33.4942, -70.6228), "san joaquin": (-33.4942, -70.6228),
+    "macul": (-33.4861, -70.5972),
+    "peñalolén": (-33.4839, -70.5436), "penalolen": (-33.4839, -70.5436),
+    "la granja": (-33.5358, -70.6308),
+    "el bosque": (-33.5639, -70.6736),
+    "til til": (-33.0833, -70.9333),
+    "colina": (-33.2000, -70.6667),
+    "lampa": (-33.2833, -70.8667),
+    "melipilla": (-33.6886, -71.2156),
+}
 
 # Tier R · score 9 · Remoto / Híbrido — sin traslado, siempre bienvenido
 _LOC_FULL_REMOTE = frozenset({
@@ -370,25 +399,6 @@ _LOC_FULL_REMOTE = frozenset({
 })
 _LOC_HIBRIDO = frozenset({"híbrido", "hibrido", "hybrid"})
 _LOC_REMOTE = _LOC_FULL_REMOTE | _LOC_HIBRIDO
-
-# Tier 3 · score 4 · Dentro de Santiago RM pero lejos de Maipú (15-40 km)
-# Accesibles por metro pero con traslado largo — se incluyen al final de la cola
-_LOC_DISTANT_RM = frozenset({
-    # Sur RM periférico (metro o bus frecuente)
-    "san bernardo", "calera de tango", "padre hurtado",
-    "peñaflor", "penalflor", "talagante", "el monte",
-    "buin", "paine",
-    # Oriente / nororiente — accesibles por Línea 1, 4 o 5
-    "las condes", "lo barnechea", "la reina", "vitacura",
-    "providencia", "ñuñoa", "nunoa",
-    # Norte — Línea 2 o 3 (accesibles con trasbordo)
-    "huechuraba", "recoleta", "independencia", "conchalí", "conchali",
-    "quilicura", "renca",
-    # Sur / suroriente — Línea 5 o 4
-    "la florida", "puente alto",
-    "san joaquín", "san joaquin", "macul", "peñalolén", "penalolen",
-    "la granja", "el bosque",
-})
 
 # Tier FAR · score 2 · Fuera del Gran Santiago, regiones u otro país → RECHAZADAS
 # (salvo que el texto indique remoto/híbrido — _LOC_REMOTE se evalúa ANTES y gana)
@@ -428,31 +438,57 @@ _LOC_FAR = frozenset({
 })
 
 
+def _haversine_km(a: tuple, b: tuple) -> float:
+    """Distancia en km entre dos puntos (lat, lon) usando la fórmula de Haversine."""
+    lat1, lon1 = a
+    lat2, lon2 = b
+    r = 6371.0
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    dp = math.radians(lat2 - lat1)
+    dl = math.radians(lon2 - lon1)
+    h = math.sin(dp / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
+    return 2 * r * math.asin(math.sqrt(h))
+
+
+def _find_comuna(text: str):
+    """Devuelve (nombre_comuna, coords) si el texto menciona una comuna conocida del Gran Santiago."""
+    low = (text or "").lower()
+    # ordenar por longitud para que coincidan primero los nombres más específicos
+    for place in sorted(_COMUNA_COORDS, key=len, reverse=True):
+        if place in low:
+            return place, _COMUNA_COORDS[place]
+    return None, None
+
+
+def user_comuna_coords():
+    """Coordenadas de la comuna del usuario (USER_CITY). Default: Maipú si no se reconoce."""
+    _, coords = _find_comuna(os.getenv("USER_CITY", ""))
+    return coords or _COMUNA_COORDS["maipú"]
+
+
 def location_score(text: str) -> int:
     """
-    Retorna score según proximidad a Maipú dentro de Santiago RM.
-      10 = Maipú / Pudahuel / adyacentes (< 5 km)
+    Retorna score según distancia desde la comuna del usuario (USER_CITY).
+      10 = <= 15 km de la comuna del usuario
        9 = Remoto / Híbrido
-       7 = Comunas anexas accesibles por metro (5-15 km)
+       6 = <= 40 km de la comuna del usuario (resto de la RM)
        5 = Santiago genérico / sin info -> neutro
-       4 = Dentro de RM pero lejos (15-40 km) -> incluido al final
-       2 = Comunas lejanas o mal conectadas -> RECHAZADAS en engine.py
+       2 = Comunas lejanas (regiones, exterior) -> RECHAZADAS salvo "todo"
     """
     if not text:
         return 5
     low = text.lower()
-    for place in _LOC_T1:
-        if place in low:
-            return 10
     for place in _LOC_REMOTE:
         if place in low:
             return 9
-    for place in _LOC_T2:
-        if place in low:
-            return 7
-    for place in _LOC_DISTANT_RM:
-        if place in low:
-            return 4
+    _, coords = _find_comuna(low)
+    if coords:
+        dist = _haversine_km(user_comuna_coords(), coords)
+        if dist <= 15:
+            return 10
+        if dist <= 40:
+            return 6
+        return 2
     for place in _LOC_FAR:
         if place in low:
             return 2
@@ -463,12 +499,12 @@ def location_score(text: str) -> int:
 
 
 # Rango de distancia configurable por el usuario (USER_LOCATION_RANGE en .env)
-#   "cercano" = solo Maipú/Pudahuel + comunas anexas (metro) + remoto  -> score >= 7
-#   "rm"      = toda la Región Metropolitana + remoto (default)        -> score >= 4
-#   "todo"    = sin filtro geográfico — acepta regiones/exterior        -> score >= 0
+#   "cercano" = solo <= 15 km de tu comuna + remoto                     -> score >= 8
+#   "rm"      = hasta 40 km de tu comuna + remoto (default)             -> score >= 5
+#   "todo"    = sin filtro geográfico — acepta regiones/exterior         -> score >= 0
 _LOCATION_RANGE_MIN_SCORE = {
-    "cercano": 7,
-    "rm": 4,
+    "cercano": 8,
+    "rm": 5,
     "todo": 0,
 }
 
@@ -476,7 +512,7 @@ _LOCATION_RANGE_MIN_SCORE = {
 def location_min_score() -> int:
     """Score mínimo aceptado según USER_LOCATION_RANGE (.env)."""
     rango = os.getenv("USER_LOCATION_RANGE", "rm").strip().lower()
-    return _LOCATION_RANGE_MIN_SCORE.get(rango, 4)
+    return _LOCATION_RANGE_MIN_SCORE.get(rango, 5)
 
 
 def location_ok(text: str) -> bool:
