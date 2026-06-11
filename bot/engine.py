@@ -79,7 +79,7 @@ def _relevance_score(title: str, keywords: list) -> float:
     hits = sum(1 for kw in keywords if kw.lower() in t)
     return hits / len(keywords)
 
-from .config import SITE_CONFIG, USER_PROFILE, location_score, schedule_ok, experience_ok, practica_ok, topic_ok, topic_ok_it, contract_ok
+from .config import SITE_CONFIG, USER_PROFILE, location_score, location_min_score, schedule_ok, experience_ok, practica_ok, topic_ok, topic_ok_it, contract_ok
 from .state import already_applied, save_application
 from .stealth_utils import (
     apply_stealth, human_delay, human_scroll, human_click,
@@ -1636,8 +1636,8 @@ def _run_keyword_loop(
                         # (ej. "en-puerto-montt" en la URL de Computrabajo)
                         if score == 5 and not loc_text:
                             score = location_score(href.replace("-", " ").replace("_", " "))
-                    # Rechazar comunas lejanas (score 2 = _LOC_FAR: Vitacura, Las Condes, etc.)
-                    if score == 2:
+                    # Rechazar según rango de distancia configurado (USER_LOCATION_RANGE)
+                    if score < location_min_score():
                         log.info("  [GEO] Rechazada por ubicación fuera de zona: '%s'", (loc_text or href)[:60])
                         skipped_geo += 1
                         continue
@@ -2331,8 +2331,8 @@ def run_scan_pass(portal_name: str, headless: bool = False) -> None:
                     skipped_f += 1; continue
                 loc_text = card_text
                 score = location_score(loc_text)
-                # Rechazar comunas fuera de Santiago / sin transporte (score 2)
-                if score == 2:
+                # Rechazar según rango de distancia configurado (USER_LOCATION_RANGE)
+                if score < location_min_score():
                     skipped_geo += 1; continue
                 scored.append((score, url))
 

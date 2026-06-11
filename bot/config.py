@@ -460,6 +460,28 @@ def location_score(text: str) -> int:
     return 5   # sin info -> neutro
 
 
+# Rango de distancia configurable por el usuario (USER_LOCATION_RANGE en .env)
+#   "cercano" = solo Maipú/Pudahuel + comunas anexas (metro) + remoto  -> score >= 7
+#   "rm"      = toda la Región Metropolitana + remoto (default)        -> score >= 4
+#   "todo"    = sin filtro geográfico — acepta regiones/exterior        -> score >= 0
+_LOCATION_RANGE_MIN_SCORE = {
+    "cercano": 7,
+    "rm": 4,
+    "todo": 0,
+}
+
+
+def location_min_score() -> int:
+    """Score mínimo aceptado según USER_LOCATION_RANGE (.env)."""
+    rango = os.getenv("USER_LOCATION_RANGE", "rm").strip().lower()
+    return _LOCATION_RANGE_MIN_SCORE.get(rango, 4)
+
+
+def location_ok(text: str) -> bool:
+    """True si la oferta pasa el filtro de distancia configurado por el usuario."""
+    return location_score(text) >= location_min_score()
+
+
 # ---------------------------------------------------------------------------
 # Filtro de experiencia — rechaza ofertas senior o que exigen años de experiencia
 # ---------------------------------------------------------------------------

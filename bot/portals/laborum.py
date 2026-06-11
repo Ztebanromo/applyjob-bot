@@ -34,7 +34,7 @@ from playwright.sync_api import Page, TimeoutError as PlaywrightTimeout, Element
 from .base import BasePortal
 from ..stealth_utils import human_delay, take_error_screenshot
 from ..form_filler import fill_form
-from ..config import schedule_ok, experience_ok, practica_ok, topic_ok, location_score
+from ..config import schedule_ok, experience_ok, practica_ok, topic_ok, location_ok
 
 # Ruta del archivo de caché persistente de preguntas y respuestas
 _QA_CACHE_PATH = Path(__file__).parent.parent.parent / "data" / "qa_cache.json"
@@ -565,8 +565,8 @@ class LaborumPortal(BasePortal):
                     # El slug/título a veces incluye la ciudad: "bodeguero-calama-..."
                     titulo_slug = item.get('titulo_slug', '')
                     loc_text = title + " " + titulo_slug.replace("-", " ")
-                    if location_score(loc_text) == 2:
-                        log.info("  [laborum-api] Descartado (fuera de RM): %s", title[:60])
+                    if not location_ok(loc_text):
+                        log.info("  [laborum-api] Descartado (fuera de rango): %s", title[:60])
                         continue
 
                     seen_ids.add(jid)

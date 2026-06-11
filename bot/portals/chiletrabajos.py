@@ -26,7 +26,7 @@ from playwright.sync_api import Page, TimeoutError as PlaywrightTimeout
 from .base import BasePortal
 from ..stealth_utils import human_delay, micro_delay, take_error_screenshot
 from ..form_filler import fill_form
-from ..config import schedule_ok, experience_ok, practica_ok, topic_ok, contract_ok, location_score
+from ..config import schedule_ok, experience_ok, practica_ok, topic_ok, contract_ok, location_ok
 
 log = logging.getLogger("applyjob.chiletrabajos")
 
@@ -251,10 +251,9 @@ class ChileTrabajosPortal(BasePortal):
                         card_text = (card.text_content() or "")[:500]
                     except Exception:
                         pass
-                    # Filtro 0: ubicación — solo Santiago RM y cercanías
-                    loc_score = location_score(card_text + " " + title)
-                    if loc_score == 2:
-                        log.info("  [ct2] Descartado (ubicación fuera de RM): %s", title[:60])
+                    # Filtro 0: ubicación — según rango configurado (USER_LOCATION_RANGE)
+                    if not location_ok(card_text + " " + title):
+                        log.info("  [ct2] Descartado (ubicación fuera de rango): %s", title[:60])
                         continue
 
                     # Filtro 1: horario (lunes a viernes AM)
@@ -332,9 +331,9 @@ class ChileTrabajosPortal(BasePortal):
                 if not topic_ok(title):
                     log.info("  [ct2] Descartada (fuera de rubro IT/bodega): '%s'", title)
                     return "skipped_topic", title
-                # Filtro de ubicación: rechazar cualquier ciudad fuera de Santiago RM
-                if location_score(full_text) == 2:
-                    log.info("  [ct2] Descartada (ubicación fuera de RM): '%s'", title)
+                # Filtro de ubicación: según rango configurado (USER_LOCATION_RANGE)
+                if not location_ok(full_text):
+                    log.info("  [ct2] Descartada (ubicación fuera de rango): '%s'", title)
                     return "skipped_location", title
             except Exception:
                 pass

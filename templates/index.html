@@ -212,6 +212,17 @@
                     </div>
                 </details>
 
+                <div class="form-group">
+                    <label>Rango de distancia desde tu comuna (<span id="location-range-label">Toda la RM + remoto</span>)</label>
+                    <input type="range" id="inp-location-range" min="0" max="2" step="1" value="1"
+                        oninput="updateLocationRangeLabel(this.value)">
+                    <div style="display:flex; justify-content:space-between; font-size:0.75rem; color:var(--text-muted, #888);">
+                        <span>Cerca de mi comuna</span>
+                        <span>Toda la RM</span>
+                        <span>Sin filtro</span>
+                    </div>
+                </div>
+
                 <div style="display:grid; grid-template-columns:1fr auto; gap:0.5rem; align-items:end;">
                     <div class="form-group" style="margin:0;">
                         <label>Ofertas por Portal</label>
@@ -577,6 +588,11 @@
             USER_WORK_MODE:    'inp-work-mode',
             USER_COVER_LETTER: 'inp-cover',
         };
+        const LOCATION_RANGE_VALUES = ['cercano', 'rm', 'todo'];
+        const LOCATION_RANGE_LABELS = ['Cerca de mi comuna', 'Toda la RM + remoto', 'Sin filtro geográfico'];
+        function updateLocationRangeLabel(sliderVal) {
+            document.getElementById('location-range-label').innerText = LOCATION_RANGE_LABELS[sliderVal] || LOCATION_RANGE_LABELS[1];
+        }
         const RUNTIME_PROFILE_FIELDS = Object.keys(CFG_MAP).concat(['USER_CV_PATH']);
 
         async function loadConfig() {
@@ -591,6 +607,11 @@
                         if (el) el.tagName === 'TEXTAREA' ? (el.value = val) : (el.value = val);
                     }
                 }
+                // Slider de rango de distancia (USER_LOCATION_RANGE)
+                const rangeIdx = LOCATION_RANGE_VALUES.indexOf((cfg.USER_LOCATION_RANGE || 'rm').toLowerCase());
+                const rangeEl = document.getElementById('inp-location-range');
+                rangeEl.value = rangeIdx >= 0 ? rangeIdx : 1;
+                updateLocationRangeLabel(rangeEl.value);
                 // Restaurar CV guardado con indicador visual claro
                 if (cfg.USER_CV_PATH) {
                     document.getElementById('inp-cv-path').value = cfg.USER_CV_PATH;
@@ -3043,6 +3064,9 @@
                 const val = el ? (el.value || el.innerText || '').trim() : '';
                 if (val) formData.append(k, val);
             });
+            // Rango de distancia (slider 0/1/2 → cercano/rm/todo)
+            const rangeEl = document.getElementById('inp-location-range');
+            if (rangeEl) formData.append('USER_LOCATION_RANGE', LOCATION_RANGE_VALUES[rangeEl.value] || 'rm');
             const res = await fetch('/save_config', { method: 'POST', body: formData });
             const data = await res.json();
             alert(data.message);
